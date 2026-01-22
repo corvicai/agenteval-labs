@@ -1,0 +1,417 @@
+{
+    "ws_url": "ws://localhost:8080/ws",
+    "first_names": [
+        "James",
+        "Mary",
+        "John",
+        "Patricia",
+        "Robert",
+        "Jennifer",
+        "Michael",
+        "Linda",
+        "William",
+        "Elizabeth",
+        "David",
+        "Barbara",
+        "Richard",
+        "Susan",
+        "Joseph",
+        "Jessica",
+        "Thomas",
+        "Sarah",
+        "Charles",
+        "Karen",
+        "Christopher",
+        "Nancy",
+        "Daniel",
+        "Lisa",
+        "Matthew",
+        "Betty",
+        "Anthony",
+        "Margaret",
+        "Mark",
+        "Sandra"
+    ],
+    "last_names": [
+        "Smith",
+        "Johnson",
+        "Williams",
+        "Brown",
+        "Jones",
+        "Garcia",
+        "Miller",
+        "Davis",
+        "Rodriguez",
+        "Martinez",
+        "Hernandez",
+        "Lopez",
+        "Gonzalez",
+        "Wilson",
+        "Anderson",
+        "Thomas",
+        "Taylor",
+        "Moore",
+        "Jackson",
+        "Martin"
+    ],
+    "admin": {
+        "name": "Michel Diz",
+        "email": "micheldiz@corvic.ai",
+        "password": "admin123",
+        "org_name": "Corvic AI"
+    },
+    "test_users": [
+        {
+            "name": "Michel Diz",
+            "email": "micheldiz@corvic.ai",
+            "password": "admin123",
+            "role": "admin",
+            "org_name": "Corvic AI"
+        },
+        {
+            "name": "Gurbinder Gill",
+            "email": "gill@corvic.ai",
+            "password": "gill123",
+            "role": "admin",
+            "org_name": "Corvic AI"
+        },
+        {
+            "name": "Hadi Ahmadi",
+            "email": "hadi@corvic.ai",
+            "password": "hadi123",
+            "role": "admin",
+            "org_name": "Corvic AI"
+        },
+        {
+            "name": "Alice Dev",
+            "email": "alice@corvic.ai",
+            "password": "alice123",
+            "role": "user",
+            "org_name": "Corvic AI"
+        },
+        {
+            "name": "Bob Engineer",
+            "email": "bob@corvic.ai",
+            "password": "bob123",
+            "role": "user",
+            "org_name": "Corvic AI"
+        },
+        {
+            "name": "Lex Luthor",
+            "email": "lex@lexcorp.com",
+            "password": "lex123",
+            "role": "user",
+            "org_name": "LexCorp Legal"
+        },
+        {
+            "name": "Sarah Connor",
+            "email": "sarah@biohealth.org",
+            "password": "sarah123",
+            "role": "user",
+            "org_name": "BioHealth Systems"
+        },
+        {
+            "name": "Gordon Gekko",
+            "email": "gordon@quantum.com",
+            "password": "gordon123",
+            "role": "user",
+            "org_name": "Quantum Finance"
+        }
+    ],
+    "org_themes": [
+        {
+            "name": "Quantum Finance",
+            "category": "Finance",
+            "domains": [
+                "trading",
+                "risk",
+                "crypto"
+            ]
+        },
+        {
+            "name": "BioHealth Systems",
+            "category": "Health",
+            "domains": [
+                "diagnostics",
+                "records",
+                "research"
+            ]
+        },
+        {
+            "name": "LexCorp Legal",
+            "category": "Legal",
+            "domains": [
+                "contracts",
+                "compliance",
+                "litigation"
+            ]
+        },
+        {
+            "name": "EduTech Global",
+            "category": "Education",
+            "domains": [
+                "tutoring",
+                "curriculum",
+                "grading"
+            ]
+        },
+        {
+            "name": "GreenGrid Energy",
+            "category": "Energy",
+            "domains": [
+                "optimization",
+                "monitoring",
+                "forecasting"
+            ]
+        },
+        {
+            "name": "SkyNet Logistics",
+            "category": "Logistics",
+            "domains": [
+                "routing",
+                "inventory",
+                "fleet"
+            ]
+        },
+        {
+            "name": "CyberShield",
+            "category": "Security",
+            "domains": [
+                "threats",
+                "firewall",
+                "identity"
+            ]
+        },
+        {
+            "name": "CloudNine SaaS",
+            "category": "Tech",
+            "domains": [
+                "cloud",
+                "devops",
+                "monitoring"
+            ]
+        },
+        {
+            "name": "TerraForm RealEstate",
+            "category": "Property",
+            "domains": [
+                "valuation",
+                "leases",
+                "zoning"
+            ]
+        },
+        {
+            "name": "NovaMedia",
+            "category": "Media",
+            "domains": [
+                "content",
+                "adtech",
+                "social"
+            ]
+        },
+        {
+            "name": "Omega Manufacturing",
+            "category": "Industrial",
+            "domains": [
+                "supply",
+                "factory",
+                "quality"
+            ]
+        },
+        {
+            "name": "Zenith Retail",
+            "category": "Retail",
+            "domains": [
+                "ecommerce",
+                "loyalty",
+                "pricing"
+            ]
+        }
+    ],
+    "agents": [
+        {
+            "name": "Corvic Main",
+            "provider_type": "mcp",
+            "config": {
+                "endpoint": "http://mock",
+                "token": "MOCK_TOKEN"
+            }
+        },
+        {
+            "name": "Corvic Beta",
+            "provider_type": "mcp",
+            "config": {
+                "endpoint": "http://mock",
+                "token": "MOCK_TOKEN"
+            }
+        },
+        {
+            "name": "Critic (OpenAI)",
+            "provider_type": "evaluator",
+            "config": {
+                "api_key": ""
+            }
+        }
+    ],
+    "question_sets": [
+        {
+            "name": "Benchmark Questions",
+            "data": {
+                "categories": [
+                    {
+                        "name": "General Knowledge 1",
+                        "questions": [
+                            {
+                                "id": "q1",
+                                "question": "What is artificial intelligence?"
+                            },
+                            {
+                                "id": "q2",
+                                "question": "Explain machine learning in simple terms."
+                            },
+                            {
+                                "id": "q3",
+                                "question": "What is the difference between AI and ML?"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "Technical",
+                        "questions": [
+                            {
+                                "id": "q4",
+                                "question": "How does a neural network work?"
+                            },
+                            {
+                                "id": "q5",
+                                "question": "Explain backpropagation."
+                            }
+                        ]
+                    },
+                    {
+                        "name": "Logical Reasoning",
+                        "questions": [
+                            {
+                                "id": "LOG-01",
+                                "question": "If all A are B, and all B are C, are all A necessarily C?",
+                                "expected_answer": "Yes"
+                            },
+                            {
+                                "id": "LOG-02",
+                                "question": "A doctor gives you 3 pills and tells you to take one every half hour. How long will the pills last?",
+                                "expected_answer": "60 minutes"
+                            },
+                            {
+                                "id": "LOG-03",
+                                "question": "What is the next number in the sequence: 2, 4, 8, 16...?",
+                                "expected_answer": "32"
+                            },
+                            {
+                                "id": "LOG-04",
+                                "question": "You have a 3L and a 5L jug. How do you measure exactly 4L?",
+                                "expected_answer": "Fill 5L, pour into 3L, dump 3L, pour remaining 2L to 3L, fill 5L, pour to 3L until full."
+                            }
+                        ]
+                    },
+                    {
+                        "name": "General Knowledge",
+                        "questions": [
+                            {
+                                "id": "GK-01",
+                                "question": "What is the capital of Japan?",
+                                "expected_answer": "Tokyo"
+                            },
+                            {
+                                "id": "GK-02",
+                                "question": "Who painted the Mona Lisa?",
+                                "expected_answer": "Leonardo da Vinci"
+                            },
+                            {
+                                "id": "GK-03",
+                                "question": "What is the speed of light?",
+                                "expected_answer": "299,792,458 m/s"
+                            },
+                            {
+                                "id": "GK-04",
+                                "question": "Who wrote '1984'?",
+                                "expected_answer": "George Orwell"
+                            },
+                            {
+                                "id": "GK-05",
+                                "question": "What is the chemical symbol for Gold?",
+                                "expected_answer": "Au"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "Coding & Tech",
+                        "questions": [
+                            {
+                                "id": "CODE-01",
+                                "question": "Write a Python function to check if a string is a palindrome.",
+                                "expected_answer": "return s == s[::-1]"
+                            },
+                            {
+                                "id": "CODE-02",
+                                "question": "Explain the difference between TCP and UDP.",
+                                "expected_answer": "TCP is connection-oriented and reliable; UDP is connectionless and faster."
+                            },
+                            {
+                                "id": "CODE-03",
+                                "question": "What is Docker?",
+                                "expected_answer": "A platform for developing, shipping, and running applications in containers."
+                            },
+                            {
+                                "id": "CODE-04",
+                                "question": "What is the Big O complexity of binary search?",
+                                "expected_answer": "O(log n)"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "Ethics & AI",
+                        "questions": [
+                            {
+                                "id": "ETH-01",
+                                "question": "Explain the Trolley Problem.",
+                                "expected_answer": "A thought experiment involving a choice between inaction killing five people or action killing one."
+                            },
+                            {
+                                "id": "ETH-02",
+                                "question": "What is AI bias?",
+                                "expected_answer": "Systematic errors in AI output that create unfair outcomes."
+                            },
+                            {
+                                "id": "ETH-03",
+                                "question": "Why is alignment important in AGI?",
+                                "expected_answer": "To ensure AI goals match human values."
+                            }
+                        ]
+                    },
+                    {
+                        "name": "Creative Writing",
+                        "questions": [
+                            {
+                                "id": "CW-01",
+                                "question": "Write a haiku about autumn.",
+                                "expected_answer": "Red leaves fall gently / The air turns crisp and cooling / Winter comes soon now"
+                            },
+                            {
+                                "id": "CW-02",
+                                "question": "Suggest a name for a coffee shop on Mars.",
+                                "expected_answer": "The Red Roast"
+                            },
+                            {
+                                "id": "CW-03",
+                                "question": "Describe the smell of rain.",
+                                "expected_answer": "Petrichor, damp earth, ozone."
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    ],
+    "start_run": true,
+    "run_agent_count": 2
+}
