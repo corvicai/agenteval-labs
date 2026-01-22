@@ -29,49 +29,48 @@ curl http://localhost:8080/health
 curl http://localhost:3003/health
 ```
 
-## API Endpoints
+## API Architecture
 
-### Agents
+This platform uses a **WebSocket-first architecture**. All real-time operations (agents, question sets, runs, evaluations, stats) are handled via WebSocket messages.
+
+### REST Endpoints (Minimal)
+
+Only essential auth endpoints use REST:
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/workspaces/:ws_id/agents` | List agents |
-| POST | `/workspaces/:ws_id/agents` | Create agent |
-| POST | `/workspaces/:ws_id/agents/reorder` | Reorder agents |
-| GET | `/agents/:id` | Get agent |
-| PUT | `/agents/:id` | Update agent |
-| DELETE | `/agents/:id` | Delete agent |
-| GET | `/agents/:id/spy` | Preview payload (secrets redacted) |
+| GET | `/health` | Health check |
+| POST | `/auth/register` | User registration |
+| POST | `/auth/login` | User login |
+| POST | `/auth/bootstrap-admin` | Create initial admin |
+| GET | `/auth/check-admin` | Check if admin exists |
+| GET | `/auth/me` | Get current user (protected) |
+| POST | `/auth/refresh` | Refresh JWT token (protected) |
+| POST | `/auth/logout` | Logout (protected) |
+| POST | `/auth/join-organization` | Join org via invite (protected) |
+| POST | `/auth/select-organization` | Switch organization (protected) |
 
-### Question Sets
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/clients/:client_id/question-sets` | List question sets |
-| POST | `/clients/:client_id/question-sets/import` | Import JSON |
-| GET | `/question-sets/:id` | Get question set |
-| GET | `/question-sets/:id/export` | Export JSON |
-| DELETE | `/question-sets/:id` | Delete |
+### WebSocket API
 
-### Runs
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/workspaces/:ws_id/runs` | Start run |
-| GET | `/runs/:run_id` | Get status |
-| POST | `/runs/:run_id/rerun` | Rerun task |
-| POST | `/runs/:run_id/evaluate` | Trigger evaluators |
-| POST | `/runs/:run_id/cancel` | Cancel run |
-| GET | `/workspaces/:ws_id/history` | Answer history |
-
-### Evaluations
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/evaluations` | Submit rating |
-| GET | `/run-results/:id/evaluations` | List evaluations |
-| DELETE | `/evaluations/:id` | Delete |
-
-### WebSocket
 | Endpoint | Description |
 |----------|-------------|
-| `GET /ws?workspace_id=<uuid>` | Real-time progress |
+| `GET /ws?token=<jwt>` | Main WebSocket connection |
+
+All operations are handled via WebSocket message types:
+
+| Category | Message Types |
+|----------|---------------|
+| **Auth** | `auth.login`, `auth.register`, `auth.logout` |
+| **Agents** | `agents.list`, `agents.create`, `agents.update`, `agents.delete`, `agents.reorder` |
+| **Question Sets** | `questionSets.list`, `questionSets.get`, `questionSets.create`, `questionSets.update`, `questionSets.delete`, `questionSets.import` |
+| **Runs** | `runs.start`, `runs.list`, `runs.get`, `runs.cancel`, `runs.rerun` |
+| **Evaluations** | `evaluations.submit`, `evaluations.list`, `evaluations.runOpenAI` |
+| **Stats** | `stats.workspace`, `stats.organization`, `stats.global` |
+| **Admin** | `admin.users.*`, `admin.organizations.*` |
+| **Manager** | `manager.users.*`, `manager.workspaces.*` |
+| **Workspace** | `workspaces.list`, `workspaces.create`, `workspaces.switch` |
+
+Real-time events are pushed to connected clients automatically (run progress, task completion, etc.).
 
 ## Environment Variables
 
