@@ -1,0 +1,37 @@
+# Environment
+.env
+.env.local
+
+# Go
+server_go/main
+server_go/*.exe
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.log
+
+# Database
+postgres_data/
+seed_config.json
+
+# Frontend
+frontend/dist
+node_modules
+.agent
