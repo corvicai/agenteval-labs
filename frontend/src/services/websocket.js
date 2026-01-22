@@ -1,0 +1,521 @@
+// WebSocket connection manager for real-time updates
+import { getWebSocketHost } from '../utils/runtime.js'
+
+class WebSocketService {
+    constructor() {
+        this.ws = null
+        this.workspaceId = null
+        this.listeners = new Map()
+        this.pendingRequests = new Map() // correlationId -> { resolve, reject, timeout }
+        this.reconnectAttempts = 0
+        this.maxReconnectAttempts = 5
+        this.connectionPromise = null
+        this.shouldReconnect = true
+        this.suppressNextReconnect = false
+    }
+
+    isConnected() {
+        return this.ws && this.ws.readyState === WebSocket.OPEN
+    }
+
+    // Connect anonymously (for login page)
+    connectAnonymous() {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            return Promise.resolve() // Already connected
+        }
+
+        this.shouldReconnect = true
+        this.workspaceId = null
+        this.token = ''
+        return this._establishConnection()
+    }
+
+    connect(workspaceId, token = null) {
+        this.shouldReconnect = true
+        const storedUser = localStorage.getItem('user')
+        let userIsImpersonating = false
+        if (storedUser) {
+            try {
+                userIsImpersonating = !!JSON.parse(storedUser)?.impersonator_id
+            } catch (e) {
+                userIsImpersonating = false
+            }
+        }
+        const impersonationFlag = localStorage.getItem('is_impersonating') === '1' || userIsImpersonating
+        const legacyToken = localStorage.getItem('token') || ''
+        const storedImpersonationToken = localStorage.getItem('impersonation_token') || legacyToken
+        let newToken = token || ''
+
+        if (!newToken && impersonationFlag && storedImpersonationToken) {
+            newToken = storedImpersonationToken
+            if (!localStorage.getItem('impersonation_token') && legacyToken) {
+                localStorage.setItem('impersonation_token', legacyToken)
+            }
+        } else if (!newToken && legacyToken) {
+            // Clear stale legacy token so we can rely on HttpOnly cookies.
+            localStorage.removeItem('token')
+        }
+
+        // If we are already connected with the SAME workspace and the SAME token, return
+        if (this.ws &&
+            this.workspaceId === workspaceId &&
+            this.token === newToken &&
+            this.ws.readyState === WebSocket.OPEN) {
+            return Promise.resolve()
+        }
+
+        // If we have an existing connection but the token or workspace changed, close it
+        if (this.ws) {
+            console.log('[WS] Closing existing connection to re-authenticate or switch workspace')
+            this._rejectPendingRequests('WebSocket switching')
+            this.suppressNextReconnect = true
+            this.ws.close()
+            this.ws = null
+            this.connectionPromise = null
+        }
+
+        this.workspaceId = workspaceId
+        this.token = newToken
+        this.reconnectAttempts = 0
+        return this._establishConnection()
+    }
+
+    _establishConnection() {
+        // If there's an existing connection promise that is still pending or open, return it
+        if (this.connectionPromise && this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
+            return this.connectionPromise
+        }
+
+        this.connectionPromise = new Promise((resolve, reject) => {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+            const wsHost = getWebSocketHost()
+            let wsUrl = `${protocol}//${wsHost}/ws`
+
+            // Add params if available
+            // Add params if available
+            const params = []
+            if (this.workspaceId) params.push(`workspace_id=${this.workspaceId}`)
+            // Only add token if explicitly provided (e.g. workspace switch). 
+            // Otherwise rely on cookie.
+            if (this.token) params.push(`token=${this.token}`)
+            if (params.length > 0) wsUrl += '?' + params.join('&')
+
+            console.log('[WS] Connecting to', wsUrl)
+
+            const ws = new WebSocket(wsUrl)
+            this.ws = ws
+
+            ws.onopen = () => {
+                if (this.ws !== ws) return
+                console.log('[WS] Connected')
+                this.reconnectAttempts = 0
+                this._emit('connected', {})
+                resolve()
+            }
+
+            ws.onerror = (e) => {
+                if (this.ws !== ws) return
+                console.error('[WS] Connection error:', e)
+                this._emit('error', { error: e })
+                reject(e)
+            }
+
+            ws.onmessage = (event) => {
+                if (this.ws !== ws) return
+                this._handleMessage(event)
+            }
+
+            ws.onclose = () => {
+                if (this.ws !== ws) return
+                console.log('[WS] Disconnected')
+                this._emit('disconnected', {})
+                this._rejectPendingRequests('WebSocket disconnected')
+                if (this.suppressNextReconnect) {
+                    this.suppressNextReconnect = false
+                    return
+                }
+                if (!this.shouldReconnect) return
+                this._attemptReconnect()
+            }
+        })
+
+        return this.connectionPromise
+    }
+
+    _handleMessage(event) {
+        try {
+            const envelope = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
+
+            // Payload might be double-encoded or already an object
+            let payload = envelope.payload
+            if (typeof payload === 'string') {
+                try {
+                    payload = JSON.parse(payload)
+                } catch (e) { }
+            }
+
+            // Check for pending request
+            if (envelope.correlation_id && this.pendingRequests.has(envelope.correlation_id)) {
+                const { resolve, reject, timeout } = this.pendingRequests.get(envelope.correlation_id)
+                clearTimeout(timeout)
+                this.pendingRequests.delete(envelope.correlation_id)
+
+                if (envelope.type === 'EVT_ERROR') {
+                    reject(new Error(payload.error || 'Server error'))
+                } else {
+                    resolve(payload)
+                }
+            }
+
+            this._emit(envelope.type, payload || {})
+            this._emit('message', envelope)
+        } catch (e) {
+            console.error('[WS] Parse error:', e)
+        }
+    }
+
+    _attemptReconnect() {
+        if (this.reconnectAttempts < this.maxReconnectAttempts) {
+            this.reconnectAttempts++
+            const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000)
+            console.log(`[WS] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`)
+            setTimeout(() => this._establishConnection(), delay)
+        }
+    }
+
+    disconnect() {
+        if (this.ws) {
+            this.shouldReconnect = false
+            this.suppressNextReconnect = true
+            this._rejectPendingRequests('WebSocket disconnected')
+            this.ws.close()
+            this.ws = null
+        }
+        this.workspaceId = null
+        this.token = null
+    }
+
+    _rejectPendingRequests(message) {
+        if (this.pendingRequests.size === 0) return
+        for (const [correlationId, pending] of this.pendingRequests.entries()) {
+            clearTimeout(pending.timeout)
+            pending.reject(new Error(message))
+            this.pendingRequests.delete(correlationId)
+        }
+    }
+
+    /**
+     * Sends a request and waits for a response matched by correlation_id
+     * @returns {Promise}
+     */
+    async request(type, payload, timeoutMs = 10000) {
+        if (!this.isConnected()) {
+            console.log(`[WS] Waiting for connection before request: ${type}`)
+            try {
+                await this.connectionPromise
+            } catch (e) {
+                throw new Error('WebSocket not connected and failed to connect')
+            }
+        }
+
+        return new Promise((resolve, reject) => {
+            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                return reject(new Error('WebSocket not connected'))
+            }
+
+            const correlationId = crypto.randomUUID()
+            const envelope = {
+                type,
+                correlation_id: correlationId,
+                payload: payload
+            }
+
+            const timeout = setTimeout(() => {
+                if (this.pendingRequests.has(correlationId)) {
+                    this.pendingRequests.delete(correlationId)
+                    reject(new Error(`Request timeout: ${type}`))
+                }
+            }, timeoutMs)
+
+            this.pendingRequests.set(correlationId, { resolve, reject, timeout })
+            this.ws.send(JSON.stringify(envelope))
+        })
+    }
+
+    send(type, payload, correlationId = null) {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            console.error('[WS] Not connected')
+            return false
+        }
+
+        const envelope = {
+            type,
+            correlation_id: correlationId || crypto.randomUUID(),
+            payload: payload
+        }
+
+        this.ws.send(JSON.stringify(envelope))
+        return true
+    }
+
+    // Command shortcuts (now returning promises where appropriate)
+    startRun(questionSetId, agentIds = []) {
+        return this.request('CMD_START_RUN', { question_set_id: questionSetId, agent_ids: agentIds })
+    }
+
+    rerunTask(runId, agentId, questionId) {
+        return this.request('CMD_RERUN_TASK', { run_id: runId, agent_id: agentId, question_id: questionId })
+    }
+
+    cancelRun(runId) {
+        return this.request('CMD_CANCEL_RUN', { run_id: runId })
+    }
+
+    runEvaluators(runId) {
+        return this.request('CMD_RUN_EVALUATORS', { run_id: runId })
+    }
+
+    updateAgent(agentId, data) {
+        return this.request('REQ_UPDATE_AGENT', { id: agentId, ...data })
+    }
+
+    importQuestionSet(clientId, data) {
+        return this.request('REQ_IMPORT_QUESTION_SET', { client_id: clientId, ...data })
+    }
+
+    exportQuestionSet(questionSetId) {
+        return this.request('REQ_EXPORT_QUESTION_SET', { id: questionSetId })
+    }
+
+    updateQuestionSet(questionSetId, data) {
+        return this.request('REQ_UPDATE_QUESTION_SET', { id: questionSetId, ...data })
+    }
+
+    createQuestionSet(workspaceId, data) {
+        return this.request('REQ_CREATE_QUESTION_SET', { workspace_id: workspaceId, ...data })
+    }
+
+    updateQuestionSetAgents(questionSetId, agents) {
+        return this.request('REQ_UPDATE_QUESTION_SET_AGENTS', { question_set_id: questionSetId, agents })
+    }
+
+    createAgent(workspaceId, data) {
+        return this.request('REQ_CREATE_AGENT', { workspace_id: workspaceId, ...data })
+    }
+
+    deleteAgent(agentId) {
+        return this.request('REQ_DELETE_AGENT', { id: agentId })
+    }
+
+    // Manager API via WS
+    getManagerStats() {
+        return this.request('REQ_GET_MANAGER_STATS', {})
+    }
+
+    getManagerUsers() {
+        return this.request('REQ_GET_MANAGER_USERS', {})
+    }
+
+    getRunDetails(runId) {
+        return this.request('REQ_GET_RUN_DETAILS', { run_id: runId })
+    }
+
+    getRunLite(runId) {
+        return this.request('REQ_GET_RUN_LITE', { run_id: runId })
+    }
+
+    getLatestRunByQuestionSet(questionSetId) {
+        return this.request('REQ_GET_LATEST_RUN_BY_QS', { question_set_id: questionSetId })
+    }
+
+    getResultDetails(resultIds) {
+        return this.request('REQ_GET_RESULT_DETAILS', { result_ids: resultIds })
+    }
+
+    createEvaluation(runResultId, rating, comments = '') {
+        return this.request('REQ_CREATE_EVALUATION', {
+            run_result_id: runResultId,
+            rating,
+            comments
+        })
+    }
+
+    getSpyPayload(agentId, question = '') {
+        return this.request('REQ_GET_SPY_PAYLOAD', { agent_id: agentId, question })
+    }
+
+    getWorkspaceStats(workspaceId, force = false) {
+        return this.request('REQ_GET_WORKSPACE_STATS', { workspace_id: workspaceId, force })
+    }
+
+    getOrganizationStats(force = false) {
+        return this.request('REQ_GET_ORG_STATS', { force })
+    }
+
+    getGlobalStats(force = false) {
+        return this.request('REQ_GET_GLOBAL_STATS', { force })
+    }
+
+    // Dev/Auth methods
+    getDevManagers() {
+        return this.request('REQ_DEV_GET_MANAGERS', {})
+    }
+
+    devLogin(userId) {
+        return this.request('REQ_DEV_LOGIN', { user_id: userId })
+    }
+
+    getWorkspaces() {
+        return this.request('REQ_GET_WORKSPACES', {})
+    }
+
+    checkManagerStatus() {
+        return this.request('REQ_CHECK_MANAGER_STATUS', {})
+    }
+
+    switchWorkspace(workspaceId) {
+        return this.request('REQ_SWITCH_WORKSPACE', { workspace_id: workspaceId })
+    }
+
+    createWorkspace(name) {
+        return this.request('REQ_CREATE_WORKSPACE', { name })
+    }
+
+    getWorkspaceClients() {
+        return this.request('REQ_GET_WORKSPACE_CLIENTS', {})
+    }
+
+    getMe() {
+        return this.request('REQ_GET_ME', {})
+    }
+
+    checkAdminExists() {
+        return this.request('REQ_CHECK_ADMIN_EXISTS', {})
+    }
+
+    // Auth methods removed - use REST API in api.js instead
+    // login, register, bootstrapAdmin are handled via REST to set HttpOnly cookies
+
+    getWorkspaceRuns() {
+        return this.request('REQ_GET_WORKSPACE_RUNS', {})
+    }
+
+    // Admin methods
+    adminGetUsers() {
+        return this.request('REQ_ADMIN_GET_USERS', {})
+    }
+
+    adminGetOrganizations() {
+        return this.request('REQ_ADMIN_GET_ORGANIZATIONS', {})
+    }
+
+    adminGetUserProfile(userId) {
+        return this.request('REQ_ADMIN_GET_USER_PROFILE', { id: userId })
+    }
+
+    adminGetOrgProfile(orgId) {
+        return this.request('REQ_ADMIN_GET_ORG_PROFILE', { id: orgId })
+    }
+
+    adminCreateUser(userData) {
+        return this.request('REQ_ADMIN_CREATE_USER', userData)
+    }
+
+    adminUpdateUser(userData) {
+        return this.request('REQ_ADMIN_UPDATE_USER', userData)
+    }
+
+    adminDeleteUser(userId) {
+        return this.request('REQ_ADMIN_DELETE_USER', { id: userId })
+    }
+
+    adminCreateOrg(orgData) {
+        return this.request('REQ_ADMIN_CREATE_ORG', orgData)
+    }
+
+    adminUpdateOrg(orgData) {
+        return this.request('REQ_ADMIN_UPDATE_ORG', orgData)
+    }
+
+    adminDeleteOrg(orgId) {
+        return this.request('REQ_ADMIN_DELETE_ORG', { id: orgId })
+    }
+
+    adminGetLoginLogs(limit = 100) {
+        return this.request('REQ_ADMIN_GET_LOGIN_LOGS', { limit })
+    }
+
+    // Manager Panel Methods
+    managerGetWorkspaces() {
+        return this.request('REQ_MANAGER_GET_WORKSPACES', {})
+    }
+
+    managerGetAgents() {
+        return this.request('REQ_MANAGER_GET_AGENTS', {})
+    }
+
+    managerGetRuns() {
+        return this.request('REQ_MANAGER_GET_RUNS', {})
+    }
+
+    managerGetUsers() {
+        return this.request('REQ_MANAGER_GET_USERS', {})
+    }
+
+    managerCreateUser(userData) {
+        return this.request('REQ_MANAGER_CREATE_USER', userData)
+    }
+
+    managerUpdateUser(userData) {
+        return this.request('REQ_MANAGER_UPDATE_USER', userData)
+    }
+
+    managerToggleUserSuspension(userId) {
+        return this.request('REQ_MANAGER_TOGGLE_USER_SUSPENSION', { id: userId })
+    }
+
+    managerImpersonateUser(userId) {
+        return this.request('REQ_MANAGER_IMPERSONATE_USER', { user_id: userId })
+    }
+
+    managerGetStats() {
+        return this.request('REQ_MANAGER_GET_STATS', {})
+    }
+
+    managerGenerateInvite() {
+        return this.request('REQ_MANAGER_GENERATE_INVITE', {})
+    }
+
+    joinOrganization(inviteCode) {
+        return this.request('REQ_JOIN_ORGANIZATION', { invite_code: inviteCode })
+    }
+
+    // Event handling
+    on(event, callback) {
+        if (!this.listeners.has(event)) {
+            this.listeners.set(event, [])
+        }
+        this.listeners.get(event).push(callback)
+    }
+
+    off(event, callback) {
+        if (!this.listeners.has(event)) return
+        const callbacks = this.listeners.get(event)
+        const index = callbacks.indexOf(callback)
+        if (index > -1) callbacks.splice(index, 1)
+    }
+
+    _emit(event, data) {
+        if (!this.listeners.has(event)) return
+        for (const callback of this.listeners.get(event)) {
+            try {
+                callback(data)
+            } catch (e) {
+                console.error('[WS] Callback error:', e)
+            }
+        }
+    }
+}
+
+export const wsService = new WebSocketService()
+export default wsService

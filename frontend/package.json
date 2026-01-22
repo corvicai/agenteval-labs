@@ -1,0 +1,19 @@
+{
+    "name": "benchmarking-frontend",
+    "version": "1.0.0",
+    "type": "module",
+    "scripts": {
+        "dev": "vite --host --port 5173",
+        "build": "vite build",
+        "preview": "vite preview --port 5173"
+    },
+    "dependencies": {
+        "dompurify": "^3.3.0",
+        "marked": "^10.0.0",
+        "vue": "^3.4.0"
+    },
+    "devDependencies": {
+        "@vitejs/plugin-vue": "^5.0.0",
+        "vite": "^5.0.0"
+    }
+}
