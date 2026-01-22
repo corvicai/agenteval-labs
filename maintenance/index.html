@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System Under Maintenance - AgentComparison</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --text-color: #f8fafc;
+            --sub-text-color: #94a3b8;
+            --primary-gradient: linear-gradient(135deg, #a78bfa 0%, #f472b6 100%);
+            --accent-color: #a78bfa;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background-color: var(--bg-color);
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            color: var(--text-color);
+            overflow: hidden;
+        }
+
+        .maintenance-container {
+            text-align: center;
+            max-width: 600px;
+            padding: 2rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        .icon {
+            font-size: 5rem;
+            margin-bottom: 2rem;
+            display: inline-block;
+            animation: bounce 2s infinite ease-in-out;
+        }
+
+        h1 {
+            font-size: 3rem;
+            font-weight: 800;
+            margin-bottom: 1.5rem;
+            background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.025em;
+        }
+
+        p {
+            font-size: 1.25rem;
+            color: var(--sub-text-color);
+            line-height: 1.6;
+            margin-bottom: 2rem;
+        }
+
+        .loader {
+            width: 60px;
+            height: 60px;
+            border: 6px solid #1e293b;
+            border-bottom-color: var(--accent-color);
+            border-radius: 50%;
+            display: inline-block;
+            box-sizing: border-box;
+            animation: rotation 1.2s linear infinite;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.5rem 1rem;
+            background: rgba(167, 139, 250, 0.1);
+            border: 1px solid rgba(167, 139, 250, 0.2);
+            border-radius: 9999px;
+            color: var(--accent-color);
+            font-size: 0.875rem;
+            font-weight: 600;
+            margin-top: 3rem;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--accent-color);
+            border-radius: 50%;
+            margin-right: 0.75rem;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes rotation {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        @keyframes bounce {
+
+            0%,
+            100% {
+                transform: translateY(0);
+            }
+
+            50% {
+                transform: translateY(-20px);
+            }
+        }
+
+        @keyframes pulse {
+            0% {
+                transform: scale(0.95);
+                opacity: 0.5;
+            }
+
+            50% {
+                transform: scale(1.2);
+                opacity: 1;
+            }
+
+            100% {
+                transform: scale(0.95);
+                opacity: 0.5;
+            }
+        }
+
+        /* Ambient background glow */
+        .glow {
+            position: absolute;
+            width: 400px;
+            height: 400px;
+            background: var(--accent-color);
+            filter: blur(150px);
+            opacity: 0.15;
+            border-radius: 50%;
+            z-index: 0;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="glow"></div>
+    <div class="maintenance-container">
+        <div class="icon">🛠️</div>
+        <h1>System Update</h1>
+        <p>We're currently resetting and seeding the platform to ensure a fresh experience. This usually takes less than
+            a minute.</p>
+        <div class="loader"></div>
+        <br>
+        <div class="status-badge">
+            <span class="status-dot"></span>
+            Rebuilding Components...
+        </div>
+    </div>
+    <script>
+        const checkHealth = async () => {
+            try {
+                // Poll the root URL relative to current origin
+                // Avoid cache to ensure we get fresh content
+                const response = await fetch('/', { cache: 'no-store' });
+
+                if (response.ok) {
+                    const text = await response.text();
+                    // If the page content does NOT contain our unique maintenance title,
+                    // it means the real app is back.
+                    if (!text.includes('System Under Maintenance - AgentComparison')) {
+                        console.log("System appears to be back online! reloading...");
+                        window.location.reload();
+                    } else {
+                        console.log("Server responded, but still in maintenance mode.");
+                    }
+                }
+            } catch (err) {
+                console.log("Connection failed (server likely restarting)... retrying in 2s.");
+            }
+        };
+
+        // Check every 2 seconds
+        setInterval(checkHealth, 2000);
+    </script>
+</body>
+
+</html>
