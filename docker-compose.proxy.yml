@@ -1,0 +1,19 @@
+name: benchmarking-proxy
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: benchmarking-nginx
+    volumes:
+      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./maintenance:/usr/share/nginx/html/maintenance:ro
+    ports:
+      - "3010:3010"
+    networks:
+      benchmarking-public:
+        aliases:
+          - docker
+    restart: unless-stopped
+
+networks:
+  benchmarking-public:
+    external: true

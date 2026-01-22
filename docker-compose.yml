@@ -1,0 +1,108 @@
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: benchmarking-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: benchmarking
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./server_go/migrations:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - benchmarking-net
+      - benchmarking-public
+
+  # Python MCP/OpenAI Runner
+  python-runner:
+    build:
+      context: ./server_python
+      dockerfile: Dockerfile
+    container_name: benchmarking-python
+    ports:
+      - "3003:3003"
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - benchmarking-net
+      - benchmarking-public
+    restart: unless-stopped
+
+  # Go API Server
+  go-api:
+    build:
+      context: ./server_go
+      dockerfile: Dockerfile
+    container_name: benchmarking-api
+    ports:
+      - "8080:8080"
+    env_file: .env
+    environment:
+      - DATABASE_URL=host=db user=postgres password=postgres dbname=benchmarking port=5432 sslmode=disable
+      - PYTHON_RUNNER_URL=http://python-runner:3003
+      - PORT=8080
+    depends_on:
+      db:
+        condition: service_healthy
+      python-runner:
+        condition: service_started
+    networks:
+      - benchmarking-net
+      - benchmarking-public
+    restart: unless-stopped
+
+  # Frontend (Production Build)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: benchmarking-frontend
+    ports:
+      - "3010:8080"
+    environment:
+      - PORT=8080
+      - API_URL=http://go-api:8080
+    depends_on:
+      - go-api
+    networks:
+      - benchmarking-net
+      - benchmarking-public
+    restart: unless-stopped
+
+  # Frontend Dev (Hot Reloading via Bun)
+  frontend-dev:
+    image: oven/bun:alpine
+    container_name: benchmarking-frontend-dev
+    working_dir: /app
+    command: bun run dev --host
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8080
+    ports:
+      - "5173:5173"
+    depends_on:
+      - go-api
+    networks:
+      - benchmarking-net
+      - benchmarking-public
+    profiles:
+      - dev
+
+volumes:
+  postgres_data:
+
+networks:
+  benchmarking-net:
+    driver: bridge
+  benchmarking-public:
+    external: true
