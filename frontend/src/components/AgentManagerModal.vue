@@ -7,8 +7,11 @@
       </div>
       
       <div class="modal-body">
+        <div v-if="!hasEnabledAgents && localAgents.length > 0" class="alert alert-warning">
+          ⚠️ <strong>Warning:</strong> No primary agents are enabled. You won't be able to run benchmarks.
+        </div>
         <div class="agents-list">
-          <div v-for="(agent, index) in localAgents" :key="agent.id" class="agent-card">
+          <div v-for="(agent, index) in localAgents" :key="agent.id" class="agent-card" :class="{ 'disabled-card': !agent.enabled }">
             <div class="agent-header">
               <div class="agent-drag" @mousedown="startDrag(index)">⠿</div>
               <input 
@@ -92,6 +95,26 @@
                   <input v-model="agent.config.prompt_version" placeholder="e.g. v1" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
                 </div>
               </div>
+              
+              <!-- Common Rate Limiting Field for all agent types -->
+              <div class="config-fields rate-limit-field">
+                <div class="field">
+                  <label title="Maximum number of parallel requests to this agent (prevents rate limiting errors)">
+                    ⚡ Max Parallel Requests
+                  </label>
+                  <input 
+                    type="number" 
+                    v-model.number="agent.max_concurrency" 
+                    min="1" 
+                    max="20" 
+                    placeholder="5"
+                    @focus="startEditing" 
+                    @blur="saveAgent(agent); stopEditing()" 
+                    @input="markPendingChanges(agent)" 
+                  />
+                  <small class="field-hint">Lower = safer for rate-limited APIs</small>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -132,7 +155,7 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 
 import { wsService } from '../services/websocket.js'
 import { generateAgentName } from '../utils/nameGenerator.js'
@@ -148,6 +171,8 @@ const props = defineProps({
 const emit = defineEmits(['update', 'close'])
 
 const localAgents = ref([])
+const hasEnabledAgents = computed(() => localAgents.value.some(a => a.enabled && a.provider_type !== 'evaluator'))
+
 const spyAgent = ref(null)
 const spyPayload = ref(null)
 const saveStatus = ref(null) // 'saving', 'saved', 'error'
@@ -199,6 +224,9 @@ function normalizeConfig(rawConfig, providerType) {
 
 function mergeAgentsWithOverrides(globalAgents, qs) {
   if (!globalAgents) return []
+  // For AgentManagerModal, we show workspace-level enabled status.
+  // Question-set overrides only affect config and position, NOT enabled status.
+  // The enabled toggle here is global (workspace-level).
   if (!qs?.agents || qs.agents.length === 0) {
     return (globalAgents || []).map(a => ({
       ...a,
@@ -213,18 +241,13 @@ function mergeAgentsWithOverrides(globalAgents, qs) {
 
   return globalAgents.map(a => {
     const override = overrideMap[a.id]
-    if (override) {
-      return {
-        ...a,
-        enabled: override.enabled !== undefined ? override.enabled : a.enabled,
-        position: override.position !== undefined ? override.position : a.position,
-        config: normalizeConfig(override.config || a.config, a.provider_type)
-      }
-    }
-    return { 
-      ...a, 
-      enabled: false,
-      config: normalizeConfig(a.config, a.provider_type)
+    // Note: We intentionally use a.enabled (workspace-level), NOT override.enabled
+    // Question-set selection is handled in RunSetupModal, not here.
+    return {
+      ...a,
+      enabled: a.enabled, // Always use workspace-level enabled
+      position: override?.position !== undefined ? override.position : a.position,
+      config: normalizeConfig(override?.config || a.config, a.provider_type)
     }
   }).sort((a, b) => (a.position || 0) - (b.position || 0))
 }
@@ -361,7 +384,8 @@ async function saveAgent(agent) {
       provider_type: agent.provider_type,
       config: agent.config,
       enabled: agent.enabled,
-      position: agent.position
+      position: agent.position,
+      max_concurrency: agent.max_concurrency || 5
     })
 
     // Keep question-set mapping in sync when applicable
@@ -396,7 +420,8 @@ async function saveAllAgents() {
         provider_type: agent.provider_type,
         config: agent.config,
         enabled: agent.enabled,
-        position: agent.position
+        position: agent.position,
+        max_concurrency: agent.max_concurrency || 5
       })
     }
 
@@ -418,8 +443,42 @@ async function saveAllAgents() {
 }
 
 async function toggleAgent(agent) {
-  agent.enabled = !agent.enabled
-  await saveAgent(agent)
+  const newState = !agent.enabled
+  const action = newState ? 'enable' : 'disable'
+  
+  // Confirmation for disabling globally
+  if (!newState) {
+    const confirmed = confirm(
+      `Are you sure you want to ${action} "${agent.name}" globally?\n\n` +
+      `This affects all question sets in this workspace. ` +
+      `Question sets can still select this agent individually in Run Setup.`
+    )
+    if (!confirmed) return
+  }
+  
+  agent.enabled = newState
+  
+  // Only update workspace-level agent, NOT question-set-level
+  saveStatus.value = 'saving'
+  saveStatusText.value = 'Saving...'
+  
+  try {
+    await wsService.updateAgent(agent.id, {
+      name: agent.name,
+      provider_type: agent.provider_type,
+      config: agent.config,
+      enabled: agent.enabled,
+      position: agent.position,
+      max_concurrency: agent.max_concurrency || 5
+    })
+    // NOTE: We do NOT call saveQuestionSetAgents() here.
+    // This is a global (workspace-level) toggle only.
+    showSaveStatus('saved', `Agent ${action}d ✓`)
+  } catch (e) {
+    console.error('Failed to toggle agent:', e)
+    agent.enabled = !newState // Revert
+    showSaveStatus('error', 'Toggle failed')
+  }
 }
 
 async function deleteAgent(agent) {
@@ -701,4 +760,31 @@ function startDrag(index) {
 }
 
 .mt-2 { margin-top: 0.5rem; }
+
+.alert-warning {
+  background: #fff7ed;
+  color: #c2410c;
+  border: 1px solid #fed7aa;
+  padding: 0.75rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.disabled-card {
+  opacity: 0.7;
+  background: #f8fafc;
+}
+
+.disabled-card .agent-name-input {
+  color: #64748b;
+  text-decoration: line-through; 
+  text-decoration-color: #cbd5e1;
+}
+
+.disabled-card:hover {
+  opacity: 1;
+}
 </style>
