@@ -123,6 +123,12 @@
                     <button class="btn-icon" @click="editUser(user)" title="Edit">✏️</button>
                     <button 
                       class="btn-icon" 
+                      @click="toggleAdmin(user)" 
+                      :title="user.is_admin ? 'Demote from Admin' : 'Promote to Admin'"
+                      :disabled="user.id === currentUserId"
+                    >🛡️</button>
+                    <button 
+                      class="btn-icon" 
                       :class="user.is_suspended ? 'btn-success-icon' : 'btn-warning-icon'"
                       @click="toggleUserSuspension(user)" 
                       :title="user.is_suspended ? 'Activate' : 'Suspend'"
@@ -577,6 +583,29 @@ async function toggleUserSuspension(user) {
   } catch (e) {
     alert('Failed to update user status: ' + e.message)
   }
+}
+
+function toggleAdmin(user) {
+  const action = user.is_admin ? 'demote' : 'promote'
+  confirmDialogConfig.value = {
+    title: user.is_admin ? 'Demote Admin' : 'Promote to Admin',
+    message: `Are you sure you want to ${action} "${user.name}" ${user.is_admin ? 'to a regular user' : 'to an administrator'}?`,
+    confirmText: user.is_admin ? 'Demote' : 'Promote',
+    cancelText: 'Cancel',
+    variant: user.is_admin ? 'warning' : 'primary'
+  }
+  pendingAction.value = async () => {
+    try {
+      await wsService.adminUpdateUser({ 
+        id: user.id, 
+        is_admin: !user.is_admin 
+      })
+      await loadData()
+    } catch (e) {
+      alert(`Failed to ${action}: ` + e.message)
+    }
+  }
+  showConfirmDialog.value = true
 }
 
 

@@ -17,12 +17,21 @@ export async function request(url, options = {}) {
         if (response.status === 401) {
             // Avoid forcing reloads on background refresh calls.
             if (!url.includes('/auth/refresh')) {
-                // Unauthenticated - clear local state but cookies are handled by browser
-                logout()
-                // We only reload if we are not already on the login page to avoid loops
-                if (!url.includes('/auth/login') && !url.includes('/auth/register')) {
-                    window.location.reload()
+                // If we are already on the login page, don't trigger anything to avoid loops
+                if (url.includes('/auth/login') || url.includes('/auth/register')) {
+                    const error = await response.json().catch(() => ({}))
+                    throw new Error(error.error || `Auth failed: ${response.status}`)
                 }
+
+                // Prevent multiple concurrent reloads
+                if (window.__isReloading) return
+                window.__isReloading = true
+
+                // Unauthenticated - clear local state but cookies are handled by browser
+                await logout()
+
+                // Final check to avoid double-loading login screen or infinite loops
+                window.location.href = '/'
             }
         }
         const error = await response.json().catch(() => ({}))

@@ -35,15 +35,15 @@
             <div class="section-title">👤 User Details</div>
             <div class="form-group">
               <label>Full Name</label>
-              <input v-model="form.name" type="text" placeholder="Your name" required />
+              <input v-model="form.name" name="name" autocomplete="name" type="text" placeholder="Your name" required />
             </div>
             <div class="form-group">
               <label>Email</label>
-              <input v-model="form.email" type="email" placeholder="you@example.com" required />
+              <input v-model="form.email" name="email" autocomplete="username" type="email" placeholder="you@example.com" required />
             </div>
             <div class="form-group">
               <label>Password</label>
-              <input v-model="form.password" type="password" placeholder="••••••••" required />
+              <input v-model="form.password" name="password" autocomplete="new-password" type="password" placeholder="••••••••" required />
             </div>
           </div>
 
@@ -54,6 +54,7 @@
               <label>Organization Name</label>
               <input 
                 v-model="form.organization_name" 
+                name="organization_name"
                 type="text" 
                 placeholder="e.g. ACME Corp"
                 required
@@ -65,6 +66,7 @@
               <label>Invite Code</label>
               <input 
                 v-model="form.invite_code" 
+                name="invite_code"
                 type="text" 
                 placeholder="Enter your invite code"
                 required
@@ -79,6 +81,8 @@
             <label>Email</label>
             <input 
               v-model="form.email" 
+              name="email"
+              autocomplete="username"
               type="email" 
               placeholder="you@example.com"
               required
@@ -89,6 +93,8 @@
             <label>Password</label>
             <input 
               v-model="form.password" 
+              name="password"
+              autocomplete="current-password"
               type="password" 
               placeholder="••••••••"
               required
@@ -115,6 +121,7 @@
             <label>Invite Code</label>
             <input 
               v-model="form.invite_code" 
+              name="invite_code"
               type="text" 
               placeholder="e.g. INV-123456" 
               required 
@@ -391,7 +398,7 @@ async function handleBootstrap() {
       bootstrapPassword.value, 
       bootstrapOrganizationName.value
     )
-    if (result.success) {
+    if (result.user) {
       showBootstrapModal.value = false
       // Switch back to login with new credentials
       isRegister.value = false
@@ -460,6 +467,9 @@ onMounted(async () => {
         // Let's use REST for consistency with other auth flows in this file.
         const adminResult = await api.checkAdminExists()
         showBootstrapLink.value = !adminResult?.exists
+        if (!adminResult?.exists) {
+          showBootstrapModal.value = true
+        }
         
         // Fetch managers for dev quick login
         if (isDev) {

@@ -812,7 +812,10 @@ async function selectWorkspace(ws) {
   try {
     const result = await wsService.switchWorkspace(ws.id)
     // Token is now handled via cookie (set by backend on switch)
-    // Do NOT write to localStorage
+    
+    // Clear last question set selection to ensure "Select a Question Set" screen is shown in new workspace
+    currentQuestionSet.value = null
+    localStorage.removeItem('lastQuestionSetId')
     
     currentWorkspace.value = result.workspace || ws
     showWorkspaceModal.value = false
@@ -831,49 +834,28 @@ async function loadQuestionSets(preferredId = null) {
     const uniqueSets = wsState.questionSets
     
     if (uniqueSets && uniqueSets.length > 0) {
-        // Preference logic: exact match > last selected > first available
-        // Attempt to restore last selected question set
+        // Preference logic: exact match > last selected
         const lastQsId = localStorage.getItem('lastQuestionSetId')
-        let found = false
-        
-        if (lastQsId) {
-          const saved = uniqueSets.find(qs => qs.id === lastQsId)
-          if (saved) {
-            currentQuestionSet.value = saved
-            found = true
-          }
-        }
-
-        if (!found) {
-           if (preferredId) {
-             const pref = uniqueSets.find(s => s.id === preferredId)
-             if (pref) currentQuestionSet.value = pref
-           }
-           // Fallback to first if still null
-           if (!currentQuestionSet.value) currentQuestionSet.value = uniqueSets[0]
-        }
         let targetSet = null
         
-        if (preferredId) {
+        if (lastQsId) {
+          targetSet = uniqueSets.find(qs => qs.id === lastQsId)
+        }
+
+        if (!targetSet && preferredId) {
           targetSet = uniqueSets.find(s => s.id === preferredId)
         }
         
+        // If still no target and we have a current selection, try to keep it if it exists in this workspace
         if (!targetSet && currentQuestionSet.value) {
            targetSet = uniqueSets.find(s => s.id === currentQuestionSet.value.id)
         }
         
-        // If still no target, use the most recent one (assuming sets are not strictly ordered, we might want to sort)
-        // For now, default to first or last? Let's default to the *last* one if we assume append-only creation, 
-        // but sorting by CreatedAt would be better. Let's just pick index 0 for now as default.
-        if (!targetSet) {
-           targetSet = uniqueSets[uniqueSets.length - 1] // Picking last one might be better for "newly created"
-        }
+        console.log('[App] loadQuestionSets: final targetSet:', targetSet?.name || 'none (defaulting to empty state)')
         
-        currentQuestionSet.value = targetSet
-        
-        if (currentQuestionSet.value && targetSet) {
-           // We might want to notify BenchmarkArena to select first question, but it handles its own state
-        }
+        // We REMOVED the "uniqueSets[0]" and "uniqueSets[uniqueSets.length - 1]" fallbacks 
+        // to ensure we only show a set if it actually matches our context.
+        currentQuestionSet.value = targetSet || null
     } else {
       currentQuestionSet.value = null
     }

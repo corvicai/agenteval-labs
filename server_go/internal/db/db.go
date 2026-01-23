@@ -280,12 +280,24 @@ func AutoMigrate(db *gorm.DB) error {
 			role VARCHAR(50) DEFAULT 'member',
 			is_new_org BOOLEAN DEFAULT false,
 			expires_at TIMESTAMP NOT NULL,
-			used_by UUID REFERENCES users(id),
-			used_at TIMESTAMP,
+			max_uses INTEGER DEFAULT 1,
+			use_count INTEGER DEFAULT 0,
 			created_at TIMESTAMP DEFAULT NOW()
 		)
 	`).Error; err != nil {
 		return fmt.Errorf("create invite_codes: %w", err)
+	}
+
+	// Invite Code Usages table
+	if err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS invite_code_usages (
+			id UUID PRIMARY KEY,
+			code VARCHAR(255) NOT NULL REFERENCES invite_codes(code),
+			user_id UUID NOT NULL REFERENCES users(id),
+			used_at TIMESTAMP DEFAULT NOW()
+		)
+	`).Error; err != nil {
+		return fmt.Errorf("create invite_code_usages: %w", err)
 	}
 
 	// Apply manual migrations from file if needed (e.g. for new columns on existing tables)
@@ -321,6 +333,11 @@ func AutoMigrate(db *gorm.DB) error {
 
 	db.Exec(`ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_concurrency INTEGER DEFAULT 5;`)
 	db.Exec(`ALTER TABLE run_results ADD COLUMN IF NOT EXISTS error TEXT;`)
+
+	// Bulk Invites migration
+	db.Exec(`ALTER TABLE invite_codes ADD COLUMN IF NOT EXISTS max_uses INTEGER DEFAULT 1;`)
+	db.Exec(`ALTER TABLE invite_codes ADD COLUMN IF NOT EXISTS use_count INTEGER DEFAULT 0;`)
+	// We don't drop used_by/used_at to avoid breaking existing data if any, but they are deprecated.
 
 	return nil
 }

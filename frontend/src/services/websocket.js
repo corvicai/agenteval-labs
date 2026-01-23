@@ -1,5 +1,5 @@
 // WebSocket connection manager for real-time updates
-import { getWebSocketHost } from '../utils/runtime.js'
+import { getWebSocketHost, generateUUID } from '../utils/runtime.js'
 
 class WebSocketService {
     constructor() {
@@ -223,7 +223,7 @@ class WebSocketService {
                 return reject(new Error('WebSocket not connected'))
             }
 
-            const correlationId = crypto.randomUUID()
+            const correlationId = generateUUID()
             const envelope = {
                 type,
                 correlation_id: correlationId,
@@ -505,12 +505,20 @@ class WebSocketService {
         return this.request('REQ_MANAGER_GET_STATS', {})
     }
 
-    managerGenerateInvite() {
-        return this.request('REQ_MANAGER_GENERATE_INVITE', {})
+    managerGenerateInvite(maxUses = 1) {
+        return this.request('REQ_MANAGER_GENERATE_INVITE', { max_uses: maxUses })
     }
 
     joinOrganization(inviteCode) {
         return this.request('REQ_JOIN_ORGANIZATION', { invite_code: inviteCode })
+    }
+
+    changePassword(newPassword, oldPassword = '', targetUserId = '') {
+        return this.request('REQ_CHANGE_PASSWORD', {
+            new_password: newPassword,
+            old_password: oldPassword,
+            id: targetUserId
+        })
     }
 
     // Event handling

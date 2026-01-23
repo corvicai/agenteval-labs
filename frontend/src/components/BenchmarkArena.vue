@@ -100,7 +100,13 @@
 
     <!-- Chat Panels -->
     <div class="document-body">
-      <div class="chat-container">
+      <div v-if="!currentQuestionSet" class="benchmarks-empty-state">
+         <div class="empty-icon">📋</div>
+         <h3>Select a Question Set</h3>
+         <p>Choose a question set from the left panel to start benchmarking.</p>
+      </div>
+
+      <div v-else class="chat-container">
         <div class="chat-panels-bar">
           <div v-for="agent in displayAgents" :key="agent.id" class="chat-panel-wrapper">
             <ChatPanel 
@@ -269,9 +275,9 @@ function initQuestionSet(sets) {
         }
     }
     // Fallback: First one (or last created)
-    if (sets.length > 0) {
-        currentQuestionSet.value = sets[sets.length - 1]
-    }
+    // if (sets.length > 0) {
+    //     currentQuestionSet.value = sets[sets.length - 1]
+    // }
 }
 
 watch(currentQuestionSet, (newSet) => {

@@ -13,7 +13,14 @@ type InviteCode struct {
 	Role           string     `gorm:"default:'member'" json:"role"`
 	IsNewOrg       bool       `gorm:"default:false" json:"is_new_org"`
 	ExpiresAt      time.Time  `gorm:"not null" json:"expires_at"`
-	UsedBy         *uuid.UUID `gorm:"type:uuid" json:"used_by"`
-	UsedAt         *time.Time `json:"used_at"`
+	MaxUses        int        `gorm:"default:1" json:"max_uses"`
+	UseCount       int        `gorm:"default:0" json:"use_count"`
 	CreatedAt      time.Time  `json:"created_at"`
+}
+
+type InviteCodeUsage struct {
+	ID     uuid.UUID `gorm:"primaryKey" json:"id"`
+	Code   string    `gorm:"index;not null" json:"code"`
+	UserID uuid.UUID `gorm:"type:uuid;not null" json:"user_id"`
+	UsedAt time.Time `json:"used_at"`
 }

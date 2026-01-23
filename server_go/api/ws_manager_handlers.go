@@ -368,6 +368,18 @@ func (h *Hub) handleManagerGenerateInvite(c *Connection, env models.Envelope) {
 		return
 	}
 
+	var payload struct {
+		MaxUses int `json:"max_uses"`
+	}
+	if err := json.Unmarshal([]byte(env.Payload), &payload); err != nil {
+		c.SendError(env.CorrelationID, "invalid payload")
+		return
+	}
+
+	if payload.MaxUses <= 0 {
+		payload.MaxUses = 1
+	}
+
 	code := generateRandomCode(8)
 	invite := models.InviteCode{
 		Code:           code,
@@ -376,6 +388,8 @@ func (h *Hub) handleManagerGenerateInvite(c *Connection, env models.Envelope) {
 		Role:           "member", // Managers invite members
 		IsNewOrg:       false,
 		ExpiresAt:      time.Now().Add(24 * time.Hour * 7),
+		MaxUses:        payload.MaxUses,
+		UseCount:       0,
 		CreatedAt:      time.Now(),
 	}
 

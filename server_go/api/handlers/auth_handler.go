@@ -101,12 +101,17 @@ func (h *AuthHandler) Register(c echo.Context) error {
 		role = "user"
 	}
 
+	var invite models.InviteCode
 	// 1. Validate Invite Code if provided OR if registering as common user
 	if req.InviteCode != "" {
-		var invite models.InviteCode
-		if err := tx.Where("code = ? AND (used_by IS NULL OR used_by = ?)", req.InviteCode, uuid.Nil).First(&invite).Error; err != nil {
+		if err := tx.Where("code = ?", req.InviteCode).First(&invite).Error; err != nil {
 			tx.Rollback()
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid or already used invite code"})
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid invite code"})
+		}
+
+		if invite.UseCount >= invite.MaxUses {
+			tx.Rollback()
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invite code usage limit reached"})
 		}
 
 		if invite.ExpiresAt.Before(time.Now()) {
@@ -191,13 +196,22 @@ func (h *AuthHandler) Register(c echo.Context) error {
 
 		// Update invite code if used
 		if req.InviteCode != "" {
-			if err := tx.Model(&models.InviteCode{}).Where("code = ?", req.InviteCode).
-				Updates(map[string]interface{}{
-					"used_by": user.ID,
-					"used_at": time.Now(),
-				}).Error; err != nil {
+			invite.UseCount++
+			if err := tx.Save(&invite).Error; err != nil {
 				tx.Rollback()
-				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update invite code"})
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update invite status"})
+			}
+
+			// Record usage
+			usage := models.InviteCodeUsage{
+				ID:     uuid.New(),
+				Code:   invite.Code,
+				UserID: user.ID,
+				UsedAt: time.Now(),
+			}
+			if err := tx.Create(&usage).Error; err != nil {
+				tx.Rollback()
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to record invite usage"})
 			}
 		}
 	}
@@ -534,9 +548,14 @@ func (h *AuthHandler) JoinOrganization(c echo.Context) error {
 	tx := h.db.Begin()
 
 	var invite models.InviteCode
-	if err := tx.Where("code = ? AND (used_by IS NULL OR used_by = ?)", req.InviteCode, uuid.Nil).First(&invite).Error; err != nil {
+	if err := tx.Where("code = ?", req.InviteCode).First(&invite).Error; err != nil {
 		tx.Rollback()
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid or already used invite code"})
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid invite code"})
+	}
+
+	if invite.UseCount >= invite.MaxUses {
+		tx.Rollback()
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invite code usage limit reached"})
 	}
 
 	if invite.ExpiresAt.Before(time.Now()) {
@@ -590,13 +609,22 @@ func (h *AuthHandler) JoinOrganization(c echo.Context) error {
 	tx.Create(&client)
 
 	// Update invite code
-	if err := tx.Model(&models.InviteCode{}).Where("code = ?", req.InviteCode).
-		Updates(map[string]interface{}{
-			"used_by": userID,
-			"used_at": time.Now(),
-		}).Error; err != nil {
+	invite.UseCount++
+	if err := tx.Save(&invite).Error; err != nil {
 		tx.Rollback()
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update invite code"})
+	}
+
+	// Record usage
+	usage := models.InviteCodeUsage{
+		ID:     uuid.New(),
+		Code:   invite.Code,
+		UserID: userID,
+		UsedAt: time.Now(),
+	}
+	if err := tx.Create(&usage).Error; err != nil {
+		tx.Rollback()
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to record invite usage"})
 	}
 
 	tx.Commit()

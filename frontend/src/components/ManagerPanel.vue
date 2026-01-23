@@ -52,7 +52,11 @@
         <div class="tab-actions">
           <h3>Team Members</h3>
           <div class="header-buttons">
-            <button class="btn btn-secondary" @click="generateInvite">🎟️ Generate Invite</button>
+            <div class="invite-config">
+              <label>Max Uses:</label>
+              <input v-model.number="maxUsesInput" type="number" min="1" max="100" class="input-small" />
+              <button class="btn btn-secondary" @click="generateInvite">🎟️ Generate Invite</button>
+            </div>
             <button class="btn btn-primary" @click="showCreateUser = true">+ Add User</button>
           </div>
         </div>
@@ -62,6 +66,7 @@
           <div class="invite-content">
             <span class="invite-label">New Invite Code:</span>
             <code class="invite-code">{{ inviteCode }}</code>
+            <span class="invite-usage">(Uses: 0 / {{ maxUsesResult }})</span>
             <span class="invite-expiry">(Expires in 7 days)</span>
             <button class="btn-copy" @click="copyInvite">📋 Copy</button>
             <button class="btn-close-small" @click="inviteCode = ''">×</button>
@@ -297,6 +302,8 @@ const formError = ref('')
 const userForm = ref({ name: '', email: '', password: '' })
 const editForm = ref({ id: '', name: '', email: '' })
 const inviteCode = ref('')
+const maxUsesInput = ref(1)
+const maxUsesResult = ref(1)
 
 function formatDate(dateStr) {
   if (!dateStr) return '-'
@@ -343,8 +350,9 @@ async function createUser() {
 
 async function generateInvite() {
   try {
-    const result = await wsService.managerGenerateInvite()
+    const result = await wsService.managerGenerateInvite(maxUsesInput.value)
     inviteCode.value = result.code
+    maxUsesResult.value = maxUsesInput.value
   } catch (e) {
     alert('Failed to generate invite: ' + e.message)
   }
@@ -495,6 +503,32 @@ onMounted(loadAll)
 .header-buttons {
   display: flex;
   gap: 0.75rem;
+  align-items: center;
+}
+
+.invite-config {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: #f1f5f9;
+  padding: 0.25rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.invite-config label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.input-small {
+  width: 50px;
+  padding: 0.25rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  text-align: center;
 }
 
 .invite-banner {
@@ -526,6 +560,12 @@ onMounted(loadAll)
   font-weight: 700;
   color: #2563eb;
   letter-spacing: 0.05em;
+}
+
+.invite-usage {
+  font-weight: 600;
+  color: #1e40af;
+  font-size: 0.85rem;
 }
 
 .invite-expiry {

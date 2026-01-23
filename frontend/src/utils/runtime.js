@@ -44,3 +44,20 @@ export function getWebSocketHost() {
   // 4. Non-standard port in production (edge case): include port
   return window.location.host
 }
+
+/**
+ * Generate a UUID v4
+ * Falls back to Math.random if crypto.randomUUID is not available (insecure contexts/IP)
+ */
+export function generateUUID() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+
+  // Fallback for insecure contexts (HTTP/IP)
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+    const r = Math.random() * 16 | 0
+    const v = c === 'x' ? r : (r & 0x3 | 0x8)
+    return v.toString(16)
+  })
+}
