@@ -178,8 +178,8 @@ textarea {
   border-radius: 14px;
   padding: 1rem 1.25rem 1.25rem;
   box-shadow: 0 18px 45px rgba(15, 23, 42, 0.25);
-  width: 50%;
-  max-width: 100%;
+  width: 100%;
+  max-width: 320px;
   border: 1px solid rgba(148, 163, 184, 0.35);
 }
 
@@ -855,6 +855,19 @@ textarea {
   justify-content: center;
 }
 
+.global-print-preview-overlay .print-report {
+  max-width: 210mm;
+  /* A3 Landscape height is 297mm, width is 420mm... wait. */
+  /* Actually A3 landscape is 420mm wide. Standard screens might be smaller. 
+     Let's use a pixel value that fits comfortably on a 1080p screen or just limit it so it doesn't look huge.
+     A3 width (420mm) is ~1587px. That's pretty wide.
+     A4 width (210mm) is ~793px.
+     The report is styled for A3 Landscape.
+  */
+  max-width: 1200px;
+  width: 100%;
+}
+
 .btn-back-print {
   background: transparent;
   color: white;
@@ -950,6 +963,12 @@ textarea {
 
   .print-report {
     display: block !important;
+    width: 100% !important;
+  }
+
+  /* Reset max-width from preview mode so it fills the A3 page */
+  .global-print-preview-overlay .print-report {
+    max-width: none !important;
     width: 100% !important;
   }
 
