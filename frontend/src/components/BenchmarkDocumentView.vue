@@ -96,6 +96,7 @@ import { extractAnswerText, extractAnswerMeta } from '../utils/chatHelpers.js'
 import { exportResultsReport } from '../utils/exporters.js'
 import { downloadManager } from '../services/DownloadManager.js'
 import { contentCache } from '../services/ContentCache.js'
+import { formatDuration } from '../utils/formatDuration.js'
 
 export default {
   name: 'BenchmarkDocumentView',
@@ -266,7 +267,7 @@ export default {
           answer: result ? result.answer : null,
           loading: false,
           error: result && result.status === 'error' ? 'Error in run' : null,
-          duration: result ? (result.duration_ms / 1000).toFixed(1) : null,
+          duration: result ? result.duration_ms / 1000 : null,
           timestamp: result ? result.created_at : null,
           humanValidation: null // We could load this from evaluations if backend provided it
         }

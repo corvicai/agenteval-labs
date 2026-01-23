@@ -71,7 +71,7 @@
           <div class="stat-icon-wrapper speed">⏱️</div>
           <div class="stat-info">
             <div class="stat-label">Avg Duration</div>
-            <div class="stat-value">{{ (stats.avg_duration_ms / 1000).toFixed(2) }}s</div>
+            <div class="stat-value">{{ formatDuration(stats.avg_duration_ms / 1000) }}</div>
           </div>
         </div>
       </div>
@@ -165,7 +165,7 @@
                   <span v-else>-</span>
                 </td>
                 <td class="count-cell">{{ agent.total_evaluations > 0 ? agent.avg_score.toFixed(1) : '-' }}</td>
-                <td class="latency-cell">{{ (agent.avg_duration_ms / 1000).toFixed(2) }}s</td>
+                <td class="latency-cell">{{ formatDuration(agent.avg_duration_ms / 1000) }}</td>
                 <td class="latency-cell">{{ formatDate(agent.created_at) }}</td>
               </tr>
             </tbody>
@@ -215,6 +215,7 @@
 import { ref, onMounted, watch, computed } from 'vue';
 import wsService from '../services/websocket.js';
 import { useWSStore } from '../stores/wsStore';
+import { formatDuration } from '../utils/formatDuration.js';
 
 const { state: wsState } = useWSStore();
 
