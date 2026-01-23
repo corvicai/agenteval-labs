@@ -862,10 +862,14 @@ onMounted(async () => {
             if (String(res.run_id) !== runId) return
             const agentId = res.agent_id
             const qIdStr = String(res.question_id)
-            if (!runResults.value[agentId]) runResults.value[agentId] = {}
+            if (!runResults.value[agentId]) return // Agent not in current results
             
             const skeleton = runResults.value[agentId][qIdStr]
-            if (skeleton && skeleton.content_hash) {
+            // Only update if the skeleton exists and has the same result ID
+            // This prevents stale downloads from overwriting correct data
+            if (!skeleton || skeleton.id !== res.id) return
+            
+            if (skeleton.content_hash) {
                 contentCache.set(skeleton.content_hash, {
                     answer: res.answer,
                     evaluations: res.evaluations
@@ -873,7 +877,7 @@ onMounted(async () => {
             }
             runResults.value[agentId][qIdStr] = {
                 id: res.id,
-                content_hash: skeleton?.content_hash,
+                content_hash: skeleton.content_hash,
                 loading: false,
                 success: res.status === 'success',
                 answer: res.answer,
