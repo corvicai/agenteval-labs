@@ -1,0 +1,64 @@
+services:
+  # Isolated Production DB
+  db-prod:
+    image: postgres:15-alpine
+    container_name: benchmarking-db-prod
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: prod_ext_secure_928172
+      POSTGRES_DB: benchmarking_prod
+    volumes:
+      - postgres_data_prod:/var/lib/postgresql/data
+    networks:
+      - benchmarking-net-prod
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Production Python Runner
+  python-runner-prod:
+    build:
+      context: ./server_python
+      dockerfile: Dockerfile
+    container_name: AgenteEval-python-prod
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - benchmarking-net-prod
+      - benchmarking-public
+    restart: unless-stopped
+
+  # Production Go API
+  go-api-prod:
+    build:
+      context: ./server_go
+      dockerfile: Dockerfile
+    container_name: AgenteEval-api-prod
+    environment:
+      - DATABASE_URL=host=db-prod user=postgres password=prod_ext_secure_928172 dbname=benchmarking_prod port=5432 sslmode=disable
+      - PYTHON_RUNNER_URL=http://python-runner-prod:3003
+      - PORT=8080
+      - APP_ENV=production
+      - JWT_SECRET=prod-secret-keep-consistent-82736152
+      - ALLOWED_ORIGINS=http://65.109.82.75,http://localhost,http://127.0.0.1
+    depends_on:
+      db-prod:
+        condition: service_healthy
+      python-runner-prod:
+        condition: service_started
+    networks:
+      - benchmarking-net-prod
+      - benchmarking-public
+    restart: unless-stopped
+
+networks:
+  benchmarking-net-prod:
+    driver: bridge
+  benchmarking-public:
+    external: true
+
+volumes:
+  postgres_data_prod:
