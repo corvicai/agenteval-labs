@@ -90,6 +90,7 @@ const (
 	ReqAdminDeleteOrg        = "REQ_ADMIN_DELETE_ORG"
 	ReqAdminGenerateInvite   = "REQ_ADMIN_GENERATE_INVITE"
 	ReqAdminGetLoginLogs     = "REQ_ADMIN_GET_LOGIN_LOGS"
+	ReqChangePassword        = "REQ_CHANGE_PASSWORD"
 
 	// Legacy Comands (mapped to correct ones or kept for compatibility)
 	CmdAdminProfile     = "CMD_ADMIN_PROFILE"
@@ -189,6 +190,7 @@ type Connection struct {
 	Conn            *websocket.Conn
 	Send            chan []byte
 	IsAuthenticated bool
+	RemoteIP        string
 }
 
 func NewHub(db *gorm.DB, engine *orchestrator.Engine) *Hub {

@@ -159,21 +159,40 @@ func (h *Hub) handleWsLogin(c *Connection, env models.Envelope) {
 		return
 	}
 
+	// Helper to record login log via WebSocket
+	recordLog := func(userID *uuid.UUID, status, reason string, orgID *uuid.UUID) {
+		logEntry := models.LoginLog{
+			ID:             uuid.New(),
+			UserID:         userID,
+			UserEmail:      req.Email,
+			IPAddress:      c.RemoteIP,
+			UserAgent:      c.Conn.RemoteAddr().String(), // Best we can do for WS UserAgent if not in req
+			Status:         status,
+			FailureReason:  reason,
+			OrganizationID: orgID,
+			CreatedAt:      time.Now(),
+		}
+		h.db.Create(&logEntry)
+	}
+
 	// Find user by email
 	var user models.User
 	if err := h.db.Where("email = ?", req.Email).First(&user).Error; err != nil {
+		recordLog(nil, "failed", "invalid_credentials", nil)
 		c.SendError(env.CorrelationID, "invalid credentials")
 		return
 	}
 
 	// Check password
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+		recordLog(&user.ID, "failed", "invalid_credentials", nil)
 		c.SendError(env.CorrelationID, "invalid credentials")
 		return
 	}
 
 	// Check if user is suspended
 	if user.IsSuspended {
+		recordLog(&user.ID, "failed", "user_suspended", nil)
 		c.SendError(env.CorrelationID, "account is suspended")
 		return
 	}
@@ -217,6 +236,7 @@ func (h *Hub) handleWsLogin(c *Connection, env models.Envelope) {
 		for _, uo := range userOrgs {
 			orgs = append(orgs, uo.Organization)
 		}
+		recordLog(&user.ID, "success", "pending_org_selection", nil)
 		c.SendResponse(DataWsLoginResult, env.CorrelationID, map[string]any{
 			"requires_org_selection": true,
 			"organizations":          orgs,
@@ -272,6 +292,8 @@ func (h *Hub) handleWsLogin(c *Connection, env models.Envelope) {
 		"",
 	)
 
+	recordLog(&user.ID, "success", "", &selectedOrgID)
+
 	c.SendResponse(DataWsLoginResult, env.CorrelationID, map[string]any{
 		"success": true,
 		"token":   token,
@@ -322,8 +344,8 @@ func (h *Hub) handleWsRegister(c *Connection, env models.Envelope) {
 			return
 		}
 
-		if invite.UsedBy != nil {
-			c.SendError(env.CorrelationID, "invite code already used")
+		if invite.UseCount >= invite.MaxUses {
+			c.SendError(env.CorrelationID, "invite code usage limit reached")
 			return
 		}
 
@@ -444,12 +466,23 @@ func (h *Hub) handleWsRegister(c *Connection, env models.Envelope) {
 	}
 
 	// 4. Mark Invite as Used
-	now := time.Now()
-	invite.UsedBy = &user.ID
-	invite.UsedAt = &now
+	invite.UseCount++
 	if err := tx.Save(&invite).Error; err != nil {
 		tx.Rollback()
 		c.SendError(env.CorrelationID, "failed to update invite status")
+		return
+	}
+
+	// Record usage
+	usage := models.InviteCodeUsage{
+		ID:     uuid.New(),
+		Code:   invite.Code,
+		UserID: user.ID,
+		UsedAt: time.Now(),
+	}
+	if err := tx.Create(&usage).Error; err != nil {
+		tx.Rollback()
+		c.SendError(env.CorrelationID, "failed to record invite usage")
 		return
 	}
 
@@ -538,9 +571,15 @@ func (h *Hub) handleJoinOrganization(c *Connection, env models.Envelope) {
 	tx := h.db.Begin()
 
 	var invite models.InviteCode
-	if err := tx.Where("code = ? AND (used_by IS NULL OR used_by = ?)", req.InviteCode, uuid.Nil).First(&invite).Error; err != nil {
+	if err := tx.Where("code = ?", req.InviteCode).First(&invite).Error; err != nil {
 		tx.Rollback()
-		c.SendError(env.CorrelationID, "invalid or already used invite code")
+		c.SendError(env.CorrelationID, "invalid invite code")
+		return
+	}
+
+	if invite.UseCount >= invite.MaxUses {
+		tx.Rollback()
+		c.SendError(env.CorrelationID, "invite code usage limit reached")
 		return
 	}
 
@@ -599,13 +638,23 @@ func (h *Hub) handleJoinOrganization(c *Connection, env models.Envelope) {
 	tx.Create(&client)
 
 	// Update invite code
-	if err := tx.Model(&models.InviteCode{}).Where("code = ?", req.InviteCode).
-		Updates(map[string]interface{}{
-			"used_by": c.UserID,
-			"used_at": time.Now(),
-		}).Error; err != nil {
+	invite.UseCount++
+	if err := tx.Save(&invite).Error; err != nil {
 		tx.Rollback()
-		c.SendError(env.CorrelationID, "failed to update invite code")
+		c.SendError(env.CorrelationID, "failed to update invite status")
+		return
+	}
+
+	// Record usage
+	usage := models.InviteCodeUsage{
+		ID:     uuid.New(),
+		Code:   invite.Code,
+		UserID: c.UserID,
+		UsedAt: time.Now(),
+	}
+	if err := tx.Create(&usage).Error; err != nil {
+		tx.Rollback()
+		c.SendError(env.CorrelationID, "failed to record invite usage")
 		return
 	}
 
@@ -620,6 +669,91 @@ func (h *Hub) handleJoinOrganization(c *Connection, env models.Envelope) {
 		"user":      user,
 		"workspace": workspace,
 	})
+}
+
+// handleWsChangePassword allows users to change their own password or admins to reset others
+func (h *Hub) handleWsChangePassword(c *Connection, env models.Envelope) {
+	if !c.IsAuthenticated {
+		c.SendError(env.CorrelationID, "authentication required")
+		return
+	}
+
+	var req models.ChangePasswordPayload
+	if err := json.Unmarshal([]byte(env.Payload), &req); err != nil {
+		c.SendError(env.CorrelationID, "invalid payload")
+		return
+	}
+
+	targetUserID := c.UserID
+	isSelfChange := true
+
+	if req.ID != "" && req.ID != c.UserID.String() {
+		// Admin changing another user's password
+		var currentUser models.User
+		h.db.First(&currentUser, "id = ?", c.UserID)
+		if !currentUser.IsAdmin {
+			c.SendError(env.CorrelationID, "admin access required to change other users' passwords")
+			return
+		}
+		uid, err := uuid.Parse(req.ID)
+		if err != nil {
+			c.SendError(env.CorrelationID, "invalid target user ID")
+			return
+		}
+		targetUserID = uid
+		isSelfChange = false
+	}
+
+	// 1. Validate Password Complexity
+	pass := req.NewPassword
+	if len(pass) < 8 {
+		c.SendError(env.CorrelationID, "password must be at least 8 characters long")
+		return
+	}
+
+	hasUpper := false
+	hasSpecialOrNum := false
+	for _, char := range pass {
+		if char >= 'A' && char <= 'Z' {
+			hasUpper = true
+		}
+		if (char >= '0' && char <= '9') || (char < 'A' || char > 'z') && char != ' ' {
+			hasSpecialOrNum = true
+		}
+	}
+
+	if !hasUpper {
+		c.SendError(env.CorrelationID, "password must contain at least one uppercase letter")
+		return
+	}
+	if !hasSpecialOrNum {
+		c.SendError(env.CorrelationID, "password must contain at least one number or special character")
+		return
+	}
+
+	// 2. Fetch User and Verify Old Password if self-change
+	var user models.User
+	if err := h.db.First(&user, "id = ?", targetUserID).Error; err != nil {
+		c.SendError(env.CorrelationID, "user not found")
+		return
+	}
+
+	if isSelfChange {
+		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.OldPassword)); err != nil {
+			c.SendError(env.CorrelationID, "incorrect current password")
+			return
+		}
+	}
+
+	// 3. Hash and Save
+	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
+	user.PasswordHash = string(hashedPassword)
+	if err := h.db.Save(&user).Error; err != nil {
+		c.SendError(env.CorrelationID, "failed to update password")
+		return
+	}
+
+	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "password updated successfully"})
 }
 
 // Helper to verify manager status and get org ID for WebSocket connection

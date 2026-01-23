@@ -43,6 +43,15 @@ func main() {
 	e := echo.New()
 
 	// Middleware
+	e.IPExtractor = func(r *http.Request) string {
+		if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
+			return realIP
+		}
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			return strings.TrimSpace(strings.Split(xff, ",")[0])
+		}
+		return strings.Split(r.RemoteAddr, ":")[0] // Simple fallback
+	}
 	e.Use(echoMiddleware.Logger())
 	e.Use(echoMiddleware.Recover())
 	e.Use(echoMiddleware.CORSWithConfig(echoMiddleware.CORSConfig{
@@ -91,8 +100,7 @@ func main() {
 	if jwtSecret == "" {
 		jwtSecret = "dev-secret-change-in-production"
 	}
-	// Append random component to invalidate all sessions on restart/rebuild
-	jwtSecret = jwtSecret + "-" + uuid.New().String()
+	// Secret is now stable across restarts
 	log.Printf("[AUTH] System session secret initialized (all previous sessions invalidated)")
 	authHandler := handlers.NewAuthHandler(database, jwtSecret)
 
@@ -174,6 +182,7 @@ func main() {
 			Conn:            ws,
 			Send:            make(chan []byte, 1024),
 			IsAuthenticated: isAuthenticated,
+			RemoteIP:        c.RealIP(),
 		}
 
 		hub.Register(conn)
