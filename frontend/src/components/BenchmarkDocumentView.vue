@@ -80,10 +80,19 @@
                 :extract-answer-text="extractAnswerText"
                 :extract-answer-meta="extractAnswerMeta"
                 :get-question-key="getQuestionKey"
+                :dev-mode="isDev"
+                @show-details="(idx) => handleShowDetails(agent.id, idx)"
               />
             </div>
           </div>
         </div>
+
+        <!-- Details Modal -->
+        <DetailsModal 
+          :is-open="showDetailsModal" 
+          :details="selectedDetails"
+          @close="showDetailsModal = false"
+        />
       </div>
     </div>
   </div>
@@ -95,6 +104,7 @@ import { wsService } from '../services/websocket.js'
 import RunHistoryPanel from './RunHistoryPanel.vue'
 import ChatPanel from './ChatPanel.vue'
 import PrintReport from './PrintReport.vue'
+import DetailsModal from './modals/DetailsModal.vue'
 import { extractAnswerText, extractAnswerMeta } from '../utils/chatHelpers.js'
 import { exportResultsReport } from '../utils/exporters.js'
 import { downloadManager } from '../services/DownloadManager.js'
@@ -106,7 +116,8 @@ export default {
   components: {
     RunHistoryPanel,
     ChatPanel,
-    PrintReport
+    PrintReport,
+    DetailsModal
   },
   props: {
     workspaceId: {
@@ -124,12 +135,14 @@ export default {
       loading: false,
       runData: null,
       questionSetName: '',
-      questionSetName: '',
       results: [],
       agents: {},
       error: null,
       showPrintView: false,
-      printData: {}
+      printData: {},
+      showDetailsModal: false,
+      selectedDetails: null,
+      isDev: import.meta.env.DEV
     }
   },
   mounted() {
@@ -344,6 +357,58 @@ export default {
       
       const questionId = String(item.question.id)
       
+      // Determine if this is an evaluator and if we need to target another result
+      let resultIdToUse = item.id
+      const agent = this.runData.agents ? (this.runData.agents[agentId] || Object.values(this.runData.agents).find(a => a.id === agentId)) : null
+      
+      if (agent && (agent.provider_type === 'evaluator' || agent.config?.target_agent_id)) {
+          // It's an evaluator. Use heuristic to find the target answer.
+          // Parse the questionId to see if it contains the target info (eval-<targetAgentId>-<originalQId>)
+          
+          let targetQuestionId = questionId
+          let targetAgentId = agent.config?.target_agent_id
+
+          if (questionId.startsWith('eval-') && questionId.length > 42) {
+              // Extraction logic matching backend: "eval-" (5) + UUID (36) + "-" (1) = 42 chars prefix
+              const extractedAgentId = questionId.substring(5, 41)
+              const extractedQId = questionId.substring(42)
+              
+              if (extractedQId) {
+                  targetQuestionId = extractedQId
+                  targetAgentId = extractedAgentId // This is more reliable than config for historical runs
+                  console.log(`[Frontend] Extracted target info from ID: Agent=${targetAgentId}, QID=${targetQuestionId}`)
+              }
+          }
+
+          console.warn(`[Frontend] Evaluator Retry Debug: AgentID=${agentId}, TargetAgentID=${targetAgentId}, TargetQID=${targetQuestionId}`)
+          console.log('[Frontend] First 5 results:', this.results.slice(0, 5).map(r => ({ aid: r.agent_id, qid: r.question_id, hasAns: !!r.answer })))
+
+          const candidates = this.results.filter(r => 
+              String(r.question_id) === targetQuestionId && 
+              r.agent_id !== agentId &&
+              r.answer // Target must have an answer
+          )
+          
+          console.warn(`[Frontend] Candidates found: ${candidates.length}`, candidates.map(c => ({ id: c.id, aid: c.agent_id })))
+
+          let targetMatch = null
+          if (targetAgentId) {
+             targetMatch = candidates.find(c => c.agent_id === targetAgentId)
+          } else if (candidates.length === 1) {
+             targetMatch = candidates[0]
+          } else if (candidates.length > 0) {
+             targetMatch = candidates[0] 
+          }
+
+          if (targetMatch) {
+              console.log(`[Frontend] Resolved target result for evaluator retry: ${targetMatch.id} (Agent ${targetMatch.agent_id})`)
+              resultIdToUse = targetMatch.id
+          } else {
+              console.warn('[Frontend] Could not resolve target result for evaluator retry. Letting backend heuristic handle it.')
+              resultIdToUse = '' // Reset to empty so backend heuristic kicks in
+          }
+      }
+
       // Optimistic update: set loading
       this.updateResultState(agentId, questionId, { loading: true })
       
@@ -351,7 +416,12 @@ export default {
       this.clearEvaluatorResult(questionId)
 
       try {
-        await wsService.rerunTask(this.runData.run.id, agentId, questionId)
+        await wsService.rerunTask(this.runData.run.id, agentId, questionId, {
+          questionSetId: this.runData.question_set?.id,
+          resultId: resultIdToUse,
+          originalQuestion: item.question?.question || item.question?.text || '',
+          expectedAnswer: item.question?.expected || item.question?.expected_answer || ''
+        })
       } catch (e) {
         console.error('Failed to rerun task:', e)
         this.updateResultState(agentId, questionId, { loading: false, error: 'Failed to start' })
@@ -375,7 +445,12 @@ export default {
                
                // Fire and forget (or await if we want sequential, but parallel is faster if backend supports it)
                // Backend probably handles queueing.
-               wsService.rerunTask(this.runData.run.id, agentId, qId).catch(console.error)
+               wsService.rerunTask(this.runData.run.id, agentId, qId, {
+                 questionSetId: this.runData.question_set?.id,
+                 resultId: item.id,
+                 originalQuestion: item.question?.question || item.question?.text || '',
+                 expectedAnswer: item.question?.expected || item.question?.expected_answer || ''
+               }).catch(console.error)
            }
        }
     },
@@ -428,6 +503,26 @@ export default {
         console.error('Failed to delete run:', e)
         alert('Failed to delete run: ' + e.message)
       }
+    },
+
+    handleShowDetails(agentId, index) {
+      const results = this.getAgentResults(agentId)
+      const item = results[index]
+      if (!item) return
+
+      // Find the raw result from this.results
+      const rawResult = this.results.find(r => r.agent_id === agentId && String(r.question_id) === String(item.question.id))
+
+      this.selectedDetails = {
+        run_id: this.selectedRunId,
+        agent_id: agentId,
+        question_id: item.question.id,
+        result_id: rawResult?.id,
+        question: item.question,
+        result: rawResult,
+        metadata: rawResult?.metadata
+      }
+      this.showDetailsModal = true
     },
 
     triggerBrowserPrint() {

@@ -137,6 +137,14 @@
               >
                 🕵️ Spy
               </button>
+              <button
+                v-if="devMode"
+                class="btn-details"
+                @click="$emit('show-details', index)"
+                title="View result details"
+              >
+                ℹ️ Details
+              </button>
               <label class="btn-attach-image" v-if="provider !== 'custom'">
                 Attach image
                 <input
@@ -197,11 +205,17 @@
           </div>
         </div>
         <div class="answer" v-if="qa.loading">
-          <div class="loading-spinner"></div>
-          <span>Loading...</span>
+          <div v-if="qa.queued" class="queued-status">
+            <span class="queued-icon">⏳</span>
+            <span class="queued-text">Queued...</span>
+          </div>
+          <div v-else class="loading-status">
+            <div class="loading-spinner"></div>
+            <span>Loading...</span>
+          </div>
         </div>
-        <div class="answer" v-else-if="qa.error">
-          <span class="error">Error: {{ qa.error }}</span>
+        <div class="answer" v-else-if="qa.error || (qa.success === false && !qa.loading)">
+          <span class="error">Error: {{ qa.error || 'Task failed, please retry' }}</span>
           <button @click="handleRetry(index)" class="btn-retry">Retry</button>
         </div>
         <div class="answer" v-else-if="qa.answer || provider === 'custom'" :class="{ 'approved': qa.humanValidation === 'positive' }">
@@ -382,8 +396,13 @@ export default {
     onSpyPayload: {
       type: Function,
       required: false
+    },
+    devMode: {
+      type: Boolean,
+      default: false
     }
   },
+  emits: ['show-details'],
   directives: {
     focus: {
       mounted(el) {
@@ -664,6 +683,28 @@ export default {
   color: #ffffff;
 }
 
+.btn-details {
+  padding: 0.25rem 0.6rem;
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #475569;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-details:hover {
+  background: #e2e8f0;
+  border-color: #94a3b8;
+  color: #1e293b;
+}
+
 .messages {
   flex: 1;
   overflow-y: auto;
@@ -742,6 +783,27 @@ export default {
   font-size: 0.9rem;
   color: #166534;
   line-height: 1.6;
+}
+
+.queued-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #64748b;
+  font-weight: 500;
+  font-style: italic;
+  padding: 0.5rem 0;
+}
+
+.queued-icon {
+  font-size: 1.1rem;
+  font-style: normal;
+}
+
+.loading-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .expected-edit {
