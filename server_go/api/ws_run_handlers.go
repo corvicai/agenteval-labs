@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"benchmarking-platform/models"
+	"benchmarking-platform/orchestrator"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -53,7 +54,15 @@ func (h *Hub) handleRerunTask(c *Connection, env models.Envelope) {
 	runID, _ := uuid.Parse(payload.RunID)
 	agentID, _ := uuid.Parse(payload.AgentID)
 
-	if err := h.engine.RerunTask(runID, agentID, payload.QuestionID); err != nil {
+	// Pass frontend-provided context to engine
+	opts := &orchestrator.RerunTaskOptions{
+		OriginalQuestion: payload.OriginalQuestion,
+		ExpectedAnswer:   payload.ExpectedAnswer,
+		QuestionSetID:    payload.QuestionSetID,
+		ResultID:         payload.ResultID,
+	}
+
+	if err := h.engine.RerunTask(runID, agentID, payload.QuestionID, opts); err != nil {
 		c.SendError(env.CorrelationID, err.Error())
 		return
 	}
@@ -364,11 +373,12 @@ func (h *Hub) handleGetLatestRunByQuestionSet(c *Connection, env models.Envelope
 		DurationMs int
 		CreatedAt  time.Time
 		Answer     string
+		Error      string
 	}
 	var scanned []ResultScan
 
 	err = h.db.Model(&models.RunResult{}).
-		Select("id, run_id, agent_id, question_id, status, duration_ms, created_at, answer").
+		Select("id, run_id, agent_id, question_id, status, duration_ms, created_at, answer, error").
 		Where("run_id = ?", run.ID).
 		Scan(&scanned).Error
 
@@ -393,6 +403,7 @@ func (h *Hub) handleGetLatestRunByQuestionSet(c *Connection, env models.Envelope
 			QuestionID:  s.QuestionID,
 			Status:      s.Status,
 			ContentHash: hash,
+			Error:       s.Error,
 			DurationMs:  s.DurationMs,
 			CreatedAt:   s.CreatedAt,
 		}

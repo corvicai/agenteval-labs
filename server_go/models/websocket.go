@@ -22,9 +22,13 @@ type StartRunPayload struct {
 
 // RerunTaskPayload represents the payload for CMD_RERUN_TASK
 type RerunTaskPayload struct {
-	RunID      string `json:"run_id"`
-	AgentID    string `json:"agent_id"`
-	QuestionID string `json:"question_id"`
+	RunID            string `json:"run_id"`
+	AgentID          string `json:"agent_id"`
+	QuestionID       string `json:"question_id"`
+	QuestionSetID    string `json:"question_set_id,omitempty"`
+	ResultID         string `json:"result_id,omitempty"`
+	OriginalQuestion string `json:"original_question,omitempty"`
+	ExpectedAnswer   string `json:"expected_answer,omitempty"`
 }
 
 // CancelRunPayload represents the payload for CMD_CANCEL_RUN
@@ -190,6 +194,7 @@ type RunResultLite struct {
 	QuestionID     string    `json:"question_id"`
 	Status         string    `json:"status"`
 	ContentHash    string    `json:"content_hash"`
+	Error          string    `json:"error,omitempty"`
 	DurationMs     int       `json:"duration_ms"`
 	CreatedAt      time.Time `json:"created_at"`
 	HasEvaluations bool      `json:"has_evaluations"`

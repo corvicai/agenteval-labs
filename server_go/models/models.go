@@ -104,6 +104,7 @@ type RunResult struct {
 	QuestionID  string         `gorm:"not null" json:"question_id"`
 	Status      string         `gorm:"not null" json:"status"` // 'success', 'error'
 	Answer      string         `json:"answer"`
+	Error       string         `json:"error"`
 	Metadata    datatypes.JSON `gorm:"type:jsonb;default:'{}'" json:"metadata"`
 	DurationMs  int            `json:"duration_ms"`
 	Evaluations []Evaluation   `json:"evaluations,omitempty"`

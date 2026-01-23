@@ -32,11 +32,13 @@ type Engine struct {
 
 type Task struct {
 	RunID            uuid.UUID
+	WorkspaceID      uuid.UUID // Needed for broadcasting queued event
 	AgentID          uuid.UUID
 	QuestionID       string
 	QuestionText     string
 	ExpectedAnswer   string
 	OriginalQuestion string
+	AgentAnswer      string // For evaluators: the agent's response to evaluate
 	AgentConfig      map[string]any
 	ProviderType     string
 	MaxConcurrency   int // Max parallel requests for this agent
@@ -136,6 +138,14 @@ func (e *Engine) getAgentSemaphore(agentID uuid.UUID, maxConcurrency int) chan s
 }
 
 func (e *Engine) QueueTask(task *Task) {
+	// Emit queued event so frontend can show "Queued" state
+	if e.eventCallback != nil && task.WorkspaceID != uuid.Nil {
+		e.eventCallback(task.WorkspaceID, "EVT_TASK_QUEUED", task.RunID.String(), map[string]any{
+			"run_id":      task.RunID.String(),
+			"agent_id":    task.AgentID.String(),
+			"question_id": task.QuestionID,
+		})
+	}
 	e.taskQueue <- task
 }
 
@@ -179,15 +189,29 @@ func (e *Engine) executeTask(task *Task) {
 		providerType = "openai"
 	}
 
+	payload := map[string]any{
+		"question":          task.QuestionText,
+		"expected_answer":   task.ExpectedAnswer,
+		"original_question": task.OriginalQuestion,
+		"agent_answer":      task.AgentAnswer, // For evaluators: the response to evaluate
+		"answer":            task.AgentAnswer, // Alias for clarity in evaluator payloads
+		"response":          task.AgentAnswer, // Extra alias for clarity in evaluator payloads
+	}
+
+	// For evaluator tasks, send both explicit question and answer fields
+	if task.ProviderType == "evaluator" {
+		if strings.TrimSpace(task.OriginalQuestion) != "" {
+			payload["question"] = task.OriginalQuestion
+		} else if strings.TrimSpace(task.QuestionText) != "" {
+			payload["question"] = task.QuestionText
+		}
+	}
+
 	req := ExecutionRequest{
 		RequestID:    uuid.New().String(),
 		ProviderType: providerType,
 		Config:       task.AgentConfig,
-		Payload: map[string]any{
-			"question":          task.QuestionText,
-			"expected_answer":   task.ExpectedAnswer,
-			"original_question": task.OriginalQuestion,
-		},
+		Payload:      payload,
 	}
 
 	body, _ := json.Marshal(req)
@@ -222,6 +246,7 @@ func (e *Engine) executeTask(task *Task) {
 			QuestionID: task.QuestionID,
 			Status:     status,
 			Answer:     executionResult.Answer,
+			Error:      executionResult.Error,
 			Metadata:   datatypes.JSON(metadata),
 			DurationMs: durationMs,
 		}
@@ -292,6 +317,147 @@ func (e *Engine) checkRunCompletion(runID uuid.UUID) {
 	}
 }
 
+func firstNonEmptyString(m map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if v, ok := m[key]; ok && v != nil {
+			switch t := v.(type) {
+			case string:
+				if s := strings.TrimSpace(t); s != "" {
+					return s
+				}
+			case json.Number:
+				if s := strings.TrimSpace(t.String()); s != "" {
+					return s
+				}
+			case float64:
+				if t == float64(int64(t)) {
+					return fmt.Sprintf("%.0f", t)
+				}
+				return fmt.Sprintf("%v", t)
+			case int, int32, int64, uint, uint32, uint64, bool:
+				return fmt.Sprint(t)
+			default:
+				if s := strings.TrimSpace(fmt.Sprint(t)); s != "" && s != "<nil>" {
+					return s
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func stripEvalPrefix(questionID string) string {
+	if !strings.HasPrefix(questionID, "eval-") {
+		return ""
+	}
+	rest := strings.TrimPrefix(questionID, "eval-")
+	// rest should be "<uuid>-<question_id>"
+	if len(rest) <= 37 {
+		return ""
+	}
+	if rest[36] != '-' {
+		return ""
+	}
+	return rest[37:]
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
+func extractTargetAgentID(questionID string) (uuid.UUID, string) {
+	if !strings.HasPrefix(questionID, "eval-") {
+		return uuid.Nil, ""
+	}
+	rest := strings.TrimPrefix(questionID, "eval-")
+	if len(rest) < 37 {
+		return uuid.Nil, ""
+	}
+	idStr := rest[:36]
+	targetID, err := uuid.Parse(idStr)
+	if err != nil {
+		return uuid.Nil, ""
+	}
+	if rest[36] != '-' {
+		return uuid.Nil, ""
+	}
+	return targetID, rest[37:]
+}
+
+func parseQuestionSetMaps(data datatypes.JSON) (map[string]string, map[string]string) {
+	originalQuestions := make(map[string]string)
+	expectedAnswers := make(map[string]string)
+
+	if len(data) == 0 {
+		return originalQuestions, expectedAnswers
+	}
+
+	var root any
+	if err := json.Unmarshal(data, &root); err != nil {
+		return originalQuestions, expectedAnswers
+	}
+
+	// Handle string-encoded JSON
+	if s, ok := root.(string); ok {
+		var decoded any
+		if err := json.Unmarshal([]byte(s), &decoded); err == nil {
+			root = decoded
+		}
+	}
+
+	rootMap, ok := root.(map[string]any)
+	if !ok {
+		return originalQuestions, expectedAnswers
+	}
+
+	categoriesAny, _ := rootMap["categories"].([]any)
+	for catIdx, catAny := range categoriesAny {
+		catMap, _ := catAny.(map[string]any)
+		questionsAny, _ := catMap["questions"].([]any)
+		for qIdx, qAny := range questionsAny {
+			fallbackID := fmt.Sprintf("%d-%d", catIdx+1, qIdx+1)
+			qID := fallbackID
+			questionText := ""
+			expected := ""
+
+			switch q := qAny.(type) {
+			case map[string]any:
+				if id := firstNonEmptyString(q, "id", "question_id", "qid"); id != "" {
+					qID = id
+				}
+				questionText = firstNonEmptyString(q, "question", "text", "prompt")
+				expected = firstNonEmptyString(q, "expected", "expected_answer", "expectedAnswer", "answer")
+			case string:
+				questionText = strings.TrimSpace(q)
+			default:
+				questionText = strings.TrimSpace(fmt.Sprint(q))
+			}
+
+			if qID == "" {
+				qID = fallbackID
+			}
+			if qID == "" {
+				continue
+			}
+
+			originalQuestions[qID] = questionText
+			expectedAnswers[qID] = expected
+
+			if qID != fallbackID {
+				if _, exists := originalQuestions[fallbackID]; !exists {
+					originalQuestions[fallbackID] = questionText
+					expectedAnswers[fallbackID] = expected
+				}
+			}
+		}
+	}
+
+	return originalQuestions, expectedAnswers
+}
+
 // RunEvaluators runs evaluator agents on the results of primary agents
 func (e *Engine) RunEvaluators(runID uuid.UUID) error {
 	if e.db == nil {
@@ -328,46 +494,91 @@ func (e *Engine) RunEvaluators(runID uuid.UUID) error {
 		return err
 	}
 
-	var qsData struct {
-		Categories []struct {
-			Questions []struct {
-				ID       any    `json:"id"`
-				Question string `json:"question"`
-				Expected string `json:"expected"`
-			} `json:"questions"`
-		} `json:"categories"`
-	}
-	json.Unmarshal(qs.Data, &qsData)
-
 	// Create a map for quick lookup of expected answers and questions
-	expectedAnswers := make(map[string]string)
-	originalQuestions := make(map[string]string)
-	for _, cat := range qsData.Categories {
-		for _, q := range cat.Questions {
-			qID := ""
-			switch v := q.ID.(type) {
-			case string:
-				qID = v
-			case float64:
-				qID = fmt.Sprintf("%.0f", v)
-			}
-			expectedAnswers[qID] = q.Expected
-			originalQuestions[qID] = q.Question
-		}
+	originalQuestions, expectedAnswers := parseQuestionSetMaps(qs.Data)
+
+	evaluatorIDs := make(map[uuid.UUID]struct{})
+	for _, ev := range evaluators {
+		evaluatorIDs[ev.ID] = struct{}{}
 	}
+
+	log.Printf("[EVAL] Running evaluators for run %s. Results to evaluate: %d", runID, len(results))
 
 	// For each evaluator, create tasks to evaluate each result
 	for _, evaluator := range evaluators {
 		var evalConfig map[string]any
-		json.Unmarshal(evaluator.Config, &evalConfig)
+
+		// Check for question set override
+		var override models.QuestionSetAgent
+		if err := e.db.Where("question_set_id = ? AND agent_id = ?", run.QuestionSetID, evaluator.ID).First(&override).Error; err == nil {
+			if !override.Enabled {
+				continue // Skip if explicitly disabled for this question set
+			}
+			if len(override.Config) > 0 {
+				json.Unmarshal(override.Config, &evalConfig)
+			} else {
+				json.Unmarshal(evaluator.Config, &evalConfig)
+			}
+		} else {
+			// If no override, respect workspace-level enabled status (already filtered in query)
+			json.Unmarshal(evaluator.Config, &evalConfig)
+		}
+
+		// Keep track of unique agents in this run for debugging
+		runAgents := make(map[uuid.UUID]bool)
+		for _, r := range results {
+			runAgents[r.AgentID] = true
+		}
+		availableAgents := []uuid.UUID{}
+		for id := range runAgents {
+			availableAgents = append(availableAgents, id)
+		}
 
 		// Get target agent ID from evaluator config
 		targetAgentIDStr, _ := evalConfig["target_agent_id"].(string)
 		targetAgentID, _ := uuid.Parse(targetAgentIDStr)
+		log.Printf("[EVAL] Evaluator %s (%s) target_agent_id: %s. Available agents in run: %v", evaluator.ID, evaluator.Name, targetAgentIDStr, availableAgents)
+
+		if targetAgentID != uuid.Nil && !runAgents[targetAgentID] {
+			log.Printf("[EVAL] WARNING: Target agent %s is NOT in this run. Skipping evaluator %s.", targetAgentID, evaluator.Name)
+			continue
+		}
 
 		for _, result := range results {
+			if result.Status != "success" || strings.TrimSpace(result.Answer) == "" {
+				continue
+			}
+
+			if _, isEvaluator := evaluatorIDs[result.AgentID]; isEvaluator {
+				continue
+			}
+
 			// Only evaluate results from the target agent
 			if targetAgentID != uuid.Nil && result.AgentID != targetAgentID {
+				continue
+			}
+
+			questionID := result.QuestionID
+			originalQuestion, ok := originalQuestions[questionID]
+			expectedAnswer := expectedAnswers[questionID]
+			if !ok {
+				if altID := stripEvalPrefix(questionID); altID != "" {
+					if oq, okAlt := originalQuestions[altID]; okAlt {
+						questionID = altID
+						originalQuestion = oq
+						expectedAnswer = expectedAnswers[altID]
+						ok = true
+					}
+				}
+			}
+
+			if !ok {
+				var sampleKey string
+				for k := range originalQuestions {
+					sampleKey = k
+					break
+				}
+				log.Printf("[ORCHESTRATOR-DEBUG] QuestionID '%s' NOT FOUND in originalQuestions map! Map has %d entries. Sample key: '%s'", result.QuestionID, len(originalQuestions), sampleKey)
 				continue
 			}
 
@@ -377,10 +588,11 @@ func (e *Engine) RunEvaluators(runID uuid.UUID) error {
 			task := &Task{
 				RunID:            runID,
 				AgentID:          evaluator.ID,
-				QuestionID:       fmt.Sprintf("eval-%s-%s", result.AgentID, result.QuestionID),
+				QuestionID:       fmt.Sprintf("eval-%s-%s", result.AgentID, questionID),
 				QuestionText:     evalQuestion,
-				ExpectedAnswer:   expectedAnswers[result.QuestionID],
-				OriginalQuestion: originalQuestions[result.QuestionID],
+				ExpectedAnswer:   expectedAnswer,
+				OriginalQuestion: originalQuestion,
+				AgentAnswer:      result.Answer, // Explicit agent answer for Python server
 				AgentConfig:      evalConfig,
 				ProviderType:     evaluator.ProviderType,
 			}
@@ -451,10 +663,17 @@ func (e *Engine) StartRun(workspaceID uuid.UUID, questionSetID uuid.UUID, agentI
 
 	// Calculate Total Tasks
 	totalTasks := 0
+	nonEvaluatorAgentCount := 0
+	for _, agent := range agents {
+		if agent.ProviderType != "evaluator" {
+			nonEvaluatorAgentCount++
+		}
+	}
+
 	for _, cat := range qsData.Categories {
 		totalTasks += len(cat.Questions)
 	}
-	totalTasks = totalTasks * len(agents)
+	totalTasks = totalTasks * nonEvaluatorAgentCount
 
 	// Create run record
 	run := models.Run{
@@ -470,6 +689,10 @@ func (e *Engine) StartRun(workspaceID uuid.UUID, questionSetID uuid.UUID, agentI
 
 	// Queue tasks for each agent + question
 	for _, agent := range agents {
+		if agent.ProviderType == "evaluator" {
+			log.Printf("[ENGINE] Skipping evaluator agent %s during initial StartRun", agent.ID)
+			continue
+		}
 		var agentConfig map[string]any
 
 		// Use override if available
@@ -502,6 +725,7 @@ func (e *Engine) StartRun(workspaceID uuid.UUID, questionSetID uuid.UUID, agentI
 
 				task := &Task{
 					RunID:          run.ID,
+					WorkspaceID:    workspaceID,
 					AgentID:        agent.ID,
 					QuestionID:     qID,
 					QuestionText:   q.Question,
@@ -517,8 +741,16 @@ func (e *Engine) StartRun(workspaceID uuid.UUID, questionSetID uuid.UUID, agentI
 	return &run, nil
 }
 
+// RerunTaskOptions contains optional context from the frontend
+type RerunTaskOptions struct {
+	OriginalQuestion string
+	ExpectedAnswer   string
+	QuestionSetID    string
+	ResultID         string
+}
+
 // RerunTask reruns a single question for a specific agent
-func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string) error {
+func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string, opts *RerunTaskOptions) error {
 	// Get existing run
 	var run models.Run
 	if err := e.db.First(&run, "id = ?", runID).Error; err != nil {
@@ -531,56 +763,175 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 		return fmt.Errorf("agent not found")
 	}
 
-	// Get question set to find the question text
-	var questionSet models.QuestionSet
-	if err := e.db.First(&questionSet, "id = ?", run.QuestionSetID).Error; err != nil {
-		return fmt.Errorf("question set not found")
-	}
-
-	var qsData struct {
-		Categories []struct {
-			Questions []struct {
-				ID       any    `json:"id"`
-				Question string `json:"question"`
-			} `json:"questions"`
-		} `json:"categories"`
-	}
-	json.Unmarshal(questionSet.Data, &qsData)
-
-	// Find the question text
-	var questionText string
-	for _, cat := range qsData.Categories {
-		for _, q := range cat.Questions {
-			qID := ""
-			switch v := q.ID.(type) {
-			case string:
-				qID = v
-			case float64:
-				qID = fmt.Sprintf("%.0f", v)
+	// Optional: Use result_id to locate the exact answer to evaluate
+	var resultFromPayload *models.RunResult
+	if opts != nil && strings.TrimSpace(opts.ResultID) != "" {
+		if rid, err := uuid.Parse(opts.ResultID); err == nil {
+			var rr models.RunResult
+			if err := e.db.First(&rr, "id = ?", rid).Error; err == nil {
+				if rr.RunID != run.ID {
+					log.Printf("[RERUN] WARNING: result_id %s does not belong to run %s (got run %s). Ignoring.", rid, run.ID, rr.RunID)
+				} else {
+					resultFromPayload = &rr
+					if questionID == "" || questionID != rr.QuestionID {
+						log.Printf("[RERUN] Overriding question_id from result_id: %s -> %s", questionID, rr.QuestionID)
+						questionID = rr.QuestionID
+					}
+				}
+			} else {
+				log.Printf("[RERUN] WARNING: result_id %s not found: %v", rid, err)
 			}
-			if qID == questionID {
-				questionText = q.Question
-				break
-			}
+		} else {
+			log.Printf("[RERUN] WARNING: invalid result_id %q: %v", opts.ResultID, err)
 		}
 	}
 
-	if questionText == "" {
-		return fmt.Errorf("question not found")
+	// Try to use frontend-provided values first
+	var questionText, expectedAnswer string
+	if opts != nil && opts.OriginalQuestion != "" {
+		questionText = opts.OriginalQuestion
+		expectedAnswer = opts.ExpectedAnswer
+		log.Printf("[RERUN] Using frontend-provided context: question=%q, expected=%q", truncate(questionText, 50), truncate(expectedAnswer, 50))
+	} else {
+		// Fallback: Get question set to find the question text
+		var questionSet models.QuestionSet
+		if err := e.db.First(&questionSet, "id = ?", run.QuestionSetID).Error; err != nil {
+			return fmt.Errorf("question set not found")
+		}
+
+		// Use robust unmarshalling
+		originalQuestions, expectedAnswers := parseQuestionSetMaps(questionSet.Data)
+
+		var found bool
+		questionText, found = originalQuestions[questionID]
+		expectedAnswer = expectedAnswers[questionID]
+		if !found {
+			if altID := stripEvalPrefix(questionID); altID != "" {
+				if qt, ok := originalQuestions[altID]; ok {
+					questionID = altID
+					questionText = qt
+					expectedAnswer = expectedAnswers[altID]
+					found = true
+				}
+			}
+		}
+
+		if !found || strings.TrimSpace(questionText) == "" {
+			return fmt.Errorf("question not found")
+		}
+		log.Printf("[RERUN] Using DB-resolved context: question=%q, expected=%q", truncate(questionText, 50), truncate(expectedAnswer, 50))
 	}
 
 	var agentConfig map[string]any
 	json.Unmarshal(agent.Config, &agentConfig)
 
-	task := &Task{
-		RunID:          run.ID,
-		AgentID:        agent.ID,
-		QuestionID:     questionID,
-		QuestionText:   questionText,
-		AgentConfig:    agentConfig,
-		ProviderType:   agent.ProviderType,
-		MaxConcurrency: agent.MaxConcurrency,
+	// Prepare Task fields
+	taskQuestionText := questionText
+	taskOriginalQuestion := questionText
+	taskAgentAnswer := "" // For evaluators: the agent response to evaluate
+
+	// SPECIAL HANDLING FOR EVALUATOR AGENTS
+	if agent.ProviderType == "evaluator" {
+		log.Printf("[RERUN] Evaluator detected: %s. Run: %s, Q: %s", agent.ID, run.ID, questionID)
+
+		// 1. Resolve target QuestionID and AgentID
+		var targetQuestionID string = questionID
+		var targetAgentID uuid.UUID
+
+		// Try to extract from the result provided by frontend if any
+		if resultFromPayload != nil {
+			targetQuestionID = resultFromPayload.QuestionID
+			targetAgentID, _ = extractTargetAgentID(resultFromPayload.QuestionID)
+			log.Printf("[RERUN] Using resultFromPayload %s (agent=%s, qid=%s)", resultFromPayload.ID, targetAgentID, targetQuestionID)
+		}
+
+		// Try to extract from the questionID provided by frontend if no target found yet
+		if targetAgentID == uuid.Nil {
+			if extractedAgentID, realQID := extractTargetAgentID(questionID); extractedAgentID != uuid.Nil {
+				targetQuestionID = realQID
+				targetAgentID = extractedAgentID
+				log.Printf("[RERUN] Extracted from questionID prefix: target_agent=%s, qid=%s", targetAgentID, targetQuestionID)
+			}
+		}
+
+		// Fallback to config if target agent still unknown
+		if targetAgentID == uuid.Nil {
+			if cid, ok := agentConfig["target_agent_id"]; ok {
+				targetAgentIDStr := fmt.Sprintf("%v", cid)
+				targetAgentID, _ = uuid.Parse(targetAgentIDStr)
+				if targetAgentID != uuid.Nil {
+					log.Printf("[RERUN] Using config target_agent_id: %s", targetAgentID)
+				}
+			}
+		}
+
+		// 2. Query for the target result
+		if targetAgentID != uuid.Nil {
+			var targetResult models.RunResult
+			log.Printf("[RERUN] Looking for specific target result: run=%s, agent=%s, q=%s", run.ID, targetAgentID, targetQuestionID)
+
+			// Try with both original ID and prefixed ID
+			query := e.db.Where("run_id = ? AND agent_id = ? AND (question_id = ? OR question_id = ?)",
+				run.ID, targetAgentID, targetQuestionID, "eval-"+targetAgentID.String()+"-"+targetQuestionID)
+
+			if err := query.First(&targetResult).Error; err == nil {
+				taskAgentAnswer = targetResult.Answer
+				taskQuestionText = targetResult.Answer
+				log.Printf("[RERUN] Found specific result: %s (Ans len: %d)", targetResult.ID, len(taskAgentAnswer))
+			} else {
+				log.Printf("[RERUN] Could not find specific result: %v", err)
+			}
+		}
+
+		// 3. Final Heuristic: Searching for ANY non-evaluator answer for this question ID (or similar) in this run
+		if taskAgentAnswer == "" {
+			log.Printf("[RERUN] Starting HEURISTIC search for question %s in run %s", targetQuestionID, run.ID)
+			var candidates []models.RunResult
+			// Search for any results where question_id matches or ends with our targetQuestionID
+			searchPattern := "%" + targetQuestionID
+			if err := e.db.Where("run_id = ? AND (question_id = ? OR question_id LIKE ?) AND answer != ''", run.ID, targetQuestionID, searchPattern).Find(&candidates).Error; err == nil {
+				log.Printf("[RERUN] Heuristic found %d candidates", len(candidates))
+				for _, r := range candidates {
+					if r.AgentID == agent.ID {
+						continue // Skip self
+					}
+					// Verify if this agent is NOT an evaluator
+					var rAgent models.Agent
+					if err := e.db.First(&rAgent, "id = ?", r.AgentID).Error; err == nil {
+						if rAgent.ProviderType != "evaluator" {
+							taskAgentAnswer = r.Answer
+							taskQuestionText = r.Answer
+							log.Printf("[RERUN] HEURISTIC SUCCESS! Selected result %s from Agent %s", r.ID, r.AgentID)
+							break
+						}
+					}
+				}
+			} else {
+				log.Printf("[RERUN] Heuristic lookup failed: %v", err)
+			}
+		}
+
+		log.Printf("[RERUN] Final Evaluator Resolution: Answer length = %d", len(taskAgentAnswer))
+		if len(taskAgentAnswer) == 0 {
+			log.Printf("[RERUN] !!! WARNING: NO CONTENT TO EVALUATE !!!")
+		}
 	}
+
+	task := &Task{
+		RunID:            run.ID,
+		WorkspaceID:      run.WorkspaceID,
+		AgentID:          agent.ID,
+		QuestionID:       questionID,
+		QuestionText:     taskQuestionText,
+		OriginalQuestion: taskOriginalQuestion,
+		ExpectedAnswer:   expectedAnswer,
+		AgentAnswer:      taskAgentAnswer,
+		AgentConfig:      agentConfig,
+		ProviderType:     agent.ProviderType,
+		MaxConcurrency:   agent.MaxConcurrency,
+	}
+
+	log.Printf("[RERUN] Queuing task: run=%s, agent=%s, qid=%s, ans_len=%d", task.RunID, task.AgentID, task.QuestionID, len(task.AgentAnswer))
 	e.QueueTask(task)
 
 	return nil

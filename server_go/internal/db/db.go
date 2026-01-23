@@ -123,6 +123,7 @@ func AutoMigrate(db *gorm.DB) error {
 			config JSONB NOT NULL DEFAULT '{}',
 			enabled BOOLEAN DEFAULT true,
 			position INTEGER DEFAULT 0,
+			max_concurrency INTEGER DEFAULT 5,
 			created_at TIMESTAMP
 		)
 	`).Error; err != nil {
@@ -166,6 +167,7 @@ func AutoMigrate(db *gorm.DB) error {
 			question_id VARCHAR(255) NOT NULL,
 			status VARCHAR(50) NOT NULL,
 			answer TEXT,
+			error TEXT,
 			metadata JSONB DEFAULT '{}',
 			duration_ms INTEGER,
 			created_at TIMESTAMP
@@ -316,6 +318,9 @@ func AutoMigrate(db *gorm.DB) error {
 		END
 		WHERE score IS NULL;
 	`)
+
+	db.Exec(`ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_concurrency INTEGER DEFAULT 5;`)
+	db.Exec(`ALTER TABLE run_results ADD COLUMN IF NOT EXISTS error TEXT;`)
 
 	return nil
 }

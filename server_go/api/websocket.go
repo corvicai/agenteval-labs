@@ -150,6 +150,7 @@ const (
 // Message types - Events
 const (
 	EvtRunInit       = "EVT_RUN_INIT"
+	EvtTaskQueued    = "EVT_TASK_QUEUED"
 	EvtTaskStarted   = "EVT_TASK_STARTED"
 	EvtTaskCompleted = "EVT_TASK_COMPLETED"
 	EvtRunFinished   = "EVT_RUN_FINISHED"
