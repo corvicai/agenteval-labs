@@ -333,6 +333,7 @@ func main() {
 	reset := flag.Bool("reset", false, "Reset database only (keeps frontend running)")
 	hardReset := flag.Bool("hard-reset", false, "Full reset: docker compose down -v && up -d")
 	softReset := flag.Bool("soft-reset", false, "Soft reset: docker compose down && up -d --build (keeps Data)")
+	noDb := flag.Bool("no-db", false, "Skip database restart during soft reset")
 	live := flag.Bool("live", false, "Live reset: Clears DB, creates Admin, and exits (no mock data)")
 	projectDir := flag.String("project-dir", "", "Project directory containing docker-compose.yml")
 	flag.Parse()
@@ -436,24 +437,44 @@ func main() {
 
 		log.Printf("  📁 Project dir: %s", projDir)
 
-		log.Println("  ⏳ Stopping app containers...")
-		if err := runCommand("docker", "compose", "down"); err != nil {
-			log.Fatalf("  ❌ docker compose down failed: %v", err)
-		}
-		log.Println("  ✓ Application services stopped")
+		if *noDb {
+			log.Println("  ⏳ Stopping app containers EXCEPT DB...")
+			// Create list of services to restart (excluding db)
+			services := []string{"go-api", "python-runner", "frontend-dev", "frontend"}
 
-		log.Println("  ⏳ Starting Backend (db, api, runner)...")
-		if err := runCommand("docker", "compose", "up", "-d", "--build", "db", "go-api", "python-runner"); err != nil {
-			log.Fatalf("  ❌ docker compose up (backend) failed: %v", err)
-		}
-		log.Println("  ✓ Backend started")
+			// We stop them specifically instead of 'down'
+			args := append([]string{"compose", "stop"}, services...)
+			if err := runCommand("docker", args...); err != nil {
+				log.Printf("  ⚠ Warning: failed to stop services: %v", err)
+			}
 
-		log.Println("  ⏳ Starting Frontend...")
-		if err := runCommand("docker", "compose", "up", "-d", "--build", "frontend-dev"); err != nil {
-			log.Fatalf("  ❌ docker compose up (frontend) failed: %v", err)
-		}
-		log.Println("  ✓ Frontend started")
+			log.Println("  ⏳ Starting Services (excluding db)...")
+			// We explicitly bring up the non-db services
+			// Note: We use the same services list as stop + ensure we target what we need
+			upArgs := []string{"compose", "up", "-d", "--build", "go-api", "python-runner", "frontend-dev"}
+			if err := runCommand("docker", upArgs...); err != nil {
+				log.Fatalf("  ❌ docker compose up (services) failed: %v", err)
+			}
+		} else {
+			log.Println("  ⏳ Stopping app containers...")
+			if err := runCommand("docker", "compose", "down"); err != nil {
+				log.Fatalf("  ❌ docker compose down failed: %v", err)
+			}
+			log.Println("  ✓ Application services stopped")
 
+			log.Println("  ⏳ Starting Backend (db, api, runner)...")
+			if err := runCommand("docker", "compose", "up", "-d", "--build", "db", "go-api", "python-runner"); err != nil {
+				log.Fatalf("  ❌ docker compose up (backend) failed: %v", err)
+			}
+			log.Println("  ✓ Backend started")
+
+			log.Println("  ⏳ Starting Frontend...")
+			if err := runCommand("docker", "compose", "up", "-d", "--build", "frontend-dev"); err != nil {
+				log.Fatalf("  ❌ docker compose up (frontend) failed: %v", err)
+			}
+		}
+
+		log.Println("  ✓ Services started")
 		log.Println("  ✅ Soft reset complete. Exiting without seeding.")
 		return
 	}

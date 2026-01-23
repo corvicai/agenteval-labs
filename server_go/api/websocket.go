@@ -74,6 +74,8 @@ const (
 	ReqGetLatestRunByQS        = "REQ_GET_LATEST_RUN_BY_QS"
 	ReqGetResultDetails        = "REQ_GET_RESULT_DETAILS"
 	ReqCheckDBPerf             = "REQ_CHECK_DB_PERF"
+	ReqDeleteRun               = "REQ_DELETE_RUN"
+	ReqDeleteAllRuns           = "REQ_DELETE_ALL_RUNS"
 
 	// Admin Request types
 	ReqAdminGetUsers         = "REQ_ADMIN_GET_USERS"

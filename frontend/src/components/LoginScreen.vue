@@ -262,7 +262,7 @@ import * as api from '../services/api.js'
 const emit = defineEmits(['login'])
 
 // Dev mode detection
-const isDev = import.meta.env.DEV
+const isDev = import.meta.env.DEV && !import.meta.env.PROD
 
 // Dev users for quick login
 const devUsers = [

@@ -62,6 +62,10 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 		h.handleJoinOrganization(c, env)
 	case ReqCloneWorkspace:
 		h.handleCloneWorkspace(c, env)
+	case ReqDeleteRun:
+		h.handleDeleteRun(c, env)
+	case ReqDeleteAllRuns:
+		h.handleDeleteAllRuns(c, env)
 	case ReqGetWorkspaceClients:
 		h.handleGetWorkspaceClients(c, env)
 	case ReqUpdateAgent:

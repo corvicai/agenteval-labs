@@ -288,6 +288,11 @@ func (h *Hub) handleAdminRecalculateStats(c *Connection, env models.Envelope) {
 }
 
 func (h *Hub) handleCheckDBPerf(c *Connection, env models.Envelope) {
+	if os.Getenv("APP_ENV") == "production" {
+		c.SendError(env.CorrelationID, "not available in production")
+		return
+	}
+
 	start := time.Now()
 	var result int
 	if err := h.db.Raw("SELECT 1").Scan(&result).Error; err != nil {

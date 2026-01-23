@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -24,7 +25,17 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins for development
+		if os.Getenv("APP_ENV") != "production" {
+			return true // Allow all origins for development
+		}
+		origin := r.Header.Get("Origin")
+		allowed := os.Getenv("ALLOWED_ORIGINS")
+		if allowed == "" {
+			return false // Secure by default in production
+		}
+		// Simple check: allowed string contains the origin
+		// In a real scenario, you might want strict splitting or regex
+		return strings.Contains(allowed, origin)
 	},
 }
 
@@ -74,14 +85,6 @@ func main() {
 	engine.Start()
 
 	// Initialize handlers with WebSocket Hub support
-	/*
-		agentHandler := handlers.NewAgentHandler(database, hub)
-		qsHandler := handlers.NewQuestionSetHandler(database, hub)
-		runHandler := handlers.NewRunHandler(database, engine, hub)
-		evalHandler := handlers.NewEvaluationHandler(database)
-		statsHandler := handlers.NewStatsHandler(database)
-		orgHandler := handlers.NewOrganizationHandler(database)
-	*/
 
 	// Auth handler
 	jwtSecret := os.Getenv("JWT_SECRET")
@@ -92,7 +95,6 @@ func main() {
 	jwtSecret = jwtSecret + "-" + uuid.New().String()
 	log.Printf("[AUTH] System session secret initialized (all previous sessions invalidated)")
 	authHandler := handlers.NewAuthHandler(database, jwtSecret)
-	// managerHandler := handlers.NewManagerHandler(database, jwtSecret)
 
 	// ========== REST API Routes ==========
 
@@ -125,113 +127,6 @@ func main() {
 	authProtected.POST("/auth/logout", authHandler.Logout)
 	authProtected.POST("/auth/join-organization", authHandler.JoinOrganization)
 	authProtected.POST("/auth/select-organization", authHandler.SelectOrganization)
-	/*
-		authProtected.GET("/auth/workspaces", authHandler.ListWorkspaces)
-		authProtected.POST("/auth/workspaces", authHandler.CreateWorkspace)
-		authProtected.POST("/auth/workspaces/:workspace_id/switch", authHandler.SwitchWorkspace)
-		authProtected.GET("/auth/organizations", authHandler.ListOrganizations)
-		authProtected.POST("/auth/organizations/:org_id/audit-logs", authHandler.ToggleAuditLogs)
-		authProtected.GET("/auth/check-manager", authHandler.CheckManagerStatus)
-
-		// Admin (Protected)
-		authProtected.GET("/admin/users", authHandler.ListUsers)
-		authProtected.POST("/admin/users", authHandler.CreateUserAdmin)
-		authProtected.PUT("/admin/users/:user_id", authHandler.UpdateUser)
-		authProtected.DELETE("/admin/users/:user_id", authHandler.DeleteUser)
-	*/
-
-	/*
-		// Organization Admin
-		authProtected.GET("/admin/organizations", orgHandler.ListOrganizationsAdmin)
-		authProtected.POST("/admin/organizations", orgHandler.CreateOrganization)
-		authProtected.PUT("/admin/organizations/:id", orgHandler.UpdateOrganization)
-		authProtected.DELETE("/admin/organizations/:id", orgHandler.DeleteOrganization)
-		authProtected.GET("/admin/organizations/:id/profile", orgHandler.GetOrgProfile)
-
-		// User Profile (admin only)
-		authProtected.GET("/admin/users/:id/profile", authHandler.GetUserProfile)
-
-		// Manager Routes (org managers only)
-		authProtected.GET("/manager/users", managerHandler.GetOrgUsers)
-		authProtected.POST("/manager/users", managerHandler.CreateOrgUser)
-		authProtected.PUT("/manager/users/:user_id", managerHandler.UpdateOrgUser)
-		authProtected.POST("/manager/users/:user_id/toggle-suspension", managerHandler.ToggleUserSuspension)
-		authProtected.POST("/manager/impersonate/:user_id", managerHandler.ImpersonateUser)
-		authProtected.GET("/manager/workspaces", managerHandler.GetOrgWorkspaces)
-		authProtected.GET("/manager/agents", managerHandler.GetOrgAgents)
-		authProtected.GET("/manager/runs", managerHandler.GetOrgRuns)
-		authProtected.GET("/manager/stats", managerHandler.GetOrgStats)
-	*/
-
-	/*
-		// Workspace Scoped Resources
-		protected := e.Group("")
-		protected.Use(middleware.JWTMiddleware(config))
-		protected.Use(middleware.WorkspaceScopeMiddleware())
-
-		// Agents (Protected)
-		protected.GET("/workspaces/:workspace_id/agents", agentHandler.List)
-		protected.POST("/workspaces/:workspace_id/agents", agentHandler.Create)
-		protected.POST("/workspaces/:workspace_id/agents/reorder", agentHandler.Reorder)
-		protected.GET("/agents/:id", agentHandler.Get)
-		protected.PUT("/agents/:id", agentHandler.Update)
-		protected.DELETE("/agents/:id", agentHandler.Delete)
-		protected.GET("/agents/:id/spy", agentHandler.SpyPayload)
-
-		// Question Sets (Protected)
-		protected.GET("/workspaces/:workspace_id/clients", qsHandler.ListClients)
-		protected.GET("/clients/:client_id/question-sets", qsHandler.List)
-		protected.GET("/question-sets/:id", qsHandler.Get)
-		protected.DELETE("/question-sets/:id", qsHandler.Delete)
-		protected.POST("/clients/:client_id/question-sets/import", qsHandler.Import)
-		protected.GET("/question-sets/:id/export", qsHandler.Export)
-		protected.PUT("/question-sets/:id", qsHandler.Update)
-		protected.GET("/question-sets/:id/agents", qsHandler.GetAgents)
-		protected.PUT("/question-sets/:id/agents", qsHandler.UpdateAgents)
-
-		// Runs (Protected)
-		protected.POST("/workspaces/:workspace_id/runs", runHandler.StartRun)
-		protected.GET("/workspaces/:workspace_id/runs", runHandler.GetWorkspaceRuns)
-		protected.GET("/runs/:run_id", runHandler.GetRunStatus)   // Lightweight status
-		protected.GET("/runs/:run_id/details", runHandler.GetRun) // Full details for document view
-		protected.POST("/runs/:run_id/rerun", runHandler.RerunTask)
-		protected.GET("/workspaces/:workspace_id/history", runHandler.GetHistory)
-
-		// Evaluations (Protected)
-		protected.POST("/evaluations", evalHandler.Create)
-		protected.GET("/run-results/:run_result_id/evaluations", evalHandler.List)
-		protected.DELETE("/evaluations/:id", evalHandler.Delete)
-
-		// Run evaluators endpoint (Protected)
-		protected.POST("/runs/:run_id/evaluate", func(c echo.Context) error {
-			runID := c.Param("run_id")
-			rID, err := uuid.Parse(runID)
-			if err != nil {
-				return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid run_id"})
-			}
-			if err := engine.RunEvaluators(rID); err != nil {
-				return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			}
-			return c.JSON(http.StatusAccepted, map[string]string{"status": "evaluators queued"})
-		})
-
-		// Cancel run endpoint (Protected)
-		protected.POST("/runs/:run_id/cancel", func(c echo.Context) error {
-			runID := c.Param("run_id")
-			rID, err := uuid.Parse(runID)
-			if err != nil {
-				return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid run_id"})
-			}
-			engine.CancelRun(rID)
-			return c.JSON(http.StatusOK, map[string]string{"status": "cancelled"})
-		})
-
-		// Stats routes
-		e.GET("/stats/workspace/:workspace_id", statsHandler.GetWorkspaceStats, middleware.JWTMiddleware(config), middleware.WorkspaceScopeMiddleware())
-		e.GET("/stats/organization", statsHandler.GetOrganizationStats, middleware.JWTMiddleware(config))
-		e.GET("/stats/global", statsHandler.GetGlobalStats, middleware.JWTMiddleware(config))
-		e.POST("/admin/stats/recalculate", statsHandler.RecalculateStats, middleware.JWTMiddleware(config))
-	*/
 
 	// ========== WebSocket ==========
 	e.GET("/ws", func(c echo.Context) error {

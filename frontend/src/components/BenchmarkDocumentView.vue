@@ -53,6 +53,9 @@
             <button class="btn-action" @click="exportToPdf">
               📄 Export PDF
             </button>
+            <button class="btn-action btn-danger-text" @click="deleteRun" title="Delete this run">
+              🗑️ Delete Run
+            </button>
           </div>
         </div>
 
@@ -412,6 +415,19 @@ export default {
                 }
             }
         })
+    },
+
+    async deleteRun() {
+      if (!this.selectedRunId) return
+      if (!confirm(`Are you sure you want to delete this benchmark history? This cannot be undone.`)) return
+
+      try {
+        await wsService.deleteRun(this.selectedRunId)
+        this.$emit('back')
+      } catch (e) {
+        console.error('Failed to delete run:', e)
+        alert('Failed to delete run: ' + e.message)
+      }
     },
 
     triggerBrowserPrint() {
