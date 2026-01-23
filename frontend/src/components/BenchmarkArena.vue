@@ -47,6 +47,7 @@
           @click="selectQuestionSet(qs)"
         >
           <span class="qs-name">{{ qs.name }}</span>
+          <span v-if="wsState.runningQuestionSetId === qs.id" class="running-indicator-dot"></span>
           <span class="qs-meta">{{ getQuestionCount(qs) }} qs</span>
           <div class="qs-actions">
             <button class="btn-icon-small" @click.stop="$emit('view-history', qs)" title="View History">📜</button>
@@ -82,7 +83,7 @@
     </div>
 
     <!-- Progress Bar -->
-    <div v-if="isRunning" class="progress-bar">
+    <div v-if="isRunning && activeRunQuestionSetId === currentQuestionSet?.id" class="progress-bar">
       <div class="progress-fill-started" :style="{ width: progressPercentStarted + '%' }"></div>
       <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
       <span class="progress-text">{{ progressStatusText }}</span>
@@ -118,11 +119,20 @@
               :extract-answer-meta="extractAnswerMeta"
               @rerun="rerunQuestion"
               @rate="rateResult"
+              :dev-mode="isDev"
+              @show-details="(idx) => handleShowDetails(agent.id, idx)"
             />
           </div>
         </div>
       </div>
     </div>
+
+    <!-- Details Modal -->
+    <DetailsModal 
+      :is-open="showDetailsModal" 
+      :details="selectedDetails"
+      @close="showDetailsModal = false"
+    />
 
     <!-- Question Navigation -->
     <div v-if="flatQuestions.length > 1" class="question-navigation-floating">
@@ -139,6 +149,13 @@
         <span class="nav-label">Next</span>
       </button>
     </div>
+
+    <!-- Zen Mode Exit Button -->
+    <div v-if="isZenMode" class="zen-mode-exit-overlay">
+      <button class="btn btn-secondary btn-exit-zen" @click="emit('toggle-zen', false)">
+        ✕ Exit Zen Mode (Esc)
+      </button>
+    </div>
   </div>
 </template>
 
@@ -148,6 +165,7 @@ import SummarySection from './SummarySection.vue'
 import RunSetupModal from './RunSetupModal.vue'
 import ChatPanel from './ChatPanel.vue'
 import QuestionEditorModal from './QuestionEditorModal.vue'
+import DetailsModal from './modals/DetailsModal.vue'
 import PrintReport from './PrintReport.vue'
 import wsService from '../services/websocket.js'
 import { exportResultsReport } from '../utils/exporters.js'
@@ -165,10 +183,11 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
-  initialQuestionSetId: String
+  initialQuestionSetId: String,
+  isZenMode: Boolean
 })
 
-const emit = defineEmits(['update:currentQuestionSet', 'configure-agents', 'view-history', 'trigger-print'])
+const emit = defineEmits(['update:currentQuestionSet', 'configure-agents', 'view-history', 'trigger-print', 'toggle-zen'])
 
 watch(() => props.questionSets, (sets) => {
   console.log('[Arena] Question sets updated:', sets.length)
@@ -178,7 +197,8 @@ watch(() => props.agents, (agents) => {
   console.log('[Arena] Agents updated:', agents.length)
 }, { immediate: true })
 
-const { state: wsState } = useWSStore()
+const wsStore = useWSStore()
+const { state: wsState } = wsStore
 
 // State
 const currentQuestionSet = ref(null)
@@ -186,6 +206,7 @@ const previousQuestionSet = ref(null)
 const currentRun = ref(null)
 const runResults = ref({})
 const isRunning = ref(false)
+const activeRunQuestionSetId = ref(null)
 const isLoadingResults = ref(false)
 const startedTasks = ref(0)
 const completedTasks = ref(0)
@@ -194,6 +215,9 @@ const selectedQuestionId = ref('')
 const showSummary = ref(false)
 const showRunSetup = ref(false)
 const showQuestionEditor = ref(false)
+const showDetailsModal = ref(false)
+const selectedDetails = ref(null)
+const isDev = import.meta.env.DEV
 const latestRunCache = new Map()
 const pendingResultsBuffer = ref([])
 
@@ -389,10 +413,12 @@ const displayAgents = computed(() => {
       list = [...list, ...missing]
     }
   } else {
-    // 2. Not running - check if we have results to show (History mode)
+// 2. Not running - check if we have results to show (History mode)
     const resultAgentIds = Object.keys(runResults.value || {})
     if (resultAgentIds.length > 0) {
-      const agentsWithResults = mergedAgents.value.filter(a => resultAgentIds.includes(a.id))
+      // Filter enabledAgents to only those in results OR explicitly enabled for NEXT run
+      // The user wants deselected agents to disappear from this screen.
+      const agentsWithResults = mergedAgents.value.filter(a => resultAgentIds.includes(a.id) && a.enabled)
       const oldAgentIds = resultAgentIds.filter(id => !mergedAgents.value.some(a => a.id === id))
       const oldAgents = oldAgentIds.map(id => {
         const found = mergedAgents.value.find(a => a.id === id)
@@ -460,12 +486,18 @@ function onQuestionSetSaved(updated) {
 
 function prevQuestion() {
   const idx = currentQuestionIndex.value
-  if (idx > 0) selectedQuestionId.value = flatQuestions.value[idx - 1].id
+  if (idx > 0) {
+    selectedQuestionId.value = flatQuestions.value[idx - 1].id
+    if (!props.isZenMode) emit('toggle-zen', true)
+  }
 }
 
 function nextQuestion() {
   const idx = currentQuestionIndex.value
-  if (idx < flatQuestions.value.length - 1) selectedQuestionId.value = flatQuestions.value[idx + 1].id
+  if (idx < flatQuestions.value.length - 1) {
+    selectedQuestionId.value = flatQuestions.value[idx + 1].id
+    if (!props.isZenMode) emit('toggle-zen', true)
+  }
 }
 
 function getQuestionKey(text) { return text }
@@ -482,6 +514,24 @@ function extractAnswerMeta(result) {
     error: result?.error,
     loading: result?.loading
   }
+}
+
+function handleShowDetails(agentId, index) {
+  const results = getAgentResults(agentId)
+  const item = results[index]
+  if (!item) return
+
+  selectedDetails.value = {
+    run_id: currentRun.value?.id,
+    agent_id: agentId,
+    question_id: item.question?.id,
+    result_id: item.id,
+    question_set_id: currentQuestionSet.value?.id,
+    question: item.question,
+    result: item,
+    metadata: item.metadata
+  }
+  showDetailsModal.value = true
 }
 
 // Data Fetching & WebSockets
@@ -596,7 +646,9 @@ function getAgentResults(agentId) {
     ? flatQuestions.value.filter(q => String(q.id) === String(selectedQuestionId.value))
     : flatQuestions.value
 
-  const isAgentRunning = isRunning.value && currentRun.value?.agentIds?.includes(agentId)
+  const isAgentRunning = isRunning.value && 
+                       activeRunQuestionSetId.value === currentQuestionSet.value?.id && 
+                       currentRun.value?.agentIds?.includes(agentId)
 
   return targetQuestions.map(q => {
     const qIdStr = String(q.id)
@@ -606,6 +658,7 @@ function getAgentResults(agentId) {
       question: q,
       answer: res ? res.answer : null,
       loading: res ? res.loading : isAgentRunning,
+      queued: res ? res.queued : false,
       duration: res ? res.duration : null,
       timestamp: res ? res.timestamp : null,
       id: res ? res.id : null,
@@ -645,6 +698,8 @@ async function handleStartRun({ questionSetId, agentIds }) {
   
   const selectedAgentsCount = agentIds.length
   isRunning.value = true
+  activeRunQuestionSetId.value = questionSetId
+  wsStore.setRunningQuestionSetId(questionSetId)
   startedTasks.value = 0
   completedTasks.value = 0
   totalTasks.value = selectedAgentsCount * flatQuestions.value.length
@@ -691,6 +746,14 @@ function processTaskCompleted(data) {
             evaluations: data.evaluations || []
         }
     }
+
+    // Check if run completed for this question set
+    if (isRunning.value && completedTasks.value === totalTasks.value) {
+       isRunning.value = false
+       if (activeRunQuestionSetId.value === currentQuestionSet.value?.id) {
+         wsStore.setRunningQuestionSetId(null)
+       }
+    }
 }
 
 async function handleRunSave(payload) {
@@ -733,8 +796,56 @@ async function rerunQuestion(agentId, questionId) {
      runResults.value[agentId][qIdStr].error = null
   }
 
+  // Find the question object to get full context
+  const question = flatQuestions.value.find(q => String(q.id) === qIdStr)
+  const resultItem = runResults.value[agentId]?.[qIdStr]
+
+  // Determine if this is an evaluator and if we need to target another result
+  let resultIdToUse = resultItem?.id
+  const agent = mergedAgents.value.find(a => a.id === agentId)
+      
+  if (agent && (agent.provider_type === 'evaluator' || agent.config?.target_agent_id)) {
+      // It's an evaluator. Use heuristic to find the target answer.
+      const targetAgentId = agent.config?.target_agent_id
+      
+      // Look for candidates in runResults
+      // runResults structure is { agentId: { qId: { ... } } }
+      const candidates = []
+      
+      for (const aid in runResults.value) {
+          if (aid === agentId) continue
+          const res = runResults.value[aid][qIdStr]
+          if (res && res.answer) {
+              candidates.push({ ...res, agent_id: aid })
+          }
+      }
+      
+      let targetMatch = null
+      if (targetAgentId) {
+          targetMatch = candidates.find(c => c.agent_id === targetAgentId)
+      } else if (candidates.length === 1) {
+          targetMatch = candidates[0]
+      } else if (candidates.length > 0) {
+          // Ambiguous
+          targetMatch = candidates[0] 
+      }
+
+      if (targetMatch) {
+          console.log(`[Frontend] Resolved target result for evaluator retry: ${targetMatch.id} (Agent ${targetMatch.agent_id})`)
+          resultIdToUse = targetMatch.id
+      } else {
+          console.warn('[Frontend] Could not resolve target result for evaluator retry. Letting backend heuristic handle it.')
+          resultIdToUse = '' // Reset to empty so backend heuristic kicks in
+      }
+  }
+
   try {
-    await wsService.rerunTask(currentRun.value.id, agentId, questionId)
+    await wsService.rerunTask(currentRun.value.id, agentId, questionId, {
+      questionSetId: currentQuestionSet.value?.id,
+      resultId: resultIdToUse,
+      originalQuestion: question?.question || '',
+      expectedAnswer: question?.expected || question?.expected_answer || ''
+    })
   } catch (e) {
     console.error('Failed to rerun:', e)
      // Revert on error
@@ -829,6 +940,17 @@ onMounted(async () => {
         } catch (e) { console.error('Failed to restore active run:', e) }
     }
 
+    wsService.on('EVT_TASK_QUEUED', (data) => {
+        const agentId = data.agent_id
+        const qIdStr = String(data.question_id)
+        
+        if (runResults.value[agentId] && runResults.value[agentId][qIdStr]) {
+            runResults.value[agentId][qIdStr].queued = true
+            runResults.value[agentId][qIdStr].loading = true
+            runResults.value[agentId][qIdStr].error = null
+        }
+    })
+
     wsService.on('EVT_TASK_STARTED', (data) => {
         if (isRunning.value) {
             startedTasks.value++
@@ -840,6 +962,7 @@ onMounted(async () => {
         const qIdStr = String(data.question_id)
         
         if (runResults.value[agentId] && runResults.value[agentId][qIdStr]) {
+            runResults.value[agentId][qIdStr].queued = false
             runResults.value[agentId][qIdStr].loading = true
             runResults.value[agentId][qIdStr].error = null
         }
@@ -996,6 +1119,55 @@ defineExpose({
 }
 
 /* Scoped styles that were specifically for the runner/arena */
+/* Zen Mode Exit Overlay */
+.zen-mode-exit-overlay {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 2000;
+  pointer-events: auto;
+}
+
+.btn-exit-zen {
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(8px);
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  color: #475569;
+  font-weight: 600;
+  padding: 0.6rem 1.2rem;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: all 0.2s;
+}
+
+.btn-exit-zen:hover {
+  background: white;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
+  color: #1e293b;
+}
+
+/* Running Indicator Dot */
+.running-indicator-dot {
+  width: 8px;
+  height: 8px;
+  background-color: #ef4444;
+  border-radius: 50%;
+  display: inline-block;
+  margin: 0 4px;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+  animation: pulse-dot 1.5s infinite;
+}
+
+@keyframes pulse-dot {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 5px rgba(239, 68, 68, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+
 .chat-container {
   flex: 1;
   overflow: hidden;

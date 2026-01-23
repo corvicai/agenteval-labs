@@ -19,10 +19,11 @@
         </div>
 
         <div class="setup-section">
-          <label class="section-label">Select Agents</label>
+          <label class="section-label">Select Benchmark Agents</label>
+          <p class="section-hint">These agents will answer the questions first.</p>
           <div class="agents-checklist">
             <div 
-              v-for="(agent, index) in localAgents" 
+              v-for="(agent, index) in localAgents.filter(a => a.provider_type !== 'evaluator')" 
               :key="agent.id" 
               class="agent-check-item"
               :class="{ selected: selectedAgentIds.includes(agent.id) }"
@@ -42,9 +43,41 @@
               </div>
             </div>
           </div>
-          <p v-if="selectedAgentIds.length === 0" class="error-text">
+          <p v-if="selectedAgentIds.filter(id => localAgents.find(a => a.id === id)?.provider_type !== 'evaluator').length === 0" class="error-text">
             ⚠️ Please select at least one agent to run.
           </p>
+        </div>
+
+        <div class="setup-section" v-if="localAgents.some(a => a.provider_type === 'evaluator')">
+          <label class="section-label">Configure Evaluators</label>
+          <p class="section-hint">Evaluators run automatically after agents finish.</p>
+          <div class="agents-checklist">
+            <div 
+              v-for="(agent, index) in localAgents.filter(a => a.provider_type === 'evaluator')" 
+              :key="agent.id" 
+              class="agent-check-item"
+              :class="{ selected: selectedAgentIds.includes(agent.id) }"
+              @click="toggleAgent(agent.id)"
+            >
+              <div class="checkbox">
+                {{ selectedAgentIds.includes(agent.id) ? '☑️' : '⬜' }}
+              </div>
+              <div class="agent-info">
+                <span class="agent-name">{{ agent.name }} ({{ agent.provider_type }})</span>
+                
+                <!-- Target Agent Selection for Evaluators -->
+                <div class="target-agent-select" @click.stop>
+                  <label>Target:</label>
+                  <select v-model="agent.config.target_agent_id">
+                    <option value="">All Agents</option>
+                    <option v-for="a in localAgents.filter(x => x.id !== agent.id && x.provider_type !== 'evaluator')" :key="a.id" :value="a.id">
+                      {{ a.name }}
+                    </option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -80,6 +113,7 @@ const emit = defineEmits(['start', 'cancel', 'save'])
 
 const localAgents = ref([])
 const isSaving = ref(false)
+const isDirty = ref(false)
 
 // Initialize local agents list (sorted by position)
 const sortedAgents = [...props.agents].sort((a, b) => (a.position || 0) - (b.position || 0))
@@ -110,7 +144,7 @@ function initializeSelection() {
 
 // Watchers to keep local state in sync if props change while modal is open
 watch(() => props.agents, (newAgents) => {
-  if (newAgents) {
+  if (newAgents && !isDirty.value) {
     const sorted = [...newAgents].sort((a, b) => (a.position || 0) - (b.position || 0))
     localAgents.value = sorted
     initializeSelection()
@@ -146,6 +180,7 @@ function onDrop(event, index) {
   
   if (fromIndex === null || fromIndex === index) return
 
+  isDirty.value = true
   // Clone array to modify
   const newAgents = [...localAgents.value]
   const [movedItem] = newAgents.splice(fromIndex, 1)
@@ -173,6 +208,7 @@ const totalQuestions = computed(() => {
 })
 
 function toggleAgent(id) {
+  isDirty.value = true
   if (selectedAgentIds.value.includes(id)) {
     selectedAgentIds.value = selectedAgentIds.value.filter(aid => aid !== id)
   } else {
@@ -199,6 +235,7 @@ async function saveToDatabase() {
     console.log('[RunSetupModal] Sending payload to DB:', payload.map(a => ({ id: a.agent_id.slice(0,8), enabled: a.enabled })))
     const saved = await wsService.updateQuestionSetAgents(props.questionSet.id, payload)
     console.log('[RunSetupModal] Saved agent selection to database')
+    isDirty.value = false
     if (saved && !saved.agents) {
       saved.agents = payload
     }
@@ -227,7 +264,10 @@ async function confirmRun() {
 
   emit('start', {
     questionSetId: props.questionSet.id,
-    agentIds: selectedAgentIds.value
+    agentIds: selectedAgentIds.value.filter(id => {
+       const agent = localAgents.value.find(a => a.id === id)
+       return agent && agent.provider_type !== 'evaluator'
+    })
   })
 }
 
@@ -266,6 +306,13 @@ async function saveSelection() {
   font-size: 0.9rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+.section-hint {
+  font-size: 0.75rem;
+  color: #64748b;
+  margin-top: -0.25rem;
+  margin-bottom: 0.75rem;
 }
 
 .info-box {
@@ -341,9 +388,38 @@ async function saveSelection() {
 }
 
 .agent-type {
-  font-size: 0.7rem;
   color: #64748b;
   text-transform: uppercase;
+}
+
+.target-agent-select {
+  margin-top: 0.4rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: white;
+  padding: 0.3rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+}
+
+.target-agent-select label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.target-agent-select select {
+  font-size: 0.75rem;
+  border: none;
+  background: transparent;
+  color: #1e293b;
+  padding: 0;
+  cursor: pointer;
+}
+
+.target-agent-select select:focus {
+  outline: none;
 }
 
 .error-text {
