@@ -150,6 +150,12 @@ type AdminUpdateUserPayload struct {
 	OrganizationID string `json:"organization_id,omitempty"`
 }
 
+type ChangePasswordPayload struct {
+	ID          string `json:"id,omitempty"` // For admins resetting other user's passwords
+	OldPassword string `json:"old_password,omitempty"`
+	NewPassword string `json:"new_password"`
+}
+
 type AdminUpdateOrgPayload struct {
 	ID          string `json:"id"`
 	Name        string `json:"name,omitempty"`

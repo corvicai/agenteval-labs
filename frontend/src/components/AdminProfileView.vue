@@ -114,19 +114,51 @@
           </div>
           <p v-else class="empty-state">No workspaces found</p>
         </section>
-
-        <section class="profile-card meta-card">
-          <h3>📅 Timestamps</h3>
-          <div class="info-grid">
-            <div class="info-item">
-              <label>Created At</label>
-              <span>{{ formatDate(userData.created_at) }}</span>
-            </div>
-            <div class="info-item">
-              <label>Updated At</label>
-              <span>{{ formatDate(userData.updated_at) }}</span>
-            </div>
+        
+        <!-- Password Change Section -->
+        <section v-if="canChangePassword" class="profile-card password-card">
+          <h3>🔐 Password Management</h3>
+          <div v-if="!isChangingPassword" class="password-init">
+            <p class="text-muted">Need to update your login credentials?</p>
+            <button class="btn btn-secondary" @click="startChangingPassword">Change Password</button>
           </div>
+          <form v-else @submit.prevent="submitPasswordChange" class="password-form">
+            <div class="info-grid">
+              <div v-if="!isAdmin" class="info-item">
+                <label>Current Password</label>
+                <input v-model="passForm.old" type="password" class="profile-input" required />
+              </div>
+              <div class="info-item">
+                <label>New Password</label>
+                <input v-model="passForm.new" type="password" class="profile-input" required />
+                <div class="strength-meter">
+                  <div class="strength-bar" :style="{ width: passwordStrength.percent + '%', background: passwordStrength.color }"></div>
+                </div>
+                <small :style="{ color: passwordStrength.color }">{{ passwordStrength.text }}</small>
+              </div>
+              <div class="info-item">
+                <label>Confirm New Password</label>
+                <input v-model="passForm.confirm" type="password" class="profile-input" required />
+                <small v-if="passForm.confirm && passForm.new !== passForm.confirm" class="text-danger">Passwords do not match</small>
+              </div>
+            </div>
+            
+            <div class="password-rules">
+              <p>Rules:</p>
+              <ul>
+                <li :class="{ met: passForm.new.length >= 8 }">At least 8 characters</li>
+                <li :class="{ met: /[A-Z]/.test(passForm.new) }">At least one uppercase letter</li>
+                <li :class="{ met: /[0-9!@#$%^&*]/.test(passForm.new) }">At least one number or special character</li>
+              </ul>
+            </div>
+
+            <div class="form-actions mt-4">
+              <button type="submit" class="btn btn-primary" :disabled="!isPasswordValid || saving">
+                {{ saving ? 'Updating...' : 'Update Password' }}
+              </button>
+              <button type="button" class="btn btn-secondary" @click="isChangingPassword = false">Cancel</button>
+            </div>
+          </form>
         </section>
       </div>
 
@@ -285,6 +317,12 @@ export default {
       editForm: {
         name: '',
         email: ''
+      },
+      isChangingPassword: false,
+      passForm: {
+        old: '',
+        new: '',
+        confirm: ''
       }
     }
   },
@@ -297,6 +335,31 @@ export default {
       if (this.entityType !== 'user') return this.isAdmin;
       const user = JSON.parse(localStorage.getItem('user') || '{}');
       return user.is_admin || user.id === this.entityId;
+    },
+    canChangePassword() {
+      if (this.entityType !== 'user') return false;
+      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      // Self or SuperAdmin can change
+      return user.id === this.entityId || user.is_admin;
+    },
+    passwordStrength() {
+      const p = this.passForm.new;
+      if (!p) return { percent: 0, text: '', color: '#e2e8f0' };
+      let score = 0;
+      if (p.length >= 8) score += 34;
+      if (/[A-Z]/.test(p)) score += 33;
+      if (/[0-9!@#$%^&*]/.test(p)) score += 33;
+      
+      if (score < 60) return { percent: score, text: 'Weak', color: '#ef4444' };
+      if (score < 100) return { percent: score, text: 'Medium', color: '#f59e0b' };
+      return { percent: 100, text: 'Strong', color: '#22c55e' };
+    },
+    isPasswordValid() {
+      const p = this.passForm.new;
+      return p.length >= 8 && 
+             /[A-Z]/.test(p) && 
+             /[0-9!@#$%^&*]/.test(p) && 
+             p === this.passForm.confirm;
     },
     totalAgents() {
       if (!this.userData?.workspaces) return 0
@@ -370,6 +433,28 @@ export default {
         alert('Failed to update profile: ' + e.message)
       } finally {
         this.saving = false
+      }
+    },
+    startChangingPassword() {
+      this.passForm = { old: '', new: '', confirm: '' };
+      this.isChangingPassword = true;
+    },
+    async submitPasswordChange() {
+      if (!this.isPasswordValid) return;
+      this.saving = true;
+      try {
+        await wsService.changePassword(
+          this.passForm.new,
+          this.passForm.old,
+          this.isAdmin && this.entityId !== JSON.parse(localStorage.getItem('user') || '{}').id ? this.entityId : ''
+        );
+        alert('Password updated successfully');
+        this.isChangingPassword = false;
+        this.passForm = { old: '', new: '', confirm: '' };
+      } catch (e) {
+        alert('Failed to update password: ' + e.message);
+      } finally {
+        this.saving = false;
       }
     }
   }
@@ -670,5 +755,76 @@ td {
   background: #fef2f2;
   border-radius: 12px;
   border: 1px solid #fecaca;
+}
+
+.password-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.strength-meter {
+  height: 4px;
+  background: #f1f5f9;
+  border-radius: 2px;
+  margin-top: 0.5rem;
+  overflow: hidden;
+}
+
+.strength-bar {
+  height: 100%;
+  transition: all 0.3s ease;
+}
+
+.password-rules {
+  background: #f8fafc;
+  padding: 1rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.password-rules p {
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.password-rules ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.password-rules li {
+  color: #94a3b8;
+}
+
+.password-rules li.met {
+  color: #22c55e;
+}
+
+.password-rules li.met::before {
+  content: '✓ ';
+}
+
+.password-rules li:not(.met)::before {
+  content: '○ ';
+}
+
+.text-danger {
+  color: #ef4444;
+  font-size: 0.75rem;
+}
+
+.mt-4 {
+  margin-top: 1rem;
+}
+
+.form-actions {
+  display: flex;
+  gap: 0.75rem;
 }
 </style>

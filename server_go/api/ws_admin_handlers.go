@@ -734,10 +734,15 @@ func (h *Hub) handleAdminGenerateInvite(c *Connection, env models.Envelope) {
 	var payload struct {
 		TargetOrgID string `json:"target_org_id"`
 		IsNewOrg    bool   `json:"is_new_org"`
+		MaxUses     int    `json:"max_uses"`
 	}
 	if err := json.Unmarshal([]byte(env.Payload), &payload); err != nil {
 		c.SendError(env.CorrelationID, "invalid payload")
 		return
+	}
+
+	if payload.MaxUses <= 0 {
+		payload.MaxUses = 1
 	}
 
 	code := generateRandomCode(8) // Helper to generate alphanumeric code
@@ -746,6 +751,8 @@ func (h *Hub) handleAdminGenerateInvite(c *Connection, env models.Envelope) {
 		CreatedBy: c.UserID,
 		IsNewOrg:  payload.IsNewOrg,
 		ExpiresAt: time.Now().Add(24 * time.Hour * 7), // 7 days validity
+		MaxUses:   payload.MaxUses,
+		UseCount:  0,
 		CreatedAt: time.Now(),
 	}
 
