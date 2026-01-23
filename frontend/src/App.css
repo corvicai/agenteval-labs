@@ -845,3 +845,19 @@
 .org-list-wrapper {
   margin-bottom: 1rem;
 }
+
+/* Zen Mode */
+.zen-mode-active .header,
+.zen-mode-active .app-nav,
+.zen-mode-active .controls,
+.zen-mode-active .impersonation-banner {
+  display: none !important;
+}
+
+.zen-mode-active .app-container {
+  height: 100vh;
+}
+
+.zen-mode-active .main-content {
+  padding: 0;
+}

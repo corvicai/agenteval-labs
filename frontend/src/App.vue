@@ -1,5 +1,5 @@
 <template>
-  <div class="app-root" :class="{ 'has-banner': isImpersonating }">
+  <div class="app-root" :class="{ 'has-banner': isImpersonating, 'zen-mode-active': isZenMode }">
     <!-- Impersonation Banner -->
     <div v-if="isImpersonating" class="impersonation-banner no-print">
       <div class="banner-content">
@@ -226,6 +226,11 @@
             :class="{ active: viewMode === 'admin' }"
             @click="viewMode = 'admin'"
           >⚙️ Admin</button>
+          <button 
+            class="nav-btn" 
+            :class="{ active: viewMode === 'docs' }"
+            @click="viewMode = 'docs'"
+          >📂 Docs</button>
         </nav>
 
         <!-- Stats View -->
@@ -267,6 +272,11 @@
         :workspace-id="currentWorkspace?.id"
       />
     </main>
+    
+    <!-- Docs View -->
+    <main v-if="viewMode === 'docs'" class="main-content">
+      <DocsView />
+    </main>
 
         <!-- Main Benchmarking Content -->
         <!-- History View -->
@@ -293,6 +303,8 @@
                 @configure-agents="showConfig = true"
                 @view-history="goToHistory"
                 @trigger-print="handleTriggerPrint"
+                :is-zen-mode="isZenMode"
+                @toggle-zen="val => isZenMode = val"
             />
           </KeepAlive>
           <div v-if="!currentWorkspace" class="benchmarks-empty-state">
@@ -376,6 +388,7 @@ import QuestionEditorModal from './components/QuestionEditorModal.vue';
 import ImportQuestionsModal from './components/ImportQuestionsModal.vue';
 import MaintenanceOverlay from './components/MaintenanceOverlay.vue'
 import AgentManagerModal from './components/AgentManagerModal.vue'
+import DocsView from './components/DocsView.vue'
 import PrintReport from './components/PrintReport.vue'
 import * as api from './services/api.js'
 import wsService from './services/websocket.js'
@@ -417,6 +430,7 @@ const showImportModal = ref(false)
 const showConfig = ref(false)
 const showSummary = ref(false)
 const showQuestionEditor = ref(false)
+const isZenMode = ref(false)
 const previousQuestionSet = ref(null) // Used to restore when canceling new set creation
 const showRunSetup = ref(false)
 
@@ -1101,7 +1115,14 @@ const isImpersonating = computed(() => {
   return !!user?.impersonator_id
 })
 
+const handleKeydown = (e) => {
+  if (e.key === 'Escape' && isZenMode.value) {
+    isZenMode.value = false
+  }
+}
+
 onMounted(async () => {
+  window.addEventListener('keydown', handleKeydown)
   // If we think we are authenticated, verify with the backend
   if (isAuthenticated.value) {
     try {
@@ -1170,6 +1191,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
   wsDisconnect()
   if (refreshInterval.value) {
     clearInterval(refreshInterval.value)
