@@ -381,6 +381,13 @@ class WebSocketService {
         return this.request('REQ_CREATE_WORKSPACE', { name })
     }
 
+    cloneWorkspace(sourceWorkspaceId, newName) {
+        return this.request('REQ_CLONE_WORKSPACE', {
+            source_workspace_id: sourceWorkspaceId,
+            new_name: newName
+        })
+    }
+
     getWorkspaceClients() {
         return this.request('REQ_GET_WORKSPACE_CLIENTS', {})
     }

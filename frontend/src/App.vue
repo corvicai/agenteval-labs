@@ -67,8 +67,13 @@
               <div class="workspace-meta">
                 <span>{{ ws.agent_count || 0 }} agents</span>
               </div>
+              <button 
+                class="btn-clone-ws" 
+                @click.stop="startCloningWorkspace(ws)"
+                title="Clone this workspace"
+              >📋 Clone</button>
             </div>
-            <div v-if="!isCreatingWorkspace" 
+            <div v-if="!isCreatingWorkspace && !isCloningWorkspace" 
                  class="workspace-card new-workspace" 
                  :class="{ disabled: !currentUser?.organization }"
                  @click="startCreatingWorkspace"
@@ -76,7 +81,7 @@
               <h4 class="workspace-name">+ New Workspace</h4>
               <p v-if="!currentUser?.organization" class="workspace-meta">Select an organization first</p>
             </div>
-            <div v-else class="workspace-card create-workspace-form">
+            <div v-else-if="isCreatingWorkspace" class="workspace-card create-workspace-form">
               <input 
                 v-model="newWorkspaceName" 
                 ref="newWsInput"
@@ -88,6 +93,23 @@
               <div class="ws-create-actions">
                 <button class="btn-create-ws" @click="createWorkspaceInline" :disabled="!newWorkspaceName.trim()">Create</button>
                 <button class="btn-cancel-ws" @click="isCreatingWorkspace = false">Cancel</button>
+              </div>
+            </div>
+            <div v-else-if="isCloningWorkspace" class="workspace-card clone-workspace-form">
+              <p class="clone-source-label">📋 Clone from: <strong>{{ cloneSourceWorkspace?.name }}</strong></p>
+              <input 
+                v-model="cloneNewName" 
+                ref="cloneWsInput"
+                placeholder="New Workspace Name" 
+                class="ws-name-input"
+                @keyup.enter="cloneWorkspaceInline"
+                @keyup.esc="cancelCloning"
+              />
+              <div class="ws-create-actions">
+                <button class="btn-create-ws" @click="cloneWorkspaceInline" :disabled="!cloneNewName.trim() || cloningLoading">
+                  {{ cloningLoading ? '⏳ Cloning...' : '📋 Clone' }}
+                </button>
+                <button class="btn-cancel-ws" @click="cancelCloning">Cancel</button>
               </div>
             </div>
           </div>
@@ -477,6 +499,13 @@ const isDev = import.meta.env.DEV
 const isCreatingWorkspace = ref(false)
 const newWorkspaceName = ref('')
 const newWsInput = ref(null)
+
+// Workspace Cloning State
+const isCloningWorkspace = ref(false)
+const cloneSourceWorkspace = ref(null)
+const cloneNewName = ref('')
+const cloningLoading = ref(false)
+const cloneWsInput = ref(null)
 
 
 // Computed
@@ -900,6 +929,44 @@ async function createWorkspaceInline() {
   } catch (e) {
     console.error('Failed to create workspace:', e)
     alert('Failed to create workspace: ' + (e.message || 'Unknown error'))
+  }
+}
+
+function startCloningWorkspace(ws) {
+  if (!currentUser.value?.organization) {
+    alert('Please select an organization before cloning a workspace.')
+    return
+  }
+  isCreatingWorkspace.value = false
+  isCloningWorkspace.value = true
+  cloneSourceWorkspace.value = ws
+  cloneNewName.value = `${ws.name} (Copy)`
+  setTimeout(() => cloneWsInput.value?.focus(), 100)
+}
+
+function cancelCloning() {
+  isCloningWorkspace.value = false
+  cloneSourceWorkspace.value = null
+  cloneNewName.value = ''
+}
+
+async function cloneWorkspaceInline() {
+  if (!cloneSourceWorkspace.value || !cloneNewName.value.trim()) return
+  
+  cloningLoading.value = true
+  try {
+    const clonedWs = await wsService.cloneWorkspace(
+      cloneSourceWorkspace.value.id, 
+      cloneNewName.value.trim()
+    )
+    workspaces.value.push(clonedWs)
+    cancelCloning()
+    await selectWorkspace(clonedWs)
+  } catch (e) {
+    console.error('Failed to clone workspace:', e)
+    alert('Failed to clone workspace: ' + (e.message || 'Unknown error'))
+  } finally {
+    cloningLoading.value = false
   }
 }
 
