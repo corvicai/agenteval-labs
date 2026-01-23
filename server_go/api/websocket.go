@@ -57,6 +57,7 @@ const (
 	ReqGetWorkspaceRuns        = "REQ_GET_WORKSPACE_RUNS"
 	ReqSwitchWorkspace         = "REQ_SWITCH_WORKSPACE"
 	ReqCreateWorkspace         = "REQ_CREATE_WORKSPACE"
+	ReqCloneWorkspace          = "REQ_CLONE_WORKSPACE"
 	ReqJoinOrganization        = "REQ_JOIN_ORGANIZATION"
 	ReqGetWorkspaceClients     = "REQ_GET_WORKSPACE_CLIENTS"
 	ReqUpdateAgent             = "REQ_UPDATE_AGENT"

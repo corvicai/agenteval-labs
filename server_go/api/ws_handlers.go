@@ -60,6 +60,8 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 		h.handleCreateWorkspace(c, env)
 	case ReqJoinOrganization:
 		h.handleJoinOrganization(c, env)
+	case ReqCloneWorkspace:
+		h.handleCloneWorkspace(c, env)
 	case ReqGetWorkspaceClients:
 		h.handleGetWorkspaceClients(c, env)
 	case ReqUpdateAgent:

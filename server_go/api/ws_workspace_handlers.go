@@ -298,3 +298,182 @@ func (h *Hub) handleDeleteAgent(c *Connection, env models.Envelope) {
 	h.BroadcastEvent(agent.WorkspaceID, "agents", "deleted", map[string]string{"id": agentID.String()})
 	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "success"})
 }
+
+func (h *Hub) handleCloneWorkspace(c *Connection, env models.Envelope) {
+	if !c.IsAuthenticated {
+		c.SendError(env.CorrelationID, "not authenticated")
+		return
+	}
+
+	if c.OrgID == uuid.Nil {
+		c.SendError(env.CorrelationID, "you must be logged into an organization to clone workspaces")
+		return
+	}
+
+	var payload struct {
+		SourceWorkspaceID string `json:"source_workspace_id"`
+		NewName           string `json:"new_name"`
+	}
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		c.SendError(env.CorrelationID, "invalid payload")
+		return
+	}
+
+	if payload.NewName == "" {
+		c.SendError(env.CorrelationID, "new_name is required")
+		return
+	}
+
+	sourceID, err := uuid.Parse(payload.SourceWorkspaceID)
+	if err != nil {
+		c.SendError(env.CorrelationID, "invalid source_workspace_id")
+		return
+	}
+
+	// Verify access to source workspace
+	var sourceWS models.Workspace
+	if err := h.db.First(&sourceWS, "id = ? AND organization_id = ?", sourceID, c.OrgID).Error; err != nil {
+		c.SendError(env.CorrelationID, "source workspace not found or access denied")
+		return
+	}
+
+	// Start transaction
+	tx := h.db.Begin()
+
+	// Create new workspace
+	newWS := models.Workspace{
+		ID:             uuid.New(),
+		Name:           payload.NewName,
+		UserID:         c.UserID,
+		OrganizationID: c.OrgID,
+	}
+
+	if err := tx.Create(&newWS).Error; err != nil {
+		tx.Rollback()
+		c.SendErrorWithDetails(env.CorrelationID, "failed to create cloned workspace", err.Error())
+		return
+	}
+
+	// Clone agents
+	var sourceAgents []models.Agent
+	if err := h.db.Where("workspace_id = ?", sourceID).Find(&sourceAgents).Error; err != nil {
+		tx.Rollback()
+		c.SendErrorWithDetails(env.CorrelationID, "failed to fetch source agents", err.Error())
+		return
+	}
+
+	agentIDMap := make(map[uuid.UUID]uuid.UUID) // old -> new
+	for _, agent := range sourceAgents {
+		newAgent := models.Agent{
+			ID:           uuid.New(),
+			WorkspaceID:  newWS.ID,
+			Name:         agent.Name,
+			ProviderType: agent.ProviderType,
+			Config:       agent.Config, // Clone config (credentials included)
+			Enabled:      agent.Enabled,
+			Position:     agent.Position,
+		}
+		if err := tx.Create(&newAgent).Error; err != nil {
+			tx.Rollback()
+			c.SendErrorWithDetails(env.CorrelationID, "failed to clone agent: "+agent.Name, err.Error())
+			return
+		}
+		agentIDMap[agent.ID] = newAgent.ID
+	}
+
+	// Clone clients (QuestionSets belong to Clients)
+	var sourceClients []models.Client
+	if err := h.db.Where("workspace_id = ?", sourceID).Find(&sourceClients).Error; err != nil {
+		tx.Rollback()
+		c.SendErrorWithDetails(env.CorrelationID, "failed to fetch source clients", err.Error())
+		return
+	}
+
+	clientIDMap := make(map[uuid.UUID]uuid.UUID) // old -> new
+	for _, client := range sourceClients {
+		newClient := models.Client{
+			ID:          uuid.New(),
+			WorkspaceID: newWS.ID,
+			Name:        client.Name,
+		}
+		if err := tx.Create(&newClient).Error; err != nil {
+			tx.Rollback()
+			c.SendErrorWithDetails(env.CorrelationID, "failed to clone client: "+client.Name, err.Error())
+			return
+		}
+		clientIDMap[client.ID] = newClient.ID
+	}
+
+	// Clone question sets
+	var sourceQS []models.QuestionSet
+	if err := h.db.Where("client_id IN ?", keys(clientIDMap)).Find(&sourceQS).Error; err != nil {
+		tx.Rollback()
+		c.SendErrorWithDetails(env.CorrelationID, "failed to fetch source question sets", err.Error())
+		return
+	}
+
+	for _, qs := range sourceQS {
+		newClientID, ok := clientIDMap[qs.ClientID]
+		if !ok {
+			continue // Skip if client not found in map
+		}
+
+		newQS := models.QuestionSet{
+			ID:       uuid.New(),
+			ClientID: newClientID,
+			Name:     qs.Name,
+			Version:  qs.Version,
+			Data:     qs.Data, // Clone questions JSON data
+		}
+		if err := tx.Create(&newQS).Error; err != nil {
+			tx.Rollback()
+			c.SendErrorWithDetails(env.CorrelationID, "failed to clone question set: "+qs.Name, err.Error())
+			return
+		}
+
+		// Clone question set agent associations
+		var qsAgents []models.QuestionSetAgent
+		if err := h.db.Where("question_set_id = ?", qs.ID).Find(&qsAgents).Error; err == nil {
+			for _, qsa := range qsAgents {
+				if newAgentID, ok := agentIDMap[qsa.AgentID]; ok {
+					newQSA := models.QuestionSetAgent{
+						QuestionSetID: newQS.ID,
+						AgentID:       newAgentID,
+						Config:        qsa.Config,
+						Enabled:       qsa.Enabled,
+						Position:      qsa.Position,
+					}
+					tx.Create(&newQSA) // Ignore errors for associations
+				}
+			}
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		c.SendErrorWithDetails(env.CorrelationID, "failed to commit clone transaction", err.Error())
+		return
+	}
+
+	// Count agents for response
+	var agentCount int64
+	h.db.Model(&models.Agent{}).Where("workspace_id = ?", newWS.ID).Count(&agentCount)
+
+	type WorkspaceResponse struct {
+		models.Workspace
+		AgentCount int64 `json:"agent_count"`
+	}
+
+	c.SendResponse(DataResponse, env.CorrelationID, WorkspaceResponse{
+		Workspace:  newWS,
+		AgentCount: agentCount,
+	})
+}
+
+// Helper function to get keys from a map
+func keys(m map[uuid.UUID]uuid.UUID) []uuid.UUID {
+	result := make([]uuid.UUID, 0, len(m))
+	for k := range m {
+		result = append(result, k)
+	}
+	return result
+}
