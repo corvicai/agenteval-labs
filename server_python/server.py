@@ -50,6 +50,7 @@ class OpenAIQueryRequest(BaseModel):
     question: str
     prompt_id: str | None = None
     prompt_version: str | None = None
+    project_id: str | None = None
     image_data: dict | None = None
     original_question: str | None = None
     expected_answer: str | None = None
@@ -277,13 +278,36 @@ async def run_openai_query(
     question: str, 
     prompt_id: str = None, 
     prompt_version: str = None, 
+    project_id: str = None,
     image_data: dict = None,
     original_question: str = None,
     expected_answer: str = None
 ):
-    print(f"[PYTHON] Running OpenAI query for: {question[:50]}...")
+    print(f"\n[PYTHON] 📥 run_openai_query (VERSION: {VERSION})")
+    print(f"[PYTHON] 📝 Input Content: {question[:100]}...")
+    print(f"[PYTHON] 🏺 Context - Original Q: {original_question}")
+    print(f"[PYTHON] 🏺 Context - Expected A: {expected_answer}")
+    
     start_time = time.time()
     
+    # MOCK MODE: Skip if environment variable is set
+    # Removed as per user request to enable real OpenAI calls
+    """
+    if os.environ.get("MOCK_OPENAI") == "true":
+        print(f"[PYTHON] 🎭 MOCK MODE ACTIVATED")
+        await asyncio.sleep(random.uniform(0.5, 1.5))
+        mock_answer = "Evaluation (MOCK): The response provides a clear and accurate definition of the topic. Rating: 5/5."
+        total_duration = time.time() - start_time
+        return {
+            "success": True,
+            "answer": mock_answer,
+            "metadata": {
+                "duration_ms": int(total_duration * 1000),
+                "raw_response": {"mock": True, "status": "simulated"}
+            }
+        }
+    """
+
     # MOCK MODE: Handle MOCK or DRYRUN tokens if explicitly requested
     if api_key and ("MOCK" in api_key.upper() or "DRYRUN" in api_key.upper()):
         if os.environ.get("APP_ENV") == "production":
@@ -327,7 +351,7 @@ async def run_openai_query(
 
     try:
         from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=api_key)
+        client = AsyncOpenAI(api_key=api_key, project=project_id)
         
         has_image = image_data is not None
 
@@ -348,19 +372,22 @@ async def run_openai_query(
                 input_payload = [{"role": "user", "content": [{"type": "input_image", "image_url": data_url}]}]
             else:
                 # Inject context into the input payload for the template
-                if original_question or expected_answer:
-                    input_text = "EVALUATION TASK\n\n"
-                    if original_question:
-                        input_text += f"**Original Question:**\n{original_question}\n\n"
-                    if expected_answer:
-                        input_text += f"**Expected Answer (Gabarito):**\n{expected_answer}\n\n"
-                    input_text += f"**Response to Evaluate:**\n{question}"
-                    input_payload = input_text
+                # Inject context into the input payload for the template
+                if original_question is not None or expected_answer is not None:
+                    # Provide context in a structured text format since the API expects an input string/array
+                    input_payload = f"""RESPONSE TO EVALUATE:
+{question}
+
+---
+CONTEXT:
+Original Question: {original_question or "N/A"}
+Expected Answer: {expected_answer or "N/A"}
+"""
+                    print(f"[PYTHON] DEBUG: Formatted text payload for evaluation:\n{input_payload}")
                 else:
                     input_payload = question
                 
-                print(f"[PYTHON] DEBUG: Final input_payload len: {len(str(input_payload))}")
-                print(f"[PYTHON] DEBUG: Final input_payload content: {str(input_payload)}")
+                print(f"[PYTHON] DEBUG: Final input_payload types: {type(input_payload)}")
 
             response = await client.responses.create(
                 prompt={"id": prompt_id, "version": prompt_version},
@@ -427,7 +454,8 @@ async def run_openai_query(
             "answer": result_text,
             "metadata": {
                 "duration_ms": int(total_duration * 1000),
-                "raw_response": str(response)
+                "raw_response": str(response),
+                "prompt_sent": prompt_sent if 'prompt_sent' in locals() else question_text if 'question_text' in locals() else question
             }
         }
     except Exception as e:
@@ -441,25 +469,42 @@ async def run_openai_query(
 
 @app.post("/execute")
 async def execute(request: ExecutionRequest):
-    print(f"\n[PYTHON] Received Execution Request: {request.request_id} ({request.provider_type})")
+    payload = request.payload or {}
+    print(f"\n[PYTHON] 🌐 {VERSION} - Received Execution Request: {request.request_id} ({request.provider_type})")
+    print(f"[PYTHON] 📦 Full Payload Keys: {list(payload.keys())}")
+    print(f"[PYTHON] 📦 Original Question: {payload.get('original_question')}")
+    print(f"[PYTHON] 📦 Expected Answer: {payload.get('expected_answer')}")
+    
+    # Explicitly check for answer fields for evaluation
+    potential_answers = [payload.get("agent_answer"), payload.get("answer"), payload.get("response")]
+    actual_answer = next((a for a in potential_answers if a is not None), None)
+    print(f"[PYTHON] 📦 Resolved Agent Answer (for evaluation): {actual_answer[:100] if actual_answer else 'NONE FOUND'}...")
     
     if request.provider_type == "mcp":
         config = request.config
         payload = request.payload
         
+        # Use our resolved answer, fallback to question
+        question_text = str(actual_answer).strip() if actual_answer else payload.get("question")
+        
         result = await run_mcp_query(
             endpoint=config.get("endpoint"),
             token=str(config.get("token") or ""),
-            question=payload.get("question")
+            question=question_text
         )
     elif request.provider_type == "openai":
         config = request.config
         payload = request.payload
+        
+        # Use our resolved answer, fallback to question
+        question_text = str(actual_answer).strip() if actual_answer else payload.get("question")
+        
         result = await run_openai_query(
             api_key=str(config.get("api_key") or ""),
-            question=payload.get("question"),
+            question=question_text,
             prompt_id=config.get("prompt_id"),
             prompt_version=config.get("prompt_version"),
+            project_id=config.get("project_id"),
             image_data=payload.get("image_data"),
             original_question=payload.get("original_question"),
             expected_answer=payload.get("expected_answer")
@@ -494,6 +539,7 @@ async def legacy_query_openai(request: OpenAIQueryRequest):
         request.question, 
         request.prompt_id, 
         request.prompt_version, 
+        request.project_id,
         request.image_data,
         request.original_question,
         request.expected_answer
@@ -511,12 +557,14 @@ async def health():
     return {"status": "ok"}
 
 
+VERSION = "1.2.1-EXPLICIT-ANSWERS"
+
 if __name__ == "__main__":
     import uvicorn
     import os
     port = int(os.environ.get("PORT", 3003))
     print("=" * 60)
-    print("PYTHON MCP AGENT SERVER")
+    print(f"PYTHON MCP AGENT SERVER - VERSION {VERSION}")
     print(f"Starting on port {port}...")
     print("=" * 60)
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
