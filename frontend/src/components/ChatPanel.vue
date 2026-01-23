@@ -36,7 +36,7 @@
     <div class="messages" :ref="setMessagesRef" @scroll="handleScroll">
       <div
         v-for="(qa, index) in results"
-        :key="index"
+        :key="qa.id || qa.question?.id || `q-${index}`"
         class="message-group"
         :ref="el => setMessageRef(index, el)"
         :data-question-index="index"
@@ -113,8 +113,14 @@
             </div>
             
             <div class="question-actions" v-if="!readonly">
-              <button class="btn-retry-question" @click="handleRetry(index)" v-if="provider !== 'custom'">
-                Re-run
+              <button 
+                class="btn-retry-question" 
+                :class="{ 'is-running': rerunningIndex === index || qa.loading }"
+                @click="handleRetry(index)" 
+                v-if="provider !== 'custom'"
+                :disabled="rerunningIndex === index || qa.loading"
+              >
+                {{ (rerunningIndex === index || qa.loading) ? '⏳ Running...' : '🔄 Re-run' }}
               </button>
               <button 
                 class="btn-history" 
@@ -235,7 +241,7 @@
           </div>
           <div class="answer-footer">
             <div class="answer-time" v-if="qa.duration || qa.timestamp">
-              <span v-if="qa.duration">Response time: {{ qa.duration }}s</span>
+              <span v-if="qa.duration">Response time: {{ formatDuration(qa.duration) }}</span>
               <span v-if="qa.duration && qa.timestamp" class="meta-separator">|</span>
               <span v-if="qa.timestamp" class="response-date">{{ formatTimestamp(qa.timestamp) }}</span>
             </div>
@@ -282,6 +288,7 @@
 
 <script>
 import { processContent } from '../utils/markdown.js'
+import { formatDuration } from '../utils/formatDuration.js'
 
 export default {
   name: 'ChatPanel',
@@ -389,7 +396,8 @@ export default {
       editingIndex: null,
       editingField: null,
       editValue: '',
-      historyVisible: {} // { [questionIndex]: boolean }
+      historyVisible: {}, // { [questionIndex]: boolean }
+      rerunningIndex: null // Index of question currently being re-run
     }
   },
   methods: {
@@ -409,8 +417,15 @@ export default {
       }
     },
     handleRetry(index) {
+      if (this.rerunningIndex !== null) return // Already running one
       if (this.onRetry) {
+        this.rerunningIndex = index
         this.onRetry(index)
+        // The loading state will be managed by the parent via qa.loading
+        // Reset rerunningIndex after a short delay to allow UI feedback
+        setTimeout(() => {
+          this.rerunningIndex = null
+        }, 500)
       }
     },
     handleRunAllForAgent() {
@@ -549,6 +564,9 @@ export default {
         hour: '2-digit',
         minute: '2-digit'
       })
+    },
+    formatDuration(seconds) {
+      return formatDuration(seconds)
     }
   }
 }
@@ -778,9 +796,27 @@ export default {
   transition: all 0.2s;
 }
 
-.btn-retry-question:hover {
+.btn-retry-question:hover:not(:disabled) {
   background: #49399d;
   color: #ffffff;
+}
+
+.btn-retry-question:disabled,
+.btn-retry-question.is-running {
+  background: #e9ecef;
+  border-color: #adb5bd;
+  color: #6c757d;
+  cursor: not-allowed;
+  opacity: 0.8;
+}
+
+.btn-retry-question.is-running {
+  animation: pulse-subtle 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
 }
 
 .btn-attach-image {
