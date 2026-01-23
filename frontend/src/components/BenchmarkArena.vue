@@ -50,7 +50,6 @@
           <span class="qs-meta">{{ getQuestionCount(qs) }} qs</span>
           <div class="qs-actions">
             <button class="btn-icon-small" @click.stop="$emit('view-history', qs)" title="View History">📜</button>
-            <button v-if="currentQuestionSet?.id === qs.id" class="btn-icon-small" @click.stop="showQuestionEditor = true" title="Edit">✏️</button>
           </div>
         </div>
       </div>
@@ -69,6 +68,9 @@
         </button>
         <button class="btn btn-secondary btn-history-arena" @click="$emit('view-history', currentQuestionSet || {})">
           📚 History
+        </button>
+        <button class="btn btn-secondary" @click="showQuestionEditor = true" :disabled="!currentQuestionSet">
+          ✏️ Edit Questions
         </button>
         <button class="btn btn-secondary btn-pdf" @click="exportToPdf" :disabled="!currentRun">
           📄 PDF
