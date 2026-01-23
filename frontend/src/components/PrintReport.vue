@@ -274,6 +274,19 @@ export default {
   .print-page:last-child {
     page-break-after: auto;
   }
+  
+  /* Fix for Cover Page Centering */
+  .print-page.cover-page {
+    display: flex !important;
+    /* A3 Landscape height is 297mm. With 1cm margins, available height is ~277mm. 
+       Using 100vh causes spillover. 270mm is safe. */
+    height: 270mm !important; 
+    min-height: 270mm !important;
+    justify-content: center !important;
+    align-items: center !important;
+    margin: 0 !important;
+    padding: 0 !important; /* Remove padding to maximize centering space */
+  }
 }
 
 /* Cover Page Decorations */
