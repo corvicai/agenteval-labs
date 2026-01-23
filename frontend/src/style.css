@@ -255,6 +255,7 @@ textarea {
   text-align: left;
   cursor: pointer;
   transition: all 0.15s ease;
+  position: relative;
 }
 
 .workspace-card:hover {

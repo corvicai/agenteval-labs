@@ -355,6 +355,58 @@
   color: #1e293b;
 }
 
+/* Clone Workspace Button & Form */
+.btn-clone-ws {
+  position: absolute;
+  bottom: 0.5rem;
+  right: 0.5rem;
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid #6366f1;
+  color: #6366f1;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.2s;
+}
+
+.workspace-card:hover .btn-clone-ws {
+  opacity: 1;
+}
+
+.btn-clone-ws:hover {
+  background: #6366f1;
+  color: white;
+  transform: scale(1.05);
+}
+
+.clone-workspace-form {
+  cursor: default !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0.5rem !important;
+  justify-content: center !important;
+  padding: 1rem !important;
+  background: #f0f9ff !important;
+  border-color: #0ea5e9 !important;
+  border-width: 2px !important;
+}
+
+.clone-source-label {
+  font-size: 0.8rem;
+  color: #0369a1;
+  margin: 0;
+  padding: 0.25rem 0.5rem;
+  background: rgba(14, 165, 233, 0.1);
+  border-radius: 4px;
+}
+
+.clone-source-label strong {
+  color: #0c4a6e;
+}
+
 .btn-warning {
   background: #f59e0b;
   color: white;
