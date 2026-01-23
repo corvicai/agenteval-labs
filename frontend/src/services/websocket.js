@@ -263,8 +263,16 @@ class WebSocketService {
         return this.request('CMD_START_RUN', { question_set_id: questionSetId, agent_ids: agentIds })
     }
 
-    rerunTask(runId, agentId, questionId) {
-        return this.request('CMD_RERUN_TASK', { run_id: runId, agent_id: agentId, question_id: questionId })
+    rerunTask(runId, agentId, questionId, options = {}) {
+        return this.request('CMD_RERUN_TASK', {
+            run_id: runId,
+            agent_id: agentId,
+            question_id: questionId,
+            question_set_id: options.questionSetId || '',
+            result_id: options.resultId || '',
+            original_question: options.originalQuestion || '',
+            expected_answer: options.expectedAnswer || ''
+        })
     }
 
     cancelRun(runId) {

@@ -70,17 +70,12 @@
                   <label>Prompt Version</label>
                   <input v-model="agent.config.prompt_version" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
                 </div>
+                <div class="field">
+                  <label>Project ID (Optional)</label>
+                  <input v-model="agent.config.project_id" placeholder="proj_..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                </div>
               </div>
               <div v-else-if="agent.provider_type === 'evaluator'" class="config-fields">
-                <div class="field">
-                  <label>Target Agent</label>
-                  <select v-model="agent.config.target_agent_id" @change="saveAgent(agent)">
-                    <option value="">All Agents</option>
-                    <option v-for="a in agents.filter(x => x.id !== agent.id && x.provider_type !== 'evaluator')" :key="a.id" :value="a.id">
-                      {{ a.name }}
-                    </option>
-                  </select>
-                </div>
                 <!-- Evaluator is explicitly OpenAI, so we also need API Key here if not global -->
                  <div class="field">
                   <label>OpenAI API Key</label>
@@ -93,6 +88,10 @@
                 <div class="field">
                   <label>Prompt Version (Optional)</label>
                   <input v-model="agent.config.prompt_version" placeholder="e.g. v1" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                </div>
+                <div class="field">
+                  <label>Project ID (Optional)</label>
+                  <input v-model="agent.config.project_id" placeholder="proj_..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
                 </div>
               </div>
               
@@ -207,6 +206,7 @@ function normalizeConfig(rawConfig, providerType) {
       api_key: '',
       prompt_id: '',
       prompt_version: '',
+      project_id: '',
       ...config
     }
   } else if (providerType === 'evaluator') {
@@ -215,6 +215,7 @@ function normalizeConfig(rawConfig, providerType) {
       api_key: '',
       prompt_id: '',
       prompt_version: '',
+      project_id: '',
       ...config
     }
   }

@@ -10,7 +10,8 @@ const state = reactive({
     lastError: null,
     onlineUsers: [],
     onlineCount: 0,
-    isMaintenance: false
+    isMaintenance: false,
+    runningQuestionSetId: null
 })
 
 // Action: Initialize WebSocket and listeners
@@ -136,7 +137,8 @@ export function useWSStore() {
         syncState,
         startRun: wsService.startRun.bind(wsService),
         cancelRun: wsService.cancelRun.bind(wsService),
-        rerunTask: wsService.rerunTask.bind(wsService)
+        rerunTask: wsService.rerunTask.bind(wsService),
+        setRunningQuestionSetId: (id) => { state.runningQuestionSetId = id }
     }
 }
 
