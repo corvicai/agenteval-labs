@@ -35,3 +35,4 @@ seed_config.json
 frontend/dist
 node_modules
 .agent
+/diff_tool/
