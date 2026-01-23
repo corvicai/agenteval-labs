@@ -151,12 +151,13 @@ func (h *Hub) handleUpdateAgent(c *Connection, env models.Envelope) {
 	}
 
 	var payload struct {
-		ID           string         `json:"id"`
-		Name         string         `json:"name"`
-		ProviderType string         `json:"provider_type"`
-		Config       map[string]any `json:"config"`
-		Enabled      bool           `json:"enabled"`
-		Position     int            `json:"position"`
+		ID             string         `json:"id"`
+		Name           string         `json:"name"`
+		ProviderType   string         `json:"provider_type"`
+		Config         map[string]any `json:"config"`
+		Enabled        bool           `json:"enabled"`
+		Position       int            `json:"position"`
+		MaxConcurrency int            `json:"max_concurrency"`
 	}
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
 		c.SendError(env.CorrelationID, "invalid payload")
@@ -186,6 +187,11 @@ func (h *Hub) handleUpdateAgent(c *Connection, env models.Envelope) {
 	agent.Config = datatypes.JSON(configJSON)
 	agent.Enabled = payload.Enabled
 	agent.Position = payload.Position
+	if payload.MaxConcurrency > 0 {
+		agent.MaxConcurrency = payload.MaxConcurrency
+	} else if agent.MaxConcurrency == 0 {
+		agent.MaxConcurrency = 5 // Default
+	}
 
 	if err := h.db.Save(&agent).Error; err != nil {
 		c.SendErrorWithDetails(env.CorrelationID, "failed to update agent", err.Error())
@@ -221,12 +227,13 @@ func (h *Hub) handleCreateAgent(c *Connection, env models.Envelope) {
 
 	configJSON, _ := json.Marshal(payload.Config)
 	agent := models.Agent{
-		ID:           uuid.New(),
-		WorkspaceID:  wsID,
-		Name:         payload.Name,
-		ProviderType: payload.ProviderType,
-		Config:       datatypes.JSON(configJSON),
-		Enabled:      true,
+		ID:             uuid.New(),
+		WorkspaceID:    wsID,
+		Name:           payload.Name,
+		ProviderType:   payload.ProviderType,
+		Config:         datatypes.JSON(configJSON),
+		Enabled:        true,
+		MaxConcurrency: 5, // Default: 5 parallel requests
 	}
 
 	if err := h.db.Create(&agent).Error; err != nil {

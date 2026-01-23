@@ -63,14 +63,15 @@ type Client struct {
 }
 
 type Agent struct {
-	ID           uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
-	WorkspaceID  uuid.UUID      `gorm:"type:uuid;not null" json:"workspace_id"`
-	Name         string         `gorm:"not null" json:"name"`
-	ProviderType string         `gorm:"not null" json:"provider_type"` // 'mcp', 'openai', 'evaluator'
-	Config       datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"config"`
-	Enabled      bool           `gorm:"default:true" json:"enabled"`
-	Position     int            `gorm:"default:0" json:"position"`
-	CreatedAt    time.Time      `json:"created_at"`
+	ID             uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
+	WorkspaceID    uuid.UUID      `gorm:"type:uuid;not null" json:"workspace_id"`
+	Name           string         `gorm:"not null" json:"name"`
+	ProviderType   string         `gorm:"not null" json:"provider_type"` // 'mcp', 'openai', 'evaluator'
+	Config         datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"config"`
+	Enabled        bool           `gorm:"default:true" json:"enabled"`
+	Position       int            `gorm:"default:0" json:"position"`
+	MaxConcurrency int            `gorm:"default:5" json:"max_concurrency"` // Max parallel requests (default: 5)
+	CreatedAt      time.Time      `json:"created_at"`
 }
 
 type QuestionSet struct {

@@ -23,6 +23,7 @@ type Engine struct {
 	workerCount     int
 	taskQueue       chan *Task
 	cancelledRuns   map[uuid.UUID]bool
+	agentSemaphores map[uuid.UUID]chan struct{} // Per-agent concurrency control
 	mu              sync.RWMutex
 	wg              sync.WaitGroup
 	eventCallback   func(workspaceID uuid.UUID, eventType string, correlationID string, payload any)
@@ -38,6 +39,7 @@ type Task struct {
 	OriginalQuestion string
 	AgentConfig      map[string]any
 	ProviderType     string
+	MaxConcurrency   int // Max parallel requests for this agent
 }
 
 type ExecutionRequest struct {
@@ -66,8 +68,9 @@ func NewEngine(db *gorm.DB, pythonURL string, workers int) *Engine {
 		db:              db,
 		pythonRunnerURL: pythonURL,
 		workerCount:     workers,
-		taskQueue:       make(chan *Task, 10000), // Increased queue size
+		taskQueue:       make(chan *Task, 10000),
 		cancelledRuns:   make(map[uuid.UUID]bool),
+		agentSemaphores: make(map[uuid.UUID]chan struct{}),
 		httpClient: &http.Client{
 			Transport: transport,
 			Timeout:   10 * time.Minute,
@@ -97,8 +100,39 @@ func (e *Engine) worker(id int) {
 			continue
 		}
 
+		// Get or create semaphore for this agent
+		sem := e.getAgentSemaphore(task.AgentID, task.MaxConcurrency)
+
+		// Acquire semaphore (blocks if agent at max concurrency)
+		sem <- struct{}{}
+
+		// Micro delay to avoid burst requests
+		time.Sleep(100 * time.Millisecond)
+
 		e.executeTask(task)
+
+		// Release semaphore
+		<-sem
 	}
+}
+
+// getAgentSemaphore returns or creates a semaphore for rate limiting an agent
+func (e *Engine) getAgentSemaphore(agentID uuid.UUID, maxConcurrency int) chan struct{} {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if maxConcurrency <= 0 {
+		maxConcurrency = 5 // Default
+	}
+
+	if sem, exists := e.agentSemaphores[agentID]; exists {
+		return sem
+	}
+
+	sem := make(chan struct{}, maxConcurrency)
+	e.agentSemaphores[agentID] = sem
+	log.Printf("[ENGINE] Created semaphore for agent %s with max concurrency %d", agentID, maxConcurrency)
+	return sem
 }
 
 func (e *Engine) QueueTask(task *Task) {
@@ -467,12 +501,13 @@ func (e *Engine) StartRun(workspaceID uuid.UUID, questionSetID uuid.UUID, agentI
 				globalQuestionIndex++
 
 				task := &Task{
-					RunID:        run.ID,
-					AgentID:      agent.ID,
-					QuestionID:   qID,
-					QuestionText: q.Question,
-					AgentConfig:  agentConfig,
-					ProviderType: agent.ProviderType,
+					RunID:          run.ID,
+					AgentID:        agent.ID,
+					QuestionID:     qID,
+					QuestionText:   q.Question,
+					AgentConfig:    agentConfig,
+					ProviderType:   agent.ProviderType,
+					MaxConcurrency: agent.MaxConcurrency,
 				}
 				e.QueueTask(task)
 			}
@@ -538,12 +573,13 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 	json.Unmarshal(agent.Config, &agentConfig)
 
 	task := &Task{
-		RunID:        run.ID,
-		AgentID:      agent.ID,
-		QuestionID:   questionID,
-		QuestionText: questionText,
-		AgentConfig:  agentConfig,
-		ProviderType: agent.ProviderType,
+		RunID:          run.ID,
+		AgentID:        agent.ID,
+		QuestionID:     questionID,
+		QuestionText:   questionText,
+		AgentConfig:    agentConfig,
+		ProviderType:   agent.ProviderType,
+		MaxConcurrency: agent.MaxConcurrency,
 	}
 	e.QueueTask(task)
 

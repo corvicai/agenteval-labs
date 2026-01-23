@@ -60,6 +60,14 @@ async def run_mcp_query(endpoint: str, token: str, question: str):
     
     # DRYRUN/MOCK MODE: Simulate MCP responses without real connection
     if token in ["DRYRUN", "MOCK", "MOCK_TOKEN"]:
+        if os.environ.get("APP_ENV") == "production":
+            print(f"[PYTHON] SECURITY: Mock execution attempt blocked in production.")
+            return {
+                "success": False,
+                "error": "Mock execution is disabled in production",
+                "metadata": {"duration_ms": 0}
+            }
+
         print("[PYTHON] 🎭 MOCK MCP MODE DETECTED")
         start_time = time.time()
         delay = random.uniform(0.5, 2.0)
@@ -110,118 +118,155 @@ async def run_mcp_query(endpoint: str, token: str, question: str):
             }
         }
 
-    # REAL MODE: Normal MCP connection
+    # REAL MODE: Normal MCP connection with retry for rate limiting
     start_time = time.time()
-    try:
-        async with streamablehttp_client(
-            endpoint,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream",
-                "Authorization": str(token or ""),
-            },
-        ) as (read, write, session_id):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                
-                call_start = time.time()
-                # Simple progress logging
-                async def log_progress():
-                    while True:
-                        await asyncio.sleep(10)
-                        print(f"[PYTHON] Still processing MCP... {int(time.time() - call_start)}s")
-                
-                progress_task = asyncio.create_task(log_progress())
-                try:
-                    result = await session.call_tool(
-                        "query",
-                        arguments={"query_content": question},
-                    )
-                finally:
-                    progress_task.cancel()
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count <= max_retries:
+        try:
+            async with streamablehttp_client(
+                endpoint,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                    "Authorization": str(token or ""),
+                },
+            ) as (read, write, session_id):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    
+                    call_start = time.time()
+                    # Simple progress logging
+                    async def log_progress():
+                        while True:
+                            await asyncio.sleep(10)
+                            print(f"[PYTHON] Still processing MCP... {int(time.time() - call_start)}s")
+                    
+                    progress_task = asyncio.create_task(log_progress())
                     try:
-                        await progress_task
-                    except asyncio.CancelledError:
-                        pass
+                        result = await session.call_tool(
+                            "query",
+                            arguments={"query_content": question},
+                        )
+                    finally:
+                        progress_task.cancel()
+                        try:
+                            await progress_task
+                        except asyncio.CancelledError:
+                            pass
 
-                total_duration = time.time() - start_time
-                result_dict = result.model_dump() if hasattr(result, 'model_dump') else dict(result)
-                
-                def extract_text_from_item(item):
-                    if not isinstance(item, dict):
-                        if isinstance(item, str):
-                            return item
-                        return ""
+                    total_duration = time.time() - start_time
+                    result_dict = result.model_dump() if hasattr(result, 'model_dump') else dict(result)
+                    
+                    def extract_text_from_item(item):
+                        if not isinstance(item, dict):
+                            if isinstance(item, str):
+                                return item
+                            return ""
 
-                    item_type = item.get("type")
-                    if item_type == "text":
+                        item_type = item.get("type")
+                        if item_type == "text":
+                            text_val = item.get("text")
+                            if isinstance(text_val, str):
+                                return text_val
+                            if isinstance(text_val, dict):
+                                return text_val.get("text") or text_val.get("value") or ""
+
                         text_val = item.get("text")
                         if isinstance(text_val, str):
                             return text_val
                         if isinstance(text_val, dict):
                             return text_val.get("text") or text_val.get("value") or ""
 
-                    text_val = item.get("text")
-                    if isinstance(text_val, str):
-                        return text_val
-                    if isinstance(text_val, dict):
-                        return text_val.get("text") or text_val.get("value") or ""
+                        content_val = item.get("content")
+                        if isinstance(content_val, str):
+                            return content_val
 
-                    content_val = item.get("content")
-                    if isinstance(content_val, str):
-                        return content_val
+                        resource_val = item.get("resource")
+                        if isinstance(resource_val, dict):
+                            res_text = resource_val.get("text") or resource_val.get("data")
+                            if isinstance(res_text, str):
+                                return res_text
 
-                    resource_val = item.get("resource")
-                    if isinstance(resource_val, dict):
-                        res_text = resource_val.get("text") or resource_val.get("data")
-                        if isinstance(res_text, str):
-                            return res_text
+                        return ""
 
-                    return ""
+                    answer_text = ""
+                    content = result_dict.get("content")
+                    if isinstance(content, list):
+                        for item in content:
+                            answer_text += extract_text_from_item(item)
+                    elif content is not None:
+                        answer_text = extract_text_from_item(content)
 
-                answer_text = ""
-                content = result_dict.get("content")
-                if isinstance(content, list):
-                    for item in content:
-                        answer_text += extract_text_from_item(item)
-                elif content is not None:
-                    answer_text = extract_text_from_item(content)
+                    if not answer_text:
+                        for key in ("result", "output", "message"):
+                            val = result_dict.get(key)
+                            if isinstance(val, str) and val.strip():
+                                answer_text = val
+                                break
 
-                if not answer_text:
-                    for key in ("result", "output", "message"):
-                        val = result_dict.get(key)
-                        if isinstance(val, str) and val.strip():
-                            answer_text = val
-                            break
-
-                if not answer_text:
-                    answer_text = str(result_dict)
-                
-                return {
-                    "success": True, 
-                    "answer": answer_text,
-                    "metadata": {
-                        "duration_ms": int(total_duration * 1000),
-                        "raw_response": result_dict
+                    if not answer_text:
+                        answer_text = str(result_dict)
+                    
+                    return {
+                        "success": True, 
+                        "answer": answer_text,
+                        "metadata": {
+                            "duration_ms": int(total_duration * 1000),
+                            "raw_response": result_dict,
+                            "retry_count": retry_count
+                        }
                     }
+        except ExceptionGroup as eg:
+            # Python 3.11+ TaskGroup errors
+            first_error = eg.exceptions[0] if eg.exceptions else eg
+            error_str = str(first_error)
+            
+            # Check for rate limiting (429)
+            if "429" in error_str and retry_count < max_retries:
+                retry_count += 1
+                wait_time = 2 ** retry_count  # Exponential backoff: 2, 4, 8 seconds
+                print(f"[PYTHON] ⚠️ Rate limited (429). Retry {retry_count}/{max_retries} in {wait_time}s...")
+                await asyncio.sleep(wait_time)
+                continue
+            
+            print(f"[PYTHON] ❌ MCP ExceptionGroup ERROR: {eg}")
+            return {
+                "success": False,
+                "error": str(first_error),
+                "metadata": {
+                    "duration_ms": int((time.time() - start_time) * 1000),
+                    "retry_count": retry_count
                 }
-    except ExceptionGroup as eg:
-        # Python 3.11+ TaskGroup errors
-        print(f"[PYTHON] ❌ MCP ExceptionGroup ERROR: {eg}")
-        # Extract first sub-exception for cleaner message
-        first_error = eg.exceptions[0] if eg.exceptions else eg
-        return {
-            "success": False,
-            "error": str(first_error),
-            "metadata": {"duration_ms": int((time.time() - start_time) * 1000)}
-        }
-    except Exception as e:
-        print(f"[PYTHON] ❌ MCP HTTP ERROR: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "metadata": {"duration_ms": int((time.time() - start_time) * 1000)}
-        }
+            }
+        except Exception as e:
+            error_str = str(e)
+            
+            # Check for rate limiting (429)
+            if "429" in error_str and retry_count < max_retries:
+                retry_count += 1
+                wait_time = 2 ** retry_count  # Exponential backoff: 2, 4, 8 seconds
+                print(f"[PYTHON] ⚠️ Rate limited (429). Retry {retry_count}/{max_retries} in {wait_time}s...")
+                await asyncio.sleep(wait_time)
+                continue
+            
+            print(f"[PYTHON] ❌ MCP HTTP ERROR: {e}")
+            return {
+                "success": False,
+                "error": error_str,
+                "metadata": {
+                    "duration_ms": int((time.time() - start_time) * 1000),
+                    "retry_count": retry_count
+                }
+            }
+    
+    # Should not reach here, but just in case
+    return {
+        "success": False,
+        "error": "Max retries exceeded",
+        "metadata": {"duration_ms": int((time.time() - start_time) * 1000), "retry_count": retry_count}
+    }
 
 
 
@@ -241,6 +286,14 @@ async def run_openai_query(
     
     # MOCK MODE: Handle MOCK or DRYRUN tokens if explicitly requested
     if api_key and ("MOCK" in api_key.upper() or "DRYRUN" in api_key.upper()):
+        if os.environ.get("APP_ENV") == "production":
+            print(f"[PYTHON] ❌ SECURITY: Mock OpenAI attempt blocked in production.")
+            return {
+                "success": False,
+                "error": "Mock execution is disabled in production",
+                "metadata": {"duration_ms": 0}
+            }
+
         print("[PYTHON] 🎭 MOCK/DRYRUN OPENAI MODE DETECTED")
 
         await asyncio.sleep(random.uniform(0.5, 1.5))
