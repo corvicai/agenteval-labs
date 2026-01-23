@@ -14,7 +14,10 @@ import (
 func Connect() (*gorm.DB, error) {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
+		log.Println("[DB] DATABASE_URL not set, using default local DSN")
 		dsn = "host=localhost user=postgres password=postgres dbname=benchmarking port=5432 sslmode=disable"
+	} else {
+		log.Println("[DB] Connecting using DATABASE_URL from environment")
 	}
 
 	// Retry connection up to 30 times (30 seconds total)
@@ -24,7 +27,7 @@ func Connect() (*gorm.DB, error) {
 
 	for i := 0; i < maxRetries; i++ {
 		db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{
-			Logger: logger.Default.LogMode(logger.Info),
+			Logger: logger.Default.LogMode(logger.Warn), // Default to Warn in prod unless debug needed
 		})
 		if err == nil {
 			// Configure connection pool
@@ -39,6 +42,9 @@ func Connect() (*gorm.DB, error) {
 		}
 
 		if i < maxRetries-1 {
+			if i%5 == 0 {
+				log.Printf("[DB] Still waiting for database... (%d/%d)", i, maxRetries)
+			}
 			time.Sleep(time.Second)
 		}
 	}
