@@ -339,6 +339,13 @@
               📤 Export Questions
             </button>
             <!-- Run Evaluators also likely belongs in Arena, but keeping global actions maybe? NO, it acts on current active run. -->
+            <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 0.5rem 0; width: 100%;">
+            <button class="btn btn-secondary" @click="openMyProfile(); showActionsModal = false">
+              👤 View my profile
+            </button>
+            <button class="btn btn-secondary" @click="showWorkspaceModal = true; showActionsModal = false">
+              🏢 Change Workspace
+            </button>
           </div>
         </div>
       </div>
