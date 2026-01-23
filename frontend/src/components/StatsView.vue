@@ -25,8 +25,11 @@
             @click="currentTab = 'charts'"
           >📉 Quality Charts</button>
         </div>
-        <button class="btn-refresh" @click="forceRefresh" :disabled="loading">
+        <button class="btn-refresh" @click="forceRefresh" :disabled="loading" style="margin-right: 8px;">
           🔄 {{ loading ? 'Loading...' : 'Refresh' }}
+        </button>
+        <button v-if="currentTab === 'workspace'" class="btn-danger-text" @click="clearHistory" :disabled="loading" style="border: 1px solid #e2e8f0; border-radius: 6px; padding: 0.5rem 1rem; cursor: pointer; background: white;">
+          🗑️ Clear All History
         </button>
       </div>
     </div>
@@ -255,6 +258,25 @@ const fetchStats = async (force = false) => {
 
 const forceRefresh = () => {
   fetchStats(true);
+};
+
+const clearHistory = async () => {
+  if (!props.workspaceId) return;
+  if (!confirm('Are you sure you want to PERMANENTLY delete all benchmark history for this workspace? This cannot be undone.')) return;
+
+  loading.value = true;
+  try {
+    await wsService.deleteAllRuns();
+    fetchStats(true);
+    // Notify store if needed, but syncState will run on fresh connect or we can trigger it
+    const { syncState } = useWSStore();
+    syncState();
+  } catch (err) {
+    console.error('Failed to clear history:', err);
+    alert('Failed to clear history: ' + err.message);
+  } finally {
+    loading.value = false;
+  }
 };
 
 const currentPage = ref(1);

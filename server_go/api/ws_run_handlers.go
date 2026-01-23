@@ -468,3 +468,114 @@ func (h *Hub) handleGetResultDetails(c *Connection, env models.Envelope) {
 
 	c.SendResponse(DataResultDetails, env.CorrelationID, models.ResultDetailsResponse{Results: results})
 }
+
+func (h *Hub) handleDeleteRun(c *Connection, env models.Envelope) {
+	if !c.IsAuthenticated {
+		c.SendError(env.CorrelationID, "not authenticated")
+		return
+	}
+
+	var payload struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		c.SendError(env.CorrelationID, "invalid payload")
+		return
+	}
+
+	runID, err := uuid.Parse(payload.RunID)
+	if err != nil {
+		c.SendError(env.CorrelationID, "invalid run_id")
+		return
+	}
+
+	var run models.Run
+	if err := h.db.First(&run, "id = ?", runID).Error; err != nil {
+		c.SendError(env.CorrelationID, "run not found")
+		return
+	}
+
+	// Verify ownership
+	if run.WorkspaceID != c.WorkspaceID {
+		c.SendError(env.CorrelationID, "workspace mismatch")
+		return
+	}
+
+	err = h.db.Transaction(func(tx *gorm.DB) error {
+		// 1. Delete Evaluations
+		if err := tx.Exec(`
+			DELETE FROM evaluations 
+			WHERE run_result_id IN (SELECT id FROM run_results WHERE run_id = ?)
+		`, runID).Error; err != nil {
+			return err
+		}
+
+		// 2. Delete RunResults
+		if err := tx.Where("run_id = ?", runID).Delete(&models.RunResult{}).Error; err != nil {
+			return err
+		}
+
+		// 3. Delete Run
+		if err := tx.Delete(&run).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		c.SendErrorWithDetails(env.CorrelationID, "failed to delete run", err.Error())
+		return
+	}
+
+	h.BroadcastEvent(run.WorkspaceID, "runs", "deleted", map[string]string{"id": runID.String()})
+	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "success"})
+}
+
+func (h *Hub) handleDeleteAllRuns(c *Connection, env models.Envelope) {
+	if !c.IsAuthenticated {
+		c.SendError(env.CorrelationID, "not authenticated")
+		return
+	}
+
+	if c.WorkspaceID == uuid.Nil {
+		c.SendError(env.CorrelationID, "no workspace selected")
+		return
+	}
+	err := h.db.Transaction(func(tx *gorm.DB) error {
+		// 1. Delete Evaluations for all runs in workspace
+		if err := tx.Exec(`
+			DELETE FROM evaluations 
+			WHERE run_result_id IN (
+				SELECT rr.id FROM run_results rr
+				JOIN runs r ON rr.run_id = r.id
+				WHERE r.workspace_id = ?
+			)
+		`, c.WorkspaceID).Error; err != nil {
+			return err
+		}
+
+		// 2. Delete RunResults
+		if err := tx.Exec(`
+			DELETE FROM run_results 
+			WHERE run_id IN (SELECT id FROM runs WHERE workspace_id = ?)
+		`, c.WorkspaceID).Error; err != nil {
+			return err
+		}
+
+		// 3. Delete Runs
+		if err := tx.Where("workspace_id = ?", c.WorkspaceID).Delete(&models.Run{}).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		c.SendErrorWithDetails(env.CorrelationID, "failed to delete history", err.Error())
+		return
+	}
+
+	h.BroadcastEvent(c.WorkspaceID, "runs", "all_deleted", nil)
+	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "success"})
+}

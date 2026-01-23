@@ -320,6 +320,14 @@ class WebSocketService {
         return this.request('REQ_GET_RUN_DETAILS', { run_id: runId })
     }
 
+    deleteRun(runId) {
+        return this.request('REQ_DELETE_RUN', { run_id: runId })
+    }
+
+    deleteAllRuns() {
+        return this.request('REQ_DELETE_ALL_RUNS', {})
+    }
+
     getRunLite(runId) {
         return this.request('REQ_GET_RUN_LITE', { run_id: runId })
     }
