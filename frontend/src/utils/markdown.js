@@ -34,7 +34,7 @@ const BASE64_IMAGE_PATTERN = /\(data:image\/(png|jpe?g|gif|webp|svg\+xml);base64
  */
 export const hasMarkdown = (text) => {
   if (!text || typeof text !== 'string') return false
-  
+
   const patterns = [
     /^#{1,6}\s/m,              // Headers
     /\*\*.*\*\*/,              // Bold
@@ -50,7 +50,7 @@ export const hasMarkdown = (text) => {
     /^---+$/m,                 // Horizontal rules
     /!\[.*\]\(.*\)/            // Images
   ]
-  
+
   return patterns.some(pattern => pattern.test(text))
 }
 
@@ -68,11 +68,11 @@ export const hasBase64Images = (text) => {
  */
 export const extractBase64Images = (text) => {
   if (!text || typeof text !== 'string') return []
-  
+
   const images = []
   const regex = new RegExp(BASE64_IMAGE_PATTERN.source, 'g')
   let match
-  
+
   while ((match = regex.exec(text)) !== null) {
     images.push({
       fullMatch: match[0],
@@ -81,7 +81,7 @@ export const extractBase64Images = (text) => {
       index: match.index
     })
   }
-  
+
   return images
 }
 
@@ -91,11 +91,16 @@ export const extractBase64Images = (text) => {
  */
 export const convertBase64ImagesToMarkdown = (text) => {
   if (!text || typeof text !== 'string') return text
-  
-  return text.replace(
-    BASE64_IMAGE_PATTERN,
-    (match, type, data) => `![image](data:image/${type};base64,${data})`
-  )
+
+  // Use a replacer function to check context
+  return text.replace(BASE64_IMAGE_PATTERN, (match, type, data, offset, string) => {
+    // Check if preceded by ']' which implies it's already a markdown image: ![alt](data...)
+    if (offset > 0 && string[offset - 1] === ']') {
+      return match // Return original string unchanged
+    }
+    // Otherwise wrap it
+    return `![image](data:image/${type};base64,${data})`
+  })
 }
 
 /**
@@ -106,13 +111,17 @@ export const renderMarkdown = (text) => {
   if (!text || typeof text !== 'string') {
     return ''
   }
-  
-  // Convert base64 images to markdown format first
-  const textWithImages = convertBase64ImagesToMarkdown(text)
-  
+
+  // Remove unsupported citations like <<9>>
+  // We do this before image processing to keep things clean
+  const textCleaned = text.replace(/<<\d+>>/g, '')
+
+  // Convert base64 images to markdown format first, but ONLY if not already in markdown format
+  const textWithImages = convertBase64ImagesToMarkdown(textCleaned)
+
   // Parse markdown to HTML
   const rawHtml = marked.parse(textWithImages)
-  
+
   // Sanitize HTML allowing data URIs for images
   return purify.sanitize(rawHtml, {
     ADD_ATTR: ['target', 'rel'],
@@ -144,7 +153,7 @@ export const processContent = (rawString) => {
   try {
     const trimmed = rawString.trim()
     if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
-        (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
       const parsed = JSON.parse(trimmed)
       const pretty = JSON.stringify(parsed, null, 2)
       working = '```json\n' + pretty + '\n```\n'
@@ -157,11 +166,11 @@ export const processContent = (rawString) => {
   const detectedMarkdown = forcedJsonMarkdown ? true : hasMarkdown(working)
   const detectedImages = hasBase64Images(working)
   const extractedImages = detectedImages ? extractBase64Images(working) : []
-  
+
   // If has markdown or images, render as HTML
   const shouldRender = detectedMarkdown || detectedImages
   const html = shouldRender ? renderMarkdown(working) : working
-  
+
   // Plain text version (remove markdown syntax and images)
   let plainText = working
   if (detectedImages) {
@@ -179,7 +188,7 @@ export const processContent = (rawString) => {
       .replace(/`(.+?)`/g, '$1')
       .replace(/```[\s\S]*?```/g, '')
   }
-  
+
   return {
     raw: rawString,
     hasMarkdown: detectedMarkdown,
