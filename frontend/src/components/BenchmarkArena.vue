@@ -28,7 +28,7 @@
       />
 
     <!-- Questions Panel -->
-    <div class="questions-panel">
+    <div v-if="!isZenMode" class="questions-panel">
       <div class="questions-header-top">
         <h3>📋 Question Sets</h3>
         <div class="questions-header-actions">
@@ -75,6 +75,9 @@
         </button>
         <button class="btn btn-secondary btn-pdf" @click="exportToPdf" :disabled="!currentRun">
           📄 PDF
+        </button>
+        <button class="btn btn-secondary" @click="$emit('toggle-zen', true)">
+          🧘 Zen
         </button>
         <button v-if="isRunning" class="btn btn-danger" @click="cancelBenchmark">
           ⛔ Cancel
@@ -385,8 +388,10 @@ const mergedAgents = computed(() => {
         config: override.config || a.config
       }
     }
-    // If not in overrides list but overrides exist for this QS, it should be disabled
-    return { ...a, enabled: false }
+    // If not in overrides list (e.g. new agent added to workspace after this QS was saved),
+    // respect its global enabled state instead of forcing it false.
+    // This fixed the "I added an agent but it's disabled" confusion.
+    return { ...a, enabled: a.enabled }
   })
 
   // console.log(`[Arena] mergedAgents: result enabled count:`, merged.filter(a => a.enabled).length)
@@ -456,7 +461,12 @@ function getQuestionCount(set) {
 
 function startRunSetup() {
   if (!currentQuestionSet.value) return
-  if (enabledAgents.value.length === 0) {
+  
+  const primaryAgents = enabledAgents.value.filter(a => a.provider_type !== 'evaluator')
+  
+  if (primaryAgents.length === 0) {
+    console.warn('[Arena] Start blocked. Enabled count:', enabledAgents.value.length, 'Primary count:', primaryAgents.length)
+    console.log('[Arena] Merged Agents dump:', mergedAgents.value)
     alert('Please enable at least one primary agent to start.')
     emit('configure-agents')
     return
@@ -1037,6 +1047,11 @@ function exportToPdf() {
     agentsRef: agentsArray,
     calculateStats: calculateStats
   })
+  
+  if (!pData) {
+    console.error('Export failed: No data returned')
+    return
+  }
   
   emit('trigger-print', {
     workspaceName: currentQuestionSet.value?.name || 'Benchmark',
