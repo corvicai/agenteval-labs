@@ -1,11 +1,16 @@
 package handlers
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"html"
 	"net/http"
+	"os"
+	"sync"
 	"time"
 
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"golang.org/x/crypto/bcrypt"
@@ -18,10 +23,38 @@ import (
 type AuthHandler struct {
 	db        *gorm.DB
 	jwtSecret string
+	webauthn  *webauthn.WebAuthn
+	sessions  map[string]*webauthn.SessionData
+	sessionMu sync.RWMutex
 }
 
 func NewAuthHandler(db *gorm.DB, jwtSecret string) *AuthHandler {
-	return &AuthHandler{db: db, jwtSecret: jwtSecret}
+	h := &AuthHandler{
+		db:        db,
+		jwtSecret: jwtSecret,
+		sessions:  make(map[string]*webauthn.SessionData),
+	}
+
+	rpID := os.Getenv("RP_ID")
+	if rpID == "" {
+		rpID = "localhost"
+	}
+
+	origin := os.Getenv("RP_ORIGIN")
+	if origin == "" {
+		origin = "http://localhost:3010"
+	}
+
+	w, err := webauthn.New(&webauthn.Config{
+		RPDisplayName: "Benchmarking Platform",
+		RPID:          rpID,
+		RPOrigins:     []string{origin},
+	})
+	if err == nil {
+		h.webauthn = w
+	}
+
+	return h
 }
 
 type RegisterRequest struct {
@@ -125,6 +158,9 @@ func (h *AuthHandler) Register(c echo.Context) error {
 		}
 	}
 
+	// Generate user ID early to use in Org creation if needed
+	userID := uuid.New()
+
 	// 2. Create Organization if it's a manager role creating a new one (or no orgID yet but manager selected)
 	if orgID == uuid.Nil && role == "manager" {
 		orgName := req.OrganizationName
@@ -133,8 +169,9 @@ func (h *AuthHandler) Register(c echo.Context) error {
 		}
 
 		org := models.Organization{
-			ID:   uuid.New(),
-			Name: orgName,
+			ID:              uuid.New(),
+			Name:            orgName,
+			CreatedByUserID: &userID, // Now userID exists
 		}
 		if err := tx.Create(&org).Error; err != nil {
 			tx.Rollback()
@@ -144,10 +181,15 @@ func (h *AuthHandler) Register(c echo.Context) error {
 	}
 
 	user := models.User{
-		ID:           uuid.New(),
-		Name:         req.Name,
-		Email:        req.Email,
-		PasswordHash: string(hashedPassword),
+		ID:              userID,
+		Name:            req.Name,
+		Email:           req.Email,
+		PasswordHash:    string(hashedPassword),
+		InvitedByUserID: &invite.CreatedBy, // Set if invite code was used
+	}
+
+	if req.InviteCode == "" {
+		user.InvitedByUserID = nil
 	}
 
 	if err := tx.Create(&user).Error; err != nil {
@@ -326,6 +368,10 @@ func (h *AuthHandler) Login(c echo.Context) error {
 		recordLog(&user.ID, "failed", "invalid_credentials", nil)
 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid credentials"})
 	}
+
+	// Update last login
+	now := time.Now()
+	h.db.Model(&user).Update("last_login_at", &now)
 
 	// Check if user is suspended globally
 	if user.IsSuspended {
@@ -1137,27 +1183,37 @@ func (h *AuthHandler) BootstrapAdmin(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to hash password"})
 	}
 
+	// Start transaction
+	tx := h.db.Begin()
+	if tx.Error != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to start transaction"})
+	}
+
+	userID := uuid.New()
+
 	org := models.Organization{
-		ID:   uuid.New(),
-		Name: req.OrganizationName,
+		ID:              uuid.New(),
+		Name:            req.OrganizationName,
+		CreatedByUserID: &userID, // Bootstrap admin created this org
 	}
 	if org.Name == "" {
 		org.Name = "Admin Organization"
 	}
-	if err := h.db.Create(&org).Error; err != nil {
-		fmt.Printf("Bootstrap Error (Org): %v\n", err)
+	if err := tx.Create(&org).Error; err != nil {
+		tx.Rollback()
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create organization"})
 	}
 
 	user := models.User{
-		ID:           uuid.New(),
+		ID:           userID,
 		Name:         req.Name,
 		Email:        req.Email,
 		PasswordHash: string(hashedPassword),
 		IsAdmin:      true,
 	}
 
-	if err := h.db.Create(&user).Error; err != nil {
+	if err := tx.Create(&user).Error; err != nil {
+		tx.Rollback()
 		fmt.Printf("Bootstrap Error (User): %v\n", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create admin"})
 	}
@@ -1169,7 +1225,8 @@ func (h *AuthHandler) BootstrapAdmin(c echo.Context) error {
 		Role:           "manager",
 		JoinedAt:       time.Now(),
 	}
-	if err := h.db.Create(&userOrg).Error; err != nil {
+	if err := tx.Create(&userOrg).Error; err != nil {
+		tx.Rollback()
 		fmt.Printf("Bootstrap Error (UserOrg): %v\n", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to link user to organization"})
 	}
@@ -1181,14 +1238,24 @@ func (h *AuthHandler) BootstrapAdmin(c echo.Context) error {
 		OrganizationID: org.ID,
 		Name:           "main",
 	}
-	h.db.Create(&workspace)
+	if err := tx.Create(&workspace).Error; err != nil {
+		tx.Rollback()
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create workspace"})
+	}
 
 	client := models.Client{
 		ID:          uuid.New(),
 		WorkspaceID: workspace.ID,
 		Name:        "Default Client",
 	}
-	h.db.Create(&client)
+	if err := tx.Create(&client).Error; err != nil {
+		tx.Rollback()
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create client"})
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to commit transaction"})
+	}
 
 	token, _ := middleware.GenerateToken(user.ID.String(), workspace.ID.String(), org.ID.String(), user.Email, h.jwtSecret, "")
 
@@ -1399,4 +1466,216 @@ func (h *AuthHandler) GetUserProfile(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, result)
+}
+
+// WebAuthn Login Begin
+func (h *AuthHandler) WebAuthnLoginBegin(c echo.Context) error {
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+	}
+
+	var user models.User
+	if err := h.db.Preload("Passkeys").First(&user, "email = ?", req.Email).Error; err != nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
+	}
+
+	options, sessionData, err := h.webauthn.BeginLogin(user)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to begin login: " + err.Error()})
+	}
+
+	sessionID := uuid.New().String()
+	h.sessionMu.Lock()
+	h.sessions[sessionID] = sessionData
+	h.sessionMu.Unlock()
+
+	// Store sessionID in a short-lived cookie
+	cookie := new(http.Cookie)
+	cookie.Name = "webauthn_session"
+	cookie.Value = sessionID
+	cookie.Expires = time.Now().Add(5 * time.Minute)
+	cookie.HttpOnly = true
+	cookie.Path = "/"
+	c.SetCookie(cookie)
+
+	return c.JSON(http.StatusOK, options)
+}
+
+// WebAuthn Login Finish
+func (h *AuthHandler) WebAuthnLoginFinish(c echo.Context) error {
+	var req struct {
+		Email    string          `json:"email"`
+		Response json.RawMessage `json:"response"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+	}
+
+	cookie, err := c.Cookie("webauthn_session")
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Session cookie missing"})
+	}
+
+	h.sessionMu.RLock()
+	sessionData, ok := h.sessions[cookie.Value]
+	h.sessionMu.RUnlock()
+
+	if !ok {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Session not found or expired"})
+	}
+
+	h.sessionMu.Lock()
+	delete(h.sessions, cookie.Value)
+	h.sessionMu.Unlock()
+
+	var user models.User
+	if err := h.db.Preload("Passkeys").First(&user, "email = ?", req.Email).Error; err != nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
+	}
+
+	fakeReq, _ := http.NewRequest("POST", "/", bytes.NewReader(req.Response))
+	fakeReq.Header.Set("Content-Type", "application/json")
+
+	credential, err := h.webauthn.FinishLogin(user, *sessionData, fakeReq)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Failed to finish login: " + err.Error()})
+	}
+
+	// Update sign count
+	for i, pk := range user.Passkeys {
+		if bytes.Equal(pk.CredentialID, credential.ID) {
+			h.db.Model(&user.Passkeys[i]).Updates(map[string]any{
+				"sign_count":      credential.Authenticator.SignCount,
+				"backup_eligible": credential.Flags.BackupEligible,
+				"backup_state":    credential.Flags.BackupState,
+			})
+			break
+		}
+	}
+
+	now := time.Now()
+	h.db.Model(&user).Update("last_login_at", &now)
+
+	var workspace models.Workspace
+	h.db.Preload("User").Preload("Organization").Where("user_id = ?", user.ID).First(&workspace)
+
+	token, _ := middleware.GenerateToken(
+		user.ID.String(),
+		workspace.ID.String(),
+		workspace.OrganizationID.String(),
+		user.Email,
+		h.jwtSecret,
+		"",
+	)
+
+	h.setTokenCookie(c, token)
+
+	return c.JSON(http.StatusOK, AuthResponse{
+		Token:     token,
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+		User:      h.mapUserToResponse(user),
+		Workspace: &workspace,
+	})
+}
+
+// WebAuthn Register Begin (Protected)
+func (h *AuthHandler) WebAuthnRegisterBegin(c echo.Context) error {
+	userID := middleware.GetUserID(c)
+	if userID == uuid.Nil {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Authentication required"})
+	}
+
+	var user models.User
+	if err := h.db.Preload("Passkeys").First(&user, "id = ?", userID).Error; err != nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
+	}
+
+	options, sessionData, err := h.webauthn.BeginRegistration(user)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to begin registration: " + err.Error()})
+	}
+
+	sessionID := uuid.New().String()
+	h.sessionMu.Lock()
+	h.sessions[sessionID] = sessionData
+	h.sessionMu.Unlock()
+
+	cookie := new(http.Cookie)
+	cookie.Name = "webauthn_reg_session"
+	cookie.Value = sessionID
+	cookie.Expires = time.Now().Add(5 * time.Minute)
+	cookie.HttpOnly = true
+	cookie.Path = "/"
+	c.SetCookie(cookie)
+
+	return c.JSON(http.StatusOK, options)
+}
+
+// WebAuthn Register Finish (Protected)
+func (h *AuthHandler) WebAuthnRegisterFinish(c echo.Context) error {
+	userID := middleware.GetUserID(c)
+	if userID == uuid.Nil {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Authentication required"})
+	}
+
+	var req struct {
+		Response json.RawMessage `json:"response"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+	}
+
+	cookie, err := c.Cookie("webauthn_reg_session")
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Session cookie missing"})
+	}
+
+	h.sessionMu.RLock()
+	sessionData, ok := h.sessions[cookie.Value]
+	h.sessionMu.RUnlock()
+
+	if !ok {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Session not found or expired"})
+	}
+
+	h.sessionMu.Lock()
+	delete(h.sessions, cookie.Value)
+	h.sessionMu.Unlock()
+
+	var user models.User
+	if err := h.db.Preload("Passkeys").First(&user, "id = ?", userID).Error; err != nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
+	}
+
+	fakeReq, _ := http.NewRequest("POST", "/", bytes.NewReader(req.Response))
+	fakeReq.Header.Set("Content-Type", "application/json")
+
+	credential, err := h.webauthn.FinishRegistration(user, *sessionData, fakeReq)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Failed to finish registration: " + err.Error()})
+	}
+
+	passkey := models.Passkey{
+		ID:             uuid.New(),
+		UserID:         user.ID,
+		CredentialID:   credential.ID,
+		PublicKey:      credential.PublicKey,
+		Attestation:    credential.AttestationType,
+		SignCount:      credential.Authenticator.SignCount,
+		BackupEligible: credential.Flags.BackupEligible,
+		BackupState:    credential.Flags.BackupState,
+		CreatedAt:      time.Now(),
+	}
+
+	if err := h.db.Create(&passkey).Error; err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to save passkey"})
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"success": true,
+		"message": "Passkey registered successfully",
+	})
 }

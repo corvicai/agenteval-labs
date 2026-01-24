@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"time"
 
 	"benchmarking-platform/internal/middleware"
@@ -190,6 +189,10 @@ func (h *Hub) handleWsLogin(c *Connection, env models.Envelope) {
 		return
 	}
 
+	// Update last login
+	now := time.Now()
+	h.db.Model(&user).Update("last_login_at", &now)
+
 	// Check if user is suspended
 	if user.IsSuspended {
 		recordLog(&user.ID, "failed", "user_suspended", nil)
@@ -288,7 +291,7 @@ func (h *Hub) handleWsLogin(c *Connection, env models.Envelope) {
 		workspace.ID.String(),
 		org.ID.String(),
 		user.Email,
-		os.Getenv("JWT_SECRET"),
+		h.jwtSecret,
 		"",
 	)
 

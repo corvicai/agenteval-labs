@@ -106,6 +106,20 @@
           <span v-if="loading" class="loading-spinner"></span>
           {{ isRegister ? 'Create Account' : 'Sign In' }}
         </button>
+
+        <div v-if="!isRegister && isWebAuthnSupported" class="passkey-section">
+          <div class="passkey-divider">
+            <span>or</span>
+          </div>
+          <button 
+            type="button" 
+            class="btn btn-secondary btn-passkey" 
+            @click="handlePasskeyLogin" 
+            :disabled="loading"
+          >
+            🔑 Sign in with Passkey
+          </button>
+        </div>
       </form>
 
       <div v-else-if="requiresInviteCode" class="join-org-view animate-in">
@@ -265,6 +279,7 @@ import { ref, onMounted, computed } from 'vue'
 import CorvicLogo from './CorvicLogo.vue'
 import { wsService } from '../services/websocket.js'
 import * as api from '../services/api.js'
+import { webauthnService } from '../services/webauthn.js'
 
 const emit = defineEmits(['login'])
 
@@ -299,6 +314,7 @@ const showBootstrapLink = ref(false)
 const showOrgSelector = ref(false)
 const requiresInviteCode = ref(false)
 const availableOrganizations = ref([])
+const isWebAuthnSupported = ref(webauthnService.isSupported())
 
 // Bootstrap admin state
 const showBootstrapModal = ref(false)
@@ -344,6 +360,33 @@ async function handleSubmit() {
       emit('login')
     }
   } catch (e) {
+    error.value = e.message
+  } finally {
+    loading.value = false
+  }
+}
+
+async function handlePasskeyLogin() {
+  if (!form.value.email) {
+    error.value = 'Please enter your email first to use passkey'
+    return
+  }
+  
+  error.value = ''
+  loading.value = true
+  
+  try {
+    const options = await api.webAuthnLoginBegin(form.value.email)
+    const assertion = await webauthnService.getAssertion(options)
+    const result = await api.webAuthnLoginFinish(form.value.email, assertion)
+    
+    // result.user, result.token, result.workspace are already saved in api.webAuthnLoginFinish
+    emit('login')
+  } catch (e) {
+    if (e.name === 'NotAllowedError') {
+       // User cancelled or timed out
+       return
+    }
     error.value = e.message
   } finally {
     loading.value = false
@@ -1076,5 +1119,48 @@ onMounted(async () => {
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+.passkey-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.passkey-divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.passkey-divider::before, 
+.passkey-divider::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.passkey-divider span {
+  padding: 0 0.75rem;
+}
+
+.btn-passkey {
+  border: 1px solid #e2e8f0;
+  background: white;
+  color: #374151;
+  font-weight: 600;
+  transition: all 0.2s;
+  padding: 0.875rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.btn-passkey:hover:not(:disabled) {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  transform: translateY(-1px);
 }
 </style>

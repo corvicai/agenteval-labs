@@ -45,7 +45,7 @@ func DefaultJWTConfig() JWTConfig {
 	}
 	return JWTConfig{
 		SecretKey:   secret,
-		SkipPaths:   []string{"/health", "/ws"},
+		SkipPaths:   []string{"/health", "/ws", "/auth/login", "/auth/register", "/auth/webauthn/login"},
 		TokenLookup: "header:Authorization",
 	}
 }
