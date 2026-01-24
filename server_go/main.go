@@ -25,17 +25,23 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
+		// Dev mode: Allow all
 		if os.Getenv("APP_ENV") != "production" {
-			return true // Allow all origins for development
+			return true
 		}
+		// Prod mode: Strict checking
 		origin := r.Header.Get("Origin")
-		allowed := os.Getenv("ALLOWED_ORIGINS")
-		if allowed == "" {
-			return false // Secure by default in production
+		allowedStr := os.Getenv("ALLOWED_ORIGINS")
+		if allowedStr == "" {
+			return false // Secure by default
 		}
-		// Simple check: allowed string contains the origin
-		// In a real scenario, you might want strict splitting or regex
-		return strings.Contains(allowed, origin)
+		allowedOrigins := strings.Split(allowedStr, ",")
+		for _, allowed := range allowedOrigins {
+			if strings.TrimSpace(allowed) == origin {
+				return true
+			}
+		}
+		return false
 	},
 }
 
@@ -54,10 +60,28 @@ func main() {
 	}
 	e.Use(echoMiddleware.Logger())
 	e.Use(echoMiddleware.Recover())
-	e.Use(echoMiddleware.CORSWithConfig(echoMiddleware.CORSConfig{
-		AllowOrigins: []string{"*"},
+
+	// CORS Configuration
+	corsConfig := echoMiddleware.CORSConfig{
 		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch},
-	}))
+	}
+
+	if os.Getenv("APP_ENV") != "production" {
+		log.Println("[SECURITY] Running in Development Mode - CORS: Allow All")
+		corsConfig.AllowOrigins = []string{"*"}
+	} else {
+		allowedStr := os.Getenv("ALLOWED_ORIGINS")
+		if allowedStr == "" {
+			log.Fatal("[SECURITY] FATAL: ALLOWED_ORIGINS environment variable must be set in production")
+		}
+		log.Printf("[SECURITY] Running in Production Mode - CORS Restricted to: %s", allowedStr)
+		origins := strings.Split(allowedStr, ",")
+		for i := range origins {
+			origins[i] = strings.TrimSpace(origins[i])
+		}
+		corsConfig.AllowOrigins = origins
+	}
+	e.Use(echoMiddleware.CORSWithConfig(corsConfig))
 
 	// Connect to database
 	database, err := db.Connect()
@@ -82,10 +106,20 @@ func main() {
 		}
 	}
 
+	// Auth secret initialization
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		if os.Getenv("APP_ENV") == "production" {
+			log.Fatal("[SECURITY] FATAL: JWT_SECRET environment variable must be set in production")
+		}
+		log.Println("[SECURITY] WARN: JWT_SECRET not set, using insecure default for development")
+		jwtSecret = "dev-secret-change-in-production"
+	}
+
 	engine := orchestrator.NewEngine(database, pythonURL, workerCount)
 
 	// Initialize WebSocket hub
-	hub := api.NewHub(database, engine)
+	hub := api.NewHub(database, engine, jwtSecret)
 	go hub.Run()
 
 	engine.SetEventCallback(func(workspaceID uuid.UUID, eventType string, correlationID string, payload any) {
@@ -95,11 +129,6 @@ func main() {
 
 	// Initialize handlers with WebSocket Hub support
 
-	// Auth handler
-	jwtSecret := os.Getenv("JWT_SECRET")
-	if jwtSecret == "" {
-		jwtSecret = "dev-secret-change-in-production"
-	}
 	// Secret is now stable across restarts
 	log.Printf("[AUTH] System session secret initialized (all previous sessions invalidated)")
 	authHandler := handlers.NewAuthHandler(database, jwtSecret)
@@ -118,6 +147,10 @@ func main() {
 	e.POST("/auth/bootstrap-admin", authHandler.BootstrapAdmin)
 	e.GET("/auth/check-admin", authHandler.CheckAdminExists)
 
+	// WebAuthn Public Flow
+	e.POST("/auth/webauthn/login/begin", authHandler.WebAuthnLoginBegin, authRateLimiter)
+	e.POST("/auth/webauthn/login/finish", authHandler.WebAuthnLoginFinish, authRateLimiter)
+
 	// Dev-only routes
 	if os.Getenv("APP_ENV") != "production" {
 		e.GET("/auth/managers", authHandler.GetManagers) // Dev Quick Login
@@ -135,6 +168,10 @@ func main() {
 	authProtected.POST("/auth/logout", authHandler.Logout)
 	authProtected.POST("/auth/join-organization", authHandler.JoinOrganization)
 	authProtected.POST("/auth/select-organization", authHandler.SelectOrganization)
+
+	// WebAuthn Protected Flow
+	authProtected.POST("/auth/webauthn/register/begin", authHandler.WebAuthnRegisterBegin)
+	authProtected.POST("/auth/webauthn/register/finish", authHandler.WebAuthnRegisterFinish)
 
 	// ========== WebSocket ==========
 	e.GET("/ws", func(c echo.Context) error {

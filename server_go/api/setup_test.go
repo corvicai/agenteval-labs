@@ -74,7 +74,7 @@ func generateTestToken(userID, workspaceID, orgID uuid.UUID) string {
 
 func sendWSRequest(t *testing.T, token string, msgType string, payload any) *models.Envelope {
 	// Create a temporary Hub with our test DB
-	hub := NewHub(db, nil) // Engine nil is fine for these tests
+	hub := NewHub(db, nil, "test-secret") // Engine nil is fine for these tests
 
 	// Create a mock connection
 	conn := &Connection{

@@ -14,6 +14,8 @@ type Organization struct {
 	AuditLogsEnabled bool               `gorm:"default:false" json:"audit_logs_enabled"`
 	ManagerID        *uuid.UUID         `gorm:"type:uuid" json:"manager_id"`
 	Manager          *User              `gorm:"foreignKey:ManagerID;constraint:false" json:"manager,omitempty"`
+	CreatedByUserID  *uuid.UUID         `gorm:"type:uuid" json:"created_by_user_id"`
+	CreatedBy        *User              `gorm:"foreignKey:CreatedByUserID;constraint:false" json:"created_by,omitempty"`
 	Users            []User             `gorm:"many2many:user_organizations;" json:"users,omitempty"`
 	UserOrgs         []UserOrganization `json:"user_orgs,omitempty"` // For role info
 	Workspaces       []Workspace        `json:"workspaces,omitempty"`
@@ -29,16 +31,32 @@ type UserOrganization struct {
 }
 
 type User struct {
-	ID            uuid.UUID          `gorm:"type:uuid;primaryKey" json:"id"`
-	Name          string             `gorm:"not null" json:"name"`
-	Email         string             `gorm:"unique;not null" json:"email"`
-	PasswordHash  string             `gorm:"not null" json:"-"` // Hide password hash
-	IsAdmin       bool               `gorm:"default:false" json:"is_admin"`
-	IsSuspended   bool               `gorm:"default:false" json:"is_suspended"`
-	Organizations []Organization     `gorm:"many2many:user_organizations;" json:"organizations,omitempty"`
-	UserOrgs      []UserOrganization `json:"user_orgs,omitempty"`
-	Workspaces    []Workspace        `json:"workspaces,omitempty"`
-	CreatedAt     time.Time          `json:"created_at"`
+	ID              uuid.UUID          `gorm:"type:uuid;primaryKey" json:"id"`
+	Name            string             `gorm:"not null" json:"name"`
+	Email           string             `gorm:"unique;not null" json:"email"`
+	PasswordHash    string             `gorm:"not null" json:"-"` // Hide password hash
+	IsAdmin         bool               `gorm:"default:false" json:"is_admin"`
+	IsSuspended     bool               `gorm:"default:false" json:"is_suspended"`
+	Organizations   []Organization     `gorm:"many2many:user_organizations;" json:"organizations,omitempty"`
+	UserOrgs        []UserOrganization `json:"user_orgs,omitempty"`
+	Workspaces      []Workspace        `json:"workspaces,omitempty"`
+	Passkeys        []Passkey          `json:"passkeys,omitempty"`
+	InvitedByUserID *uuid.UUID         `gorm:"type:uuid" json:"invited_by_user_id"`
+	InvitedBy       *User              `gorm:"foreignKey:InvitedByUserID;constraint:false" json:"invited_by,omitempty"`
+	LastLoginAt     *time.Time         `json:"last_login_at,omitempty"`
+	CreatedAt       time.Time          `json:"created_at"`
+}
+
+type Passkey struct {
+	ID             uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	UserID         uuid.UUID `gorm:"type:uuid;not null;index" json:"user_id"`
+	CredentialID   []byte    `gorm:"unique;not null" json:"credential_id"`
+	PublicKey      []byte    `gorm:"not null" json:"public_key"`
+	Attestation    string    `json:"attestation"`
+	SignCount      uint32    `json:"sign_count"`
+	BackupEligible bool      `json:"backup_eligible"`
+	BackupState    bool      `json:"backup_state"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 type Workspace struct {
