@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"math/rand"
 	"os"
 	"sync"
 	"time"
@@ -11,8 +12,6 @@ import (
 	"benchmarking-platform/internal/service"
 	"benchmarking-platform/models"
 	"benchmarking-platform/orchestrator"
-
-	"math/rand"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -76,6 +75,13 @@ const (
 	ReqCheckDBPerf             = "REQ_CHECK_DB_PERF"
 	ReqDeleteRun               = "REQ_DELETE_RUN"
 	ReqDeleteAllRuns           = "REQ_DELETE_ALL_RUNS"
+
+	// WebAuthn Request types
+	ReqWebAuthnRegisterBegin  = "REQ_WEBAUTHN_REGISTER_BEGIN"
+	ReqWebAuthnRegisterFinish = "REQ_WEBAUTHN_REGISTER_FINISH"
+	ReqWebAuthnLoginBegin     = "REQ_WEBAUTHN_LOGIN_BEGIN"
+	ReqWebAuthnLoginFinish    = "REQ_WEBAUTHN_LOGIN_FINISH"
+	ReqWebAuthnDeleteKey      = "REQ_WEBAUTHN_DELETE_KEY"
 
 	// Admin Request types
 	ReqAdminGetUsers         = "REQ_ADMIN_GET_USERS"
@@ -146,6 +152,10 @@ const (
 	DataManagerWorkspaces = "DATA_MANAGER_WORKSPACES"
 	DataManagerAgents     = "DATA_MANAGER_AGENTS"
 	DataManagerRuns       = "DATA_MANAGER_RUNS"
+
+	// WebAuthn Data types
+	DataWebAuthnRegisterOptions = "DATA_WEBAUTHN_REGISTER_OPTIONS"
+	DataWebAuthnLoginOptions    = "DATA_WEBAUTHN_LOGIN_OPTIONS"
 )
 
 // Message types - Events
@@ -175,6 +185,7 @@ type Hub struct {
 	statsService *service.StatsService
 	qsService    *service.QuestionSetService
 	agentService *service.AgentService
+	jwtSecret    string
 }
 
 // HubInterface defines the methods required for broadcasting (to avoid import cycles in handlers)
@@ -193,7 +204,7 @@ type Connection struct {
 	RemoteIP        string
 }
 
-func NewHub(db *gorm.DB, engine *orchestrator.Engine) *Hub {
+func NewHub(db *gorm.DB, engine *orchestrator.Engine, jwtSecret string) *Hub {
 	return &Hub{
 		connections:  make(map[uuid.UUID]*Connection),
 		register:     make(chan *Connection),
@@ -204,6 +215,7 @@ func NewHub(db *gorm.DB, engine *orchestrator.Engine) *Hub {
 		// qsService and agentService will be initialized if needed, or we can initialize them here
 		qsService:    &service.QuestionSetService{},
 		agentService: &service.AgentService{},
+		jwtSecret:    jwtSecret,
 	}
 }
 

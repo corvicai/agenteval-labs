@@ -17,7 +17,7 @@ import (
 )
 
 func TestHub_Registration(t *testing.T) {
-	hub := NewHub(nil, nil)
+	hub := NewHub(nil, nil, "test-secret")
 	go hub.Run()
 
 	t.Run("registers and unregisters connections", func(t *testing.T) {
@@ -46,7 +46,7 @@ func TestHub_Registration(t *testing.T) {
 }
 
 func TestHub_BroadcastToWorkspace(t *testing.T) {
-	hub := NewHub(nil, nil)
+	hub := NewHub(nil, nil, "test-secret")
 	go hub.Run()
 
 	workspaceA := uuid.New()
@@ -91,7 +91,7 @@ func TestHub_BroadcastToWorkspace(t *testing.T) {
 }
 
 func TestHub_SendEvent(t *testing.T) {
-	hub := NewHub(nil, nil)
+	hub := NewHub(nil, nil, "test-secret")
 	go hub.Run()
 
 	workspaceID := uuid.New()
@@ -131,7 +131,7 @@ func TestHub_SendEvent(t *testing.T) {
 }
 
 func TestWebSocket_Integration(t *testing.T) {
-	hub := NewHub(nil, nil)
+	hub := NewHub(nil, nil, "test-secret")
 	go hub.Run()
 
 	// Create test server

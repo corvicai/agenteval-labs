@@ -279,3 +279,17 @@ type OnlineStatusPayload struct {
 	Total   int         `json:"total"`
 	UserIDs []uuid.UUID `json:"user_ids"`
 }
+
+// WebAuthn Payloads
+type WebAuthnRegisterFinishPayload struct {
+	Response json.RawMessage `json:"response"`
+}
+
+type WebAuthnLoginBeginPayload struct {
+	Email string `json:"email"`
+}
+
+type WebAuthnLoginFinishPayload struct {
+	Email    string          `json:"email"`
+	Response json.RawMessage `json:"response"`
+}

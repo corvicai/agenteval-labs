@@ -52,8 +52,8 @@ class WebSocketService {
                 localStorage.setItem('impersonation_token', legacyToken)
             }
         } else if (!newToken && legacyToken) {
-            // Clear stale legacy token so we can rely on HttpOnly cookies.
-            localStorage.removeItem('token')
+            // Keep legacy token for Authorization header fallback in api.js
+            this.token = legacyToken
         }
 
         // If we are already connected with the SAME workspace and the SAME token, return
@@ -190,6 +190,7 @@ class WebSocketService {
             this._rejectPendingRequests('WebSocket disconnected')
             this.ws.close()
             this.ws = null
+            this.connectionPromise = null
         }
         this.workspaceId = null
         this.token = null
@@ -507,6 +508,27 @@ class WebSocketService {
 
     managerGenerateInvite(maxUses = 1) {
         return this.request('REQ_MANAGER_GENERATE_INVITE', { max_uses: maxUses })
+    }
+
+    // WebAuthn methods
+    webAuthnRegisterBegin() {
+        return this.request('REQ_WEBAUTHN_REGISTER_BEGIN', {})
+    }
+
+    webAuthnRegisterFinish(response) {
+        return this.request('REQ_WEBAUTHN_REGISTER_FINISH', { response })
+    }
+
+    webAuthnLoginBegin(email) {
+        return this.request('REQ_WEBAUTHN_LOGIN_BEGIN', { email })
+    }
+
+    webAuthnLoginFinish(email, response) {
+        return this.request('REQ_WEBAUTHN_LOGIN_FINISH', { email, response })
+    }
+
+    webAuthnDeleteKey(keyId) {
+        return this.request('REQ_WEBAUTHN_DELETE_KEY', { id: keyId })
     }
 
     joinOrganization(inviteCode) {
