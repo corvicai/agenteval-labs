@@ -84,6 +84,7 @@
                 <th>Workspaces</th>
                 <th>Role</th>
                 <th>Created</th>
+                <th>Last Login</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -116,6 +117,10 @@
                 </td>
                 <td>
                   <span class="date-badge">{{ formatDate(user.created_at) }}</span>
+                </td>
+                <td>
+                  <span v-if="user.last_login_at" class="date-badge">{{ formatDateTime(user.last_login_at) }}</span>
+                  <span v-else class="text-muted">Never</span>
                 </td>
                 <td class="actions-cell">
                   <div class="actions-wrapper">

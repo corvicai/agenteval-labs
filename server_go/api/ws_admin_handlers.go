@@ -81,6 +81,7 @@ func (h *Hub) handleAdminGetUsers(c *Connection, env models.Envelope) {
 			"is_admin":          u.IsAdmin,
 			"is_suspended":      u.IsSuspended,
 			"created_at":        u.CreatedAt,
+			"last_login_at":     u.LastLoginAt,
 			"workspaces":        u.Workspaces,
 			"org_names":         orgNames,
 			"organization_name": strings.Join(orgNames, ", "),
@@ -176,7 +177,7 @@ func (h *Hub) handleAdminGetUserProfile(c *Connection, env models.Envelope) {
 	}
 
 	var user models.User
-	if err := h.db.First(&user, "id = ?", userID).Error; err != nil {
+	if err := h.db.Preload("Passkeys").First(&user, "id = ?", userID).Error; err != nil {
 		c.SendError(env.CorrelationID, "user not found")
 		return
 	}
@@ -236,6 +237,8 @@ func (h *Hub) handleAdminGetUserProfile(c *Connection, env models.Envelope) {
 		"organizations": organizations,
 		"workspaces":    workspaces,
 		"created_at":    user.CreatedAt,
+		"last_login_at": user.LastLoginAt,
+		"passkeys":      user.Passkeys,
 	}
 
 	c.SendResponse(DataAdminUserProfile, env.CorrelationID, result)
@@ -458,9 +461,10 @@ func (h *Hub) handleAdminCreateOrg(c *Connection, env models.Envelope) {
 	}
 
 	org := models.Organization{
-		ID:        uuid.New(),
-		Name:      req.Name,
-		ManagerID: managerID,
+		ID:              uuid.New(),
+		Name:            req.Name,
+		ManagerID:       managerID,
+		CreatedByUserID: &c.UserID,
 	}
 
 	if err := h.db.Create(&org).Error; err != nil {

@@ -48,6 +48,11 @@
                 {{ userData.is_admin ? '👑 Admin' : '👤 User' }}
               </span>
             </div>
+            <div class="info-item">
+              <label>Last Login</label>
+              <span v-if="userData.last_login_at">{{ formatDate(userData.last_login_at) }}</span>
+              <span v-else class="text-muted">Never</span>
+            </div>
           </div>
         </section>
 
@@ -159,6 +164,45 @@
               <button type="button" class="btn btn-secondary" @click="isChangingPassword = false">Cancel</button>
             </div>
           </form>
+        </section>
+
+        <!-- Passkey Section -->
+        <section v-if="entityType === 'user'" class="profile-card passkeys-card">
+          <h3>🔑 Passkeys ({{ userData.passkeys?.length || 0 }})</h3>
+          <div v-if="userData.passkeys?.length" class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Created</th>
+                  <th>Sign Count</th>
+                  <th v-if="canEdit">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="pk in userData.passkeys" :key="pk.id">
+                  <td class="mono font-xs">{{ pk.id }}</td>
+                  <td>{{ formatDate(pk.created_at) }}</td>
+                  <td>{{ pk.sign_count }}</td>
+                  <td v-if="canEdit">
+                    <button class="btn-text-danger" @click="deletePasskey(pk.id)" :disabled="registeringPasskey">
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-else class="empty-state">No passkeys registered</p>
+          <div class="mt-4" v-if="canEdit">
+            <button class="btn btn-primary" @click="registerPasskey" :disabled="registeringPasskey || !isWebAuthnSupported">
+              <span v-if="!isWebAuthnSupported">WebAuthn not supported</span>
+              <span v-else>{{ registeringPasskey ? '⏳ Registering...' : '➕ Register New Passkey' }}</span>
+            </button>
+            <p v-if="!isWebAuthnSupported" class="text-xs text-muted mt-2">
+              Passkeys require HTTPS or localhost to work.
+            </p>
+          </div>
         </section>
       </div>
 
@@ -298,6 +342,7 @@
 
 <script>
 import { wsService } from '../services/websocket.js'
+import { webauthnService } from '../services/webauthn.js'
 
 export default {
   name: 'AdminProfileView',
@@ -323,7 +368,8 @@ export default {
         old: '',
         new: '',
         confirm: ''
-      }
+      },
+      registeringPasskey: false
     }
   },
   computed: {
@@ -341,6 +387,9 @@ export default {
       const user = JSON.parse(localStorage.getItem('user') || '{}');
       // Self or SuperAdmin can change
       return user.id === this.entityId || user.is_admin;
+    },
+    isWebAuthnSupported() {
+      return webauthnService.isSupported()
     },
     passwordStrength() {
       const p = this.passForm.new;
@@ -456,6 +505,34 @@ export default {
       } finally {
         this.saving = false;
       }
+    },
+    async registerPasskey() {
+      this.registeringPasskey = true
+      try {
+        const options = await api.webAuthnRegisterBegin()
+        const credential = await webauthnService.createCredential(options)
+        await api.webAuthnRegisterFinish(credential)
+        alert('Passkey registered successfully')
+        await this.loadProfile() // Refresh
+      } catch (e) {
+        if (e.name === 'NotAllowedError') {
+           // User cancelled
+           return
+        }
+        alert('Failed to register passkey: ' + e.message)
+      } finally {
+        this.registeringPasskey = false
+      }
+    },
+    async deletePasskey(keyId) {
+      if (!confirm('Are you sure you want to delete this passkey?')) return
+      try {
+        await wsService.webAuthnDeleteKey(keyId)
+        alert('Passkey deleted successfully')
+        await this.loadProfile() // Refresh
+      } catch (e) {
+        alert('Failed to delete passkey: ' + e.message)
+      }
     }
   }
 }
@@ -537,6 +614,19 @@ export default {
 }
 .btn-secondary:hover:not(:disabled) {
   background: #f1f5f9;
+}
+
+.btn-text-danger {
+  background: transparent;
+  border: none;
+  color: #ef4444;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0;
+  text-decoration: underline;
+}
+.btn-text-danger:hover {
+  color: #dc2626;
 }
 
 .profile-content {
