@@ -2,9 +2,14 @@ const API_BASE = '/api'
 
 // Helper for fetch with error handling
 export async function request(url, options = {}) {
+    const token = localStorage.getItem('token')
     const headers = {
         'Content-Type': 'application/json',
         ...options.headers
+    }
+
+    if (token) {
+        headers['Authorization'] = `Bearer ${token}`
     }
 
     const response = await fetch(`${API_BASE}${url}`, {
@@ -23,12 +28,15 @@ export async function request(url, options = {}) {
                     throw new Error(error.error || `Auth failed: ${response.status}`)
                 }
 
-                // Prevent multiple concurrent reloads
-                if (window.__isReloading) return
+                // Prevent multiple concurrent reloads/alerts
+                if (window.__isReloading) throw new Error('Authentication required (reloading...)')
                 window.__isReloading = true
 
                 // Unauthenticated - clear local state but cookies are handled by browser
                 await logout()
+
+                // Notify the user before redirecting (stops rapid reload loop)
+                alert('Your session has expired or is invalid. You will be redirected to the login page.')
 
                 // Final check to avoid double-loading login screen or infinite loops
                 window.location.href = '/'
@@ -48,8 +56,11 @@ export async function register(name, email, password, organization_name, invite_
         method: 'POST',
         body: JSON.stringify({ name, email, password, organization_name, invite_code, role })
     })
-    // Token is now in HttpOnly cookie
+    // Token is now in HttpOnly cookie AND localStorage
     localStorage.setItem('user', JSON.stringify(result.user))
+    if (result.token) {
+        localStorage.setItem('token', result.token)
+    }
     if (result.workspace) {
         localStorage.setItem('workspace', JSON.stringify(result.workspace))
     }
@@ -67,8 +78,11 @@ export async function login(email, password, organizationId = null) {
         return result
     }
 
-    // Token is now in HttpOnly cookie
+    // Token is now in HttpOnly cookie AND localStorage
     localStorage.setItem('user', JSON.stringify(result.user))
+    if (result.token) {
+        localStorage.setItem('token', result.token)
+    }
     if (result.workspace) {
         localStorage.setItem('workspace', JSON.stringify(result.workspace))
     }
@@ -82,6 +96,9 @@ export async function joinOrganization(inviteCode) {
     })
 
     localStorage.setItem('user', JSON.stringify(result.user))
+    if (result.token) {
+        localStorage.setItem('token', result.token)
+    }
     if (result.workspace) {
         localStorage.setItem('workspace', JSON.stringify(result.workspace))
     }
@@ -95,6 +112,9 @@ export async function selectOrganization(orgId) {
     })
 
     localStorage.setItem('user', JSON.stringify(result.user))
+    if (result.token) {
+        localStorage.setItem('token', result.token)
+    }
     if (result.workspace) {
         localStorage.setItem('workspace', JSON.stringify(result.workspace))
     }
@@ -152,4 +172,42 @@ export async function bootstrapAdmin(name, email, password, organization_name) {
 
 export async function checkAdminExists() {
     return await request('/auth/check-admin')
+}
+
+// WebAuthn Public Flow (REST)
+export async function webAuthnLoginBegin(email) {
+    return await request('/auth/webauthn/login/begin', {
+        method: 'POST',
+        body: JSON.stringify({ email })
+    })
+}
+
+export async function webAuthnLoginFinish(email, response) {
+    const result = await request('/auth/webauthn/login/finish', {
+        method: 'POST',
+        body: JSON.stringify({ email, response })
+    })
+
+    localStorage.setItem('user', JSON.stringify(result.user))
+    if (result.token) {
+        localStorage.setItem('token', result.token)
+    }
+    if (result.workspace) {
+        localStorage.setItem('workspace', JSON.stringify(result.workspace))
+    }
+    return result
+}
+
+// WebAuthn Protected Flow (REST)
+export async function webAuthnRegisterBegin() {
+    return await request('/auth/webauthn/register/begin', {
+        method: 'POST'
+    })
+}
+
+export async function webAuthnRegisterFinish(response) {
+    return await request('/auth/webauthn/register/finish', {
+        method: 'POST',
+        body: JSON.stringify({ response })
+    })
 }

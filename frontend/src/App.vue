@@ -693,8 +693,6 @@ async function handleLogout() {
   // We just need to clear global state.
   isManager.value = false
   wsService.disconnect()
-  // Also force reload to ensure no in-memory state lingers
-  window.location.reload()
 }
 
 // Methods
