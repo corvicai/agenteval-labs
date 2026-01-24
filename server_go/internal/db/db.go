@@ -300,6 +300,23 @@ func AutoMigrate(db *gorm.DB) error {
 		return fmt.Errorf("create invite_code_usages: %w", err)
 	}
 
+	// Passkeys table
+	if err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS passkeys (
+			id UUID PRIMARY KEY,
+			user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			credential_id BYTEA UNIQUE NOT NULL,
+			public_key BYTEA NOT NULL,
+			attestation VARCHAR(50),
+			sign_count BIGINT DEFAULT 0,
+			backup_eligible BOOLEAN DEFAULT false,
+			backup_state BOOLEAN DEFAULT false,
+			created_at TIMESTAMP DEFAULT NOW()
+		)
+	`).Error; err != nil {
+		return fmt.Errorf("create passkeys: %w", err)
+	}
+
 	// Apply manual migrations from file if needed (e.g. for new columns on existing tables)
 	// For now, let's explicitly add the column here to be safe and simple
 	if err := db.Exec(`ALTER TABLE runs ADD COLUMN IF NOT EXISTS total_tasks INTEGER DEFAULT 0;`).Error; err != nil {
@@ -308,6 +325,9 @@ func AutoMigrate(db *gorm.DB) error {
 	db.Exec(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;`)
 	db.Exec(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS audit_logs_enabled BOOLEAN DEFAULT false;`)
 	db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_suspended BOOLEAN DEFAULT false;`)
+	db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP;`)
+	db.Exec(`ALTER TABLE passkeys ADD COLUMN IF NOT EXISTS backup_eligible BOOLEAN DEFAULT false;`)
+	db.Exec(`ALTER TABLE passkeys ADD COLUMN IF NOT EXISTS backup_state BOOLEAN DEFAULT false;`)
 	db.Exec(`ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS rating_code INTEGER;`)
 	db.Exec(`ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS score INTEGER;`)
 	db.Exec(`
