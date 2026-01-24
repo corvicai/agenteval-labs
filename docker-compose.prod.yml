@@ -5,7 +5,7 @@ services:
     container_name: benchmarking-db-prod
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: prod_ext_secure_928172
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: benchmarking_prod
     volumes:
       - postgres_data_prod:/var/lib/postgresql/data
@@ -38,11 +38,11 @@ services:
       dockerfile: Dockerfile
     container_name: AgenteEval-api-prod
     environment:
-      - DATABASE_URL=host=db-prod user=postgres password=prod_ext_secure_928172 dbname=benchmarking_prod port=5432 sslmode=disable
+      - DATABASE_URL=host=db-prod user=postgres password=${POSTGRES_PASSWORD} dbname=benchmarking_prod port=5432 sslmode=disable
       - PYTHON_RUNNER_URL=http://python-runner-prod:3003
       - PORT=8080
       - APP_ENV=production
-      - JWT_SECRET=prod-secret-keep-consistent-82736152
+      - JWT_SECRET=${JWT_SECRET}
       - ALLOWED_ORIGINS=http://65.109.82.75,http://localhost,http://127.0.0.1
     depends_on:
       db-prod:
