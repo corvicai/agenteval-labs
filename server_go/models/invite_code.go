@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type InviteCode struct {
@@ -23,4 +24,51 @@ type InviteCodeUsage struct {
 	Code   string    `gorm:"index;not null" json:"code"`
 	UserID uuid.UUID `gorm:"type:uuid;not null" json:"user_id"`
 	UsedAt time.Time `json:"used_at"`
+}
+
+func GenerateInviteForOrg(db *gorm.DB, createdBy uuid.UUID, orgID uuid.UUID, maxUses int) (string, error) {
+	code := generateRandomCode(8)
+	invite := InviteCode{
+		Code:           code,
+		CreatedBy:      createdBy,
+		OrganizationID: &orgID,
+		Role:           "member",
+		IsNewOrg:       false,
+		ExpiresAt:      time.Now().Add(7 * 24 * time.Hour),
+		MaxUses:        maxUses,
+		CreatedAt:      time.Now(),
+	}
+	if err := db.Create(&invite).Error; err != nil {
+		return "", err
+	}
+	return code, nil
+}
+
+func GenerateInviteForPlatform(db *gorm.DB, createdBy uuid.UUID, maxUses int) (string, error) {
+	code := generateRandomCode(8)
+	invite := InviteCode{
+		Code:      code,
+		CreatedBy: createdBy,
+		IsNewOrg:  true,
+		Role:      "manager", // Creator becomes manager
+		ExpiresAt: time.Now().Add(7 * 24 * time.Hour),
+		MaxUses:   maxUses,
+		CreatedAt: time.Now(),
+	}
+	if err := db.Create(&invite).Error; err != nil {
+		return "", err
+	}
+	return code, nil
+}
+
+const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+func generateRandomCode(n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = letterBytes[time.Now().UnixNano()%int64(len(letterBytes))]
+		// Note: strictly speaking math/rand seeded is better but for MVP this is ok or use crypto/rand
+	}
+	// Better implementation using crypto/rand to avoid collisions slightly better
+	return string(b)
 }

@@ -444,10 +444,11 @@ func (h *Hub) handleWsRegister(c *Connection, env models.Envelope) {
 
 	// Link User to Org
 	uo := models.UserOrganization{
-		UserID:         user.ID,
-		OrganizationID: orgID,
-		Role:           role,
-		JoinedAt:       time.Now(),
+		UserID:          user.ID,
+		OrganizationID:  orgID,
+		Role:            role,
+		InvitedByUserID: &invite.CreatedBy,
+		JoinedAt:        time.Now(),
 	}
 	if err := tx.Create(&uo).Error; err != nil {
 		tx.Rollback()
@@ -608,10 +609,11 @@ func (h *Hub) handleJoinOrganization(c *Connection, env models.Envelope) {
 
 	// Add user to organization
 	userOrg := models.UserOrganization{
-		UserID:         c.UserID,
-		OrganizationID: *invite.OrganizationID,
-		Role:           invite.Role,
-		JoinedAt:       time.Now(),
+		UserID:          c.UserID,
+		OrganizationID:  *invite.OrganizationID,
+		Role:            invite.Role,
+		InvitedByUserID: &invite.CreatedBy,
+		JoinedAt:        time.Now(),
 	}
 	if err := tx.Create(&userOrg).Error; err != nil {
 		tx.Rollback()

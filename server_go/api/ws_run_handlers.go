@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 
@@ -31,6 +32,47 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 	for _, idStr := range payload.AgentIDs {
 		if id, err := uuid.Parse(idStr); err == nil {
 			agentIDs = append(agentIDs, id)
+		}
+	}
+
+	// Validate Agent Credentials
+	if len(agentIDs) > 0 {
+		var agents []models.Agent
+		if err := h.db.Find(&agents, agentIDs).Error; err != nil {
+			c.SendError(env.CorrelationID, "failed to load agents for validation")
+			return
+		}
+
+		for _, agent := range agents {
+			// Skip disabled agents? UI sends selected agents. We validate all selected.
+			var config map[string]interface{}
+			if err := json.Unmarshal(agent.Config, &config); err != nil {
+				continue
+			}
+
+			switch agent.ProviderType {
+			case "openai":
+				if v, ok := config["api_key"].(string); !ok || v == "" {
+					c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is missing credentials (API Key is required)", agent.Name))
+					return
+				}
+			case "evaluator":
+				if v, ok := config["api_key"].(string); !ok || v == "" {
+					c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is missing credentials (API Key is required)", agent.Name))
+					return
+				}
+			case "mcp":
+				mode, _ := config["mode"].(string)
+				if mode == "http" || mode == "" {
+					endpoint, _ := config["endpoint"].(string)
+					token, _ := config["token"].(string)
+					// User requested check for BOTH endpoint and token
+					if endpoint == "" || token == "" {
+						c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is missing credentials (Endpoint and Token are required)", agent.Name))
+						return
+					}
+				}
+			}
 		}
 	}
 

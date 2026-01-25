@@ -63,6 +63,7 @@ func AutoMigrate(db *gorm.DB) error {
 			is_suspended BOOLEAN DEFAULT false,
 			audit_logs_enabled BOOLEAN DEFAULT false,
 			manager_id UUID,
+			created_by_user_id UUID,
 			created_at TIMESTAMP,
 			updated_at TIMESTAMP
 		)
@@ -79,6 +80,8 @@ func AutoMigrate(db *gorm.DB) error {
 			password_hash VARCHAR(255) NOT NULL,
 			is_admin BOOLEAN DEFAULT false,
 			is_suspended BOOLEAN DEFAULT false,
+			invited_by_user_id UUID,
+			last_login_at TIMESTAMP,
 			created_at TIMESTAMP
 		)
 	`).Error; err != nil {
@@ -324,8 +327,10 @@ func AutoMigrate(db *gorm.DB) error {
 	}
 	db.Exec(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;`)
 	db.Exec(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS audit_logs_enabled BOOLEAN DEFAULT false;`)
+	db.Exec(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS created_by_user_id UUID;`)
 	db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_suspended BOOLEAN DEFAULT false;`)
 	db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP;`)
+	db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS invited_by_user_id UUID;`)
 	db.Exec(`ALTER TABLE passkeys ADD COLUMN IF NOT EXISTS backup_eligible BOOLEAN DEFAULT false;`)
 	db.Exec(`ALTER TABLE passkeys ADD COLUMN IF NOT EXISTS backup_state BOOLEAN DEFAULT false;`)
 	db.Exec(`ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS rating_code INTEGER;`)

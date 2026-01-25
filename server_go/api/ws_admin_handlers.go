@@ -29,9 +29,30 @@ func (h *Hub) handleAdminGetUsers(c *Connection, env models.Envelope) {
 		return
 	}
 
+	// Parse filter if present
+	var filter models.AdminFilterPayload
+	if len(env.Payload) > 0 {
+		json.Unmarshal(env.Payload, &filter)
+	}
+
+	query := h.db.Model(&models.User{})
+	if filter.TimeRange != "" {
+		threshold := time.Now()
+		switch filter.TimeRange {
+		case "24h":
+			threshold = threshold.Add(-24 * time.Hour)
+		case "3d":
+			threshold = threshold.Add(-3 * 24 * time.Hour)
+		case "1w":
+			threshold = threshold.Add(-7 * 24 * time.Hour)
+		}
+		query = query.Where("created_at >= ?", threshold)
+	}
+
 	var users []models.User
-	h.db.Preload("Workspaces.Organization").
+	query.Preload("Workspaces.Organization").
 		Preload("Workspaces.User").
+		Preload("InvitedBy").
 		Order("created_at DESC").
 		Find(&users)
 
@@ -40,9 +61,15 @@ func (h *Hub) handleAdminGetUsers(c *Connection, env models.Envelope) {
 	for i, u := range users {
 		var orgNames []string
 		var userOrgs []models.UserOrganization
+		var role string
+		var firstOrgID string
 		h.db.Preload("Organization").Where("user_id = ?", u.ID).Find(&userOrgs)
 		for _, uo := range userOrgs {
 			orgNames = append(orgNames, uo.Organization.Name)
+			if role == "" {
+				role = uo.Role
+				firstOrgID = uo.OrganizationID.String()
+			}
 		}
 
 		// Fix for zeroed User and Organization structs in Workspaces due to GORM recursion prevention
@@ -74,6 +101,11 @@ func (h *Hub) handleAdminGetUsers(c *Connection, env models.Envelope) {
 			}
 		}
 
+		inviterName := ""
+		if u.InvitedBy != nil {
+			inviterName = u.InvitedBy.Name
+		}
+
 		result[i] = map[string]any{
 			"id":                u.ID.String(),
 			"name":              u.Name,
@@ -85,6 +117,9 @@ func (h *Hub) handleAdminGetUsers(c *Connection, env models.Envelope) {
 			"workspaces":        u.Workspaces,
 			"org_names":         orgNames,
 			"organization_name": strings.Join(orgNames, ", "),
+			"organization_id":   firstOrgID,
+			"role":              role,
+			"invited_by_name":   inviterName, // Safe access
 		}
 	}
 
@@ -108,8 +143,28 @@ func (h *Hub) handleAdminGetOrganizations(c *Connection, env models.Envelope) {
 		return
 	}
 
+	// Parse filter if present
+	var filter models.AdminFilterPayload
+	if len(env.Payload) > 0 {
+		json.Unmarshal(env.Payload, &filter)
+	}
+
+	query := h.db.Model(&models.Organization{})
+	if filter.TimeRange != "" {
+		threshold := time.Now()
+		switch filter.TimeRange {
+		case "24h":
+			threshold = threshold.Add(-24 * time.Hour)
+		case "3d":
+			threshold = threshold.Add(-3 * 24 * time.Hour)
+		case "1w":
+			threshold = threshold.Add(-7 * 24 * time.Hour)
+		}
+		query = query.Where("created_at >= ?", threshold)
+	}
+
 	var orgs []models.Organization
-	h.db.Preload("Manager").Find(&orgs)
+	query.Preload("Manager").Order("created_at DESC").Find(&orgs)
 
 	result := make([]map[string]any, len(orgs))
 	for i, org := range orgs {
@@ -283,12 +338,15 @@ func (h *Hub) handleAdminGetOrgProfile(c *Connection, env models.Envelope) {
 	var users []map[string]any
 	h.db.Raw(`
 		SELECT u.id, u.name, u.email, u.is_admin, u.created_at, 
-		       COUNT(w.id) as workspace_count
+		       COUNT(w.id) as workspace_count,
+		       uo.role,
+		       inviter.name as invited_by_name
 		FROM users u
 		JOIN user_organizations uo ON uo.user_id = u.id
 		LEFT JOIN workspaces w ON w.user_id = u.id
+		LEFT JOIN users inviter ON uo.invited_by_user_id = inviter.id
 		WHERE uo.organization_id = ?
-		GROUP BY u.id
+		GROUP BY u.id, uo.role, inviter.name
 	`, orgID).Scan(&users)
 
 	// Get workspaces with counts
@@ -556,16 +614,31 @@ func (h *Hub) handleAdminUpdateUser(c *Connection, env models.Envelope) {
 		if orgID != uuid.Nil {
 			var userOrg models.UserOrganization
 			if err := h.db.Where("user_id = ?", targetUser.ID).First(&userOrg).Error; err == nil {
+				// Protect primary manager from role/org change by non-admin or even admin (must change primary manager first)
+				var targetOrg models.Organization
+				h.db.First(&targetOrg, "id = ?", userOrg.OrganizationID)
+				if targetOrg.ManagerID != nil && targetUser.ID == *targetOrg.ManagerID && (orgID != userOrg.OrganizationID || (req.Role != "" && req.Role != "manager")) {
+					c.SendError(env.CorrelationID, "cannot demote or move the primary manager. change primary manager first.")
+					return
+				}
+
 				userOrg.OrganizationID = orgID
+				if req.Role != "" {
+					userOrg.Role = req.Role
+				}
 				h.db.Save(&userOrg)
 			} else {
-				userOrg = models.UserOrganization{
+				// New link
+				role := req.Role
+				if role == "" {
+					role = "member"
+				}
+				h.db.Create(&models.UserOrganization{
 					UserID:         targetUser.ID,
 					OrganizationID: orgID,
-					Role:           "member",
+					Role:           role,
 					JoinedAt:       time.Now(),
-				}
-				h.db.Create(&userOrg)
+				})
 			}
 		}
 	}
@@ -749,41 +822,109 @@ func (h *Hub) handleAdminGenerateInvite(c *Connection, env models.Envelope) {
 		payload.MaxUses = 1
 	}
 
-	code := generateRandomCode(8) // Helper to generate alphanumeric code
-	invite := models.InviteCode{
-		Code:      code,
-		CreatedBy: c.UserID,
-		IsNewOrg:  payload.IsNewOrg,
-		ExpiresAt: time.Now().Add(24 * time.Hour * 7), // 7 days validity
-		MaxUses:   payload.MaxUses,
-		UseCount:  0,
-		CreatedAt: time.Now(),
+	// invite variable removed as it is now handled by helper functions
+
+	maxUses := payload.MaxUses
+	if maxUses <= 0 {
+		maxUses = 1
 	}
 
-	if !payload.IsNewOrg && payload.TargetOrgID != "" {
-		oid, err := uuid.Parse(payload.TargetOrgID)
-		if err != nil {
-			c.SendError(env.CorrelationID, "invalid target_org_id")
+	// 2. Case: Invite to Existing Org
+	orgID, err := uuid.Parse(payload.TargetOrgID)
+	if err == nil && orgID != uuid.Nil {
+		// Verify org exists
+		var org models.Organization
+		if err := h.db.First(&org, "id = ?", orgID).Error; err != nil {
+			c.SendError(env.CorrelationID, "organization not found")
 			return
 		}
-		invite.OrganizationID = &oid
-		invite.Role = "member"
-	} else if payload.IsNewOrg {
-		invite.Role = "manager" // Creator of new org becomes manager
-	} else {
-		c.SendError(env.CorrelationID, "must specify target_org_id or is_new_org")
+
+		inviteCodeStr, err := models.GenerateInviteForOrg(h.db, c.UserID, orgID, maxUses)
+		if err != nil {
+			c.SendError(env.CorrelationID, "failed to generate invite: "+err.Error())
+			return
+		}
+
+		c.SendResponse(DataResponse, env.CorrelationID, map[string]string{
+			"invite_code":     inviteCodeStr,
+			"organization_id": orgID.String(),
+		})
 		return
 	}
 
-	if err := h.db.Create(&invite).Error; err != nil {
-		c.SendError(env.CorrelationID, "failed to create invite: "+err.Error())
+	// 3. Case: Create NEW Org Invite (implicit)
+	// If IsNewOrg is true, we generate a special platform invite that triggers org creation
+	if payload.IsNewOrg {
+		// For now, we reuse the generic platform invite but perhaps we want to attach metadata
+		// simplified: just generate a platform invite
+		inviteCodeStr, err := models.GenerateInviteForPlatform(h.db, c.UserID, maxUses)
+		if err != nil {
+			c.SendError(env.CorrelationID, "failed to generate invite: "+err.Error())
+			return
+		}
+		c.SendResponse(DataResponse, env.CorrelationID, map[string]string{
+			"invite_code": inviteCodeStr,
+			"type":        "new_org",
+		})
 		return
 	}
 
-	c.SendResponse(DataResponse, env.CorrelationID, map[string]any{
-		"code":       invite.Code,
-		"expires_at": invite.ExpiresAt,
-	})
+	c.SendError(env.CorrelationID, "invalid request: specify target_org_id or set is_new_org=true")
+}
+
+func (h *Hub) handleAdminRemoveUserFromOrg(c *Connection, env models.Envelope) {
+	if !c.IsAuthenticated {
+		c.SendError(env.CorrelationID, "not authenticated")
+		return
+	}
+
+	// Check if current user is admin
+	var currentUser models.User
+	if err := h.db.First(&currentUser, "id = ?", c.UserID).Error; err != nil {
+		c.SendError(env.CorrelationID, "user not found")
+		return
+	}
+	if !currentUser.IsAdmin {
+		c.SendError(env.CorrelationID, "admin access required")
+		return
+	}
+
+	var req models.AdminRemoveUserFromOrgPayload
+	if err := json.Unmarshal([]byte(env.Payload), &req); err != nil {
+		c.SendError(env.CorrelationID, "invalid payload")
+		return
+	}
+
+	targetUserID, err := uuid.Parse(req.UserID)
+	if err != nil {
+		c.SendError(env.CorrelationID, "invalid user id")
+		return
+	}
+	targetOrgID, err := uuid.Parse(req.OrganizationID)
+	if err != nil {
+		c.SendError(env.CorrelationID, "invalid organization id")
+		return
+	}
+
+	// Validation: Cannot remove the Primary Manager
+	var org models.Organization
+	if err := h.db.First(&org, "id = ?", targetOrgID).Error; err != nil {
+		c.SendError(env.CorrelationID, "organization not found")
+		return
+	}
+
+	if org.ManagerID != nil && *org.ManagerID == targetUserID {
+		c.SendError(env.CorrelationID, "cannot remove the primary manager. change primary manager first.")
+		return
+	}
+
+	// Perform Deletion
+	if err := h.db.Where("user_id = ? AND organization_id = ?", targetUserID, targetOrgID).Delete(&models.UserOrganization{}).Error; err != nil {
+		c.SendError(env.CorrelationID, "failed to remove user from organization")
+		return
+	}
+
+	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "removed"})
 }
 
 func (h *Hub) handleAdminForceLogout(c *Connection, env models.Envelope) {
@@ -889,7 +1030,3 @@ func (h *Hub) handleAdminStartMaintenance(c *Connection, env models.Envelope) {
 }
 
 // Helper to avoid repetitive JSON marshaling error handling in this block
-func createJSONPayload(v any) json.RawMessage {
-	b, _ := json.Marshal(v)
-	return b
-}

@@ -118,15 +118,22 @@ func (h *Hub) handleManagerGetUsers(c *Connection, env models.Envelope) {
 		return
 	}
 
-	var users []models.UserResponse
+	type ManagerUserResponse struct {
+		models.UserResponse
+		InvitedByName string `json:"invited_by_name"`
+	}
+
+	var users []ManagerUserResponse
 	h.db.Raw(`
 		SELECT u.id, u.name, u.email, u.is_admin, u.is_suspended, u.created_at,
-		       COUNT(w.id) as workspace_count
+		       COUNT(w.id) as workspace_count,
+		       inviter.name as invited_by_name
 		FROM users u
 		JOIN user_organizations uo ON uo.user_id = u.id
 		LEFT JOIN workspaces w ON w.user_id = u.id
+		LEFT JOIN users inviter ON uo.invited_by_user_id = inviter.id
 		WHERE uo.organization_id = ?
-		GROUP BY u.id
+		GROUP BY u.id, inviter.name
 		ORDER BY u.name
 	`, orgID).Scan(&users)
 
@@ -253,6 +260,14 @@ func (h *Hub) handleManagerToggleUserSuspension(c *Connection, env models.Envelo
 		WHERE u.id = ? AND uo.organization_id = ?
 	`, targetUID, orgID).Scan(&user).Error; err != nil || user.ID == uuid.Nil {
 		c.SendError(env.CorrelationID, "user not found in your organization")
+		return
+	}
+
+	// Protect primary manager
+	var org models.Organization
+	h.db.First(&org, "id = ?", orgID)
+	if org.ManagerID != nil && targetUID == *org.ManagerID {
+		c.SendError(env.CorrelationID, "cannot suspend the primary manager")
 		return
 	}
 

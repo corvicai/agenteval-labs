@@ -122,6 +122,10 @@ type SyncStatePayload struct {
 	RecentRuns   []Run         `json:"recent_runs"`
 }
 
+type AdminFilterPayload struct {
+	TimeRange string `json:"time_range"`
+}
+
 type AdminProfilePayload struct {
 	ID string `json:"id"`
 }
@@ -148,6 +152,7 @@ type AdminUpdateUserPayload struct {
 	IsAdmin        *bool  `json:"is_admin,omitempty"`
 	IsSuspended    *bool  `json:"is_suspended,omitempty"`
 	OrganizationID string `json:"organization_id,omitempty"`
+	Role           string `json:"role,omitempty"`
 }
 
 type ChangePasswordPayload struct {
@@ -161,6 +166,11 @@ type AdminUpdateOrgPayload struct {
 	Name        string `json:"name,omitempty"`
 	ManagerID   string `json:"manager_id,omitempty"`
 	IsSuspended *bool  `json:"is_suspended,omitempty"`
+}
+
+type AdminRemoveUserFromOrgPayload struct {
+	UserID         string `json:"user_id"`
+	OrganizationID string `json:"organization_id"`
 }
 
 type AdminForceLogoutPayload struct {

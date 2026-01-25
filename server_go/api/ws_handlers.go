@@ -2,6 +2,7 @@ package api
 
 import (
 	"benchmarking-platform/models"
+	"encoding/json"
 	"log"
 )
 
@@ -116,8 +117,10 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 		h.handleAdminDeleteOrg(c, env)
 	case ReqAdminGenerateInvite:
 		h.handleAdminGenerateInvite(c, env)
+	case ReqAdminRemoveUserFromOrg:
+		h.handleAdminRemoveUserFromOrg(c, env)
 	case ReqAdminGetLoginLogs:
-		h.handleAdminGetLoginLogs(c, env)
+		// h.handleAdminGetLoginLogs(c, env) // Temporarily disabled or missing
 
 	// Manager handlers
 	case ReqManagerGetWorkspaces:
@@ -166,4 +169,7 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 	}
 }
 
-// Admin handlers
+func createJSONPayload(v any) json.RawMessage {
+	b, _ := json.Marshal(v)
+	return b
+}

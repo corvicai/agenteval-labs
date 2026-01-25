@@ -202,10 +202,11 @@ func (h *AuthHandler) Register(c echo.Context) error {
 	if orgID != uuid.Nil {
 		// Add to many-to-many junction
 		userOrg := models.UserOrganization{
-			UserID:         user.ID,
-			OrganizationID: orgID,
-			Role:           role,
-			JoinedAt:       time.Now(),
+			UserID:          user.ID,
+			OrganizationID:  orgID,
+			Role:            role,
+			InvitedByUserID: user.InvitedByUserID,
+			JoinedAt:        time.Now(),
 		}
 		if err := tx.Create(&userOrg).Error; err != nil {
 			tx.Rollback()
@@ -623,10 +624,11 @@ func (h *AuthHandler) JoinOrganization(c echo.Context) error {
 
 	// Add user to organization
 	userOrg := models.UserOrganization{
-		UserID:         userID,
-		OrganizationID: *invite.OrganizationID,
-		Role:           invite.Role,
-		JoinedAt:       time.Now(),
+		UserID:          userID,
+		OrganizationID:  *invite.OrganizationID,
+		Role:            invite.Role,
+		InvitedByUserID: &invite.CreatedBy,
+		JoinedAt:        time.Now(),
 	}
 	if err := tx.Create(&userOrg).Error; err != nil {
 		fmt.Printf("[DB ERROR] Failed to join user %s to org %s: %v\n", userID, *invite.OrganizationID, err)

@@ -23,11 +23,13 @@ type Organization struct {
 }
 
 type UserOrganization struct {
-	UserID         uuid.UUID    `gorm:"type:uuid;primaryKey" json:"user_id"`
-	OrganizationID uuid.UUID    `gorm:"type:uuid;primaryKey" json:"organization_id"`
-	Organization   Organization `json:"organization,omitempty"`
-	Role           string       `gorm:"not null;default:'member'" json:"role"` // 'member', 'manager'
-	JoinedAt       time.Time    `json:"joined_at"`
+	UserID          uuid.UUID    `gorm:"type:uuid;primaryKey" json:"user_id"`
+	OrganizationID  uuid.UUID    `gorm:"type:uuid;primaryKey" json:"organization_id"`
+	Organization    Organization `json:"organization,omitempty"`
+	Role            string       `gorm:"not null;default:'member'" json:"role"` // 'member', 'manager'
+	InvitedByUserID *uuid.UUID   `gorm:"type:uuid" json:"invited_by_user_id"`
+	InvitedBy       *User        `gorm:"foreignKey:InvitedByUserID;constraint:false" json:"invited_by,omitempty"`
+	JoinedAt        time.Time    `json:"joined_at"`
 }
 
 type User struct {
