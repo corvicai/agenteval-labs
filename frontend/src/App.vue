@@ -38,7 +38,13 @@
     <!-- Login Screen -->
     <LoginScreen v-if="!isAuthenticated" @login="onLogin" class="no-print" />
 
-    <!-- Main App (when authenticated) -->
+    <!-- Loading State while connection is establishing -->
+    <div v-else-if="!appReady" class="app-init-loader">
+      <div class="spinner"></div>
+      <p>Initializing connection...</p>
+    </div>
+
+    <!-- Main App (when authenticated and ready) -->
     <template v-else>
       <!-- Workspace Selector Modal -->
       <div v-if="showWorkspaceModal" 
@@ -249,6 +255,7 @@
         @close="viewMode = 'benchmarks'"
         @view-user-profile="handleViewUserProfile"
         @view-org-profile="handleViewOrgProfile"
+        @tab-change="val => adminTab = val"
       />
     </main>
 
@@ -257,7 +264,7 @@
       <AdminProfileView 
         :entity-type="profileEntityType"
         :entity-id="profileEntityId"
-        @back="currentUser?.is_admin ? viewMode = 'admin' : viewMode = 'benchmarks'"
+        @back="() => { currentUser?.is_admin ? viewMode = 'admin' : viewMode = 'benchmarks'; profileEntityType = null; profileEntityId = null; }"
         @view-user="handleViewUserProfile"
         @view-org="handleViewOrgProfile"
         @updated="handleProfileUpdated"
@@ -413,21 +420,41 @@ const currentUser = ref(api.getStoredUser())
 const currentOrgName = computed(() => {
   return currentUser.value?.organization?.name || currentUser.value?.organization_name || 'My Organization'
 })
-const viewMode = ref('benchmarks'); // 'benchmarks', 'admin', 'stats', 'admin-profile', 'manager'
+const viewMode = ref(localStorage.getItem('viewMode') || 'benchmarks'); // 'benchmarks', 'admin', 'stats', 'admin-profile', 'manager'
 const benchmarkMode = ref(localStorage.getItem('benchmarkMode') || 'runner') // 'history', 'runner'
 const isLoggingIn = ref(false) // Flag to prevent concurrent initialization during login
 
 // Manager state
 const isManager = ref(false)
+const appReady = ref(false)
 
 // Admin Profile View State
-const profileEntityType = ref(null) // 'user' or 'organization'
-const profileEntityId = ref(null)
+const profileEntityType = ref(localStorage.getItem('profileEntityType')) // 'user' or 'organization'
+const profileEntityId = ref(localStorage.getItem('profileEntityId'))
+const adminTab = ref(localStorage.getItem('adminTab') || 'users') // Remember which tab was active
 
 // Watch benchmarkMode to persist
 // Watch benchmarkMode to persist
 watch(benchmarkMode, (newVal) => {
   localStorage.setItem('benchmarkMode', newVal)
+})
+
+watch(viewMode, (newVal) => {
+  localStorage.setItem('viewMode', newVal)
+})
+
+watch(adminTab, (newVal) => {
+  localStorage.setItem('adminTab', newVal)
+})
+
+watch(profileEntityType, (newVal) => {
+  if (newVal) localStorage.setItem('profileEntityType', newVal)
+  else localStorage.removeItem('profileEntityType')
+})
+
+watch(profileEntityId, (newVal) => {
+  if (newVal) localStorage.setItem('profileEntityId', newVal)
+  else localStorage.removeItem('profileEntityId')
 })
 
 // State
@@ -629,25 +656,29 @@ async function onLogin() {
     isAuthenticated.value = true
     currentUser.value = api.getStoredUser()
     
-    // 0. Force disconnect any anonymous connection to ensure we reconnect with new auth cookie
-    wsService.disconnect()
+    // 0. Do NOT force disconnect blindly.
+    // If we are connected anonymously but now have a user/workspace context, connect() handles the switch gracefully.
 
-    // 1. Load Workspaces first to get valid context
+    // 1. Determine local workspace preference first
+    currentWorkspace.value = api.getStoredWorkspace()
+
+    // 2. Ensure we are connected with the correct scope (Authenticated)
+    if (currentWorkspace.value) {
+      await wsConnect(currentWorkspace.value.id)
+    } else {
+      // If no workspace selected yet, connect with just the token (User scope)
+      // Pass null as workspace ID, but ensure we trigger a reconnect to send the token
+      await wsConnect(null)
+    }
+
+    // 3. Load Workspaces
     await loadWorkspaces()
     
-    // 2. Determine and set current workspace
-    currentWorkspace.value = api.getStoredWorkspace()
-    
-    if (!currentWorkspace.value) {
-      showWorkspaceModal.value = true
-    } else {
-      // 3. Connect and sync via WebSocket
-      await wsConnect(currentWorkspace.value.id)
-      // loadQuestionSets is still needed for initial selection logic, but data comes from WS
+    if (currentWorkspace.value) {
       await loadQuestionSets()
-      
-      // Check for active run
-      // usage removed
+    } else {
+       // If no workspace, we should be connected anonymously (done by loadWorkspaces) -> No, we are authenticated user now.
+       showWorkspaceModal.value = true
     }
     
     // 4. Check status and fetch full profile (workspaces + orgs)
@@ -662,13 +693,13 @@ async function onLogin() {
     }
   } catch (err) {
     console.error('[App] Login initialization failed:', err)
-  } finally {
-    isLoggingIn.value = false
-  }
+    } finally {
+      appReady.value = true
+      isLoggingIn.value = false
+    }
 }
 
 // Admin Profile Navigation
-const adminTab = ref('users') // Remember which tab was active
 
 function handleViewUserProfile(userId) {
   adminTab.value = 'users'
@@ -709,16 +740,16 @@ async function loadWorkspaces() {
       return
     }
 
-    // Use WebSocket only for workspaces fetching
-    // If we already have a workspace selected, skip this anonymous connect 
-    // because we will connect with the workspace ID immediately after.
-    if (!wsService.isConnected() && !currentWorkspace.value) {
-      console.log('[App] Connecting anonymously for workspace discovery...')
-      await wsService.connect(null)
+    // Ensure we have a connection before fetching
+    if (!wsService.isConnected()) {
+      const targetWsId = currentWorkspace.value ? currentWorkspace.value.id : null
+      console.log(`[App] Connecting for workspaces (ID: ${targetWsId})...`)
+      await wsService.connect(targetWsId)
     }
+
     workspaces.value = (await wsService.getWorkspaces()) || []
     
-    // Validate current workspace - check if we have one saved in localStorage first
+    // Validate current workspace - check if we have one (logic continues...)
     const savedWs = localStorage.getItem('workspace')
     if (!currentWorkspace.value && savedWs) {
       try {
@@ -743,7 +774,7 @@ async function loadWorkspaces() {
   } catch (e) {
     const message = String(e?.message || e || '')
     workspacesError.value = message || 'Failed to load workspaces'
-    if (message.includes('Not authenticated') || message.includes('401')) {
+    if (message.toLowerCase().includes('not authenticated') || message.includes('401')) {
       handleLogout()
     }
   } finally {
@@ -1147,11 +1178,16 @@ onMounted(async () => {
       } catch (e) {
         console.log('Could not check manager status:', e)
       }
-    } catch (e) {
-      console.warn('[App] Session verification failed:', e)
-      handleLogout()
+      } catch (e) {
+        console.warn('[App] Session verification failed:', e)
+        handleLogout()
+      } finally {
+        appReady.value = true
+      }
+    } else {
+       // Not authenticated, but we should be ready to show login
+       appReady.value = true
     }
-  }
   
   // Custom handlers for UI-specific reactivity in App.vue
 

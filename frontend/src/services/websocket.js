@@ -53,7 +53,7 @@ class WebSocketService {
             }
         } else if (!newToken && legacyToken) {
             // Keep legacy token for Authorization header fallback in api.js
-            this.token = legacyToken
+            newToken = legacyToken
         }
 
         // If we are already connected with the SAME workspace and the SAME token, return
@@ -425,12 +425,12 @@ class WebSocketService {
     }
 
     // Admin methods
-    adminGetUsers() {
-        return this.request('REQ_ADMIN_GET_USERS', {})
+    adminGetUsers(filters = {}) {
+        return this.request('REQ_ADMIN_GET_USERS', filters)
     }
 
-    adminGetOrganizations() {
-        return this.request('REQ_ADMIN_GET_ORGANIZATIONS', {})
+    adminGetOrganizations(filters = {}) {
+        return this.request('REQ_ADMIN_GET_ORGANIZATIONS', filters)
     }
 
     adminGetUserProfile(userId) {
@@ -463,6 +463,10 @@ class WebSocketService {
 
     adminDeleteOrg(orgId) {
         return this.request('REQ_ADMIN_DELETE_ORG', { id: orgId })
+    }
+
+    adminRemoveUserFromOrg(userId, orgId) {
+        return this.request('REQ_ADMIN_REMOVE_USER_FROM_ORG', { user_id: userId, organization_id: orgId })
     }
 
     adminGetLoginLogs(limit = 100) {

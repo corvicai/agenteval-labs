@@ -20,6 +20,7 @@ export function getWebSocketHost() {
   const overridePort = env.VITE_WS_PORT || ''
   const hostname = window.location.hostname || ''
   const port = window.location.port || ''
+  const host = window.location.host || ''
   const isDev = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV
 
   // 1. Explicit override via environment variable
@@ -31,18 +32,22 @@ export function getWebSocketHost() {
   }
 
   // 2. Localhost or dev mode: include port for local testing
-  if (isLocalhost(hostname) || isDev) {
-    return window.location.host // includes port if present
+  // However, if we are on a public domain (not localhost) but in dev mode (npm run dev),
+  // we should check if the port is a standard one or the one we expect.
+  if (isLocalhost(hostname)) {
+    return host
   }
 
-  // 3. Production: standard ports (80/443) or no port
-  //    Use just hostname - browser will use default port for wss:// (443) or ws:// (80)
+  // 3. Special case: If we are on a subdomain but the port is 3010 or 5173, 
+  // it might be a tunnel or specific dev setup. 
+  // BUT the user reported "pending" on 5173 when accessing a public URL.
+  // If the port is standard (80/443), we definitely don't want to include it.
   if (!port || port === '80' || port === '443') {
-    return hostname // just hostname, no port
+    return hostname
   }
 
-  // 4. Non-standard port in production (edge case): include port
-  return window.location.host
+  // 4. Fallback: use the current host (includes port)
+  return host
 }
 
 /**
