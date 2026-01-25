@@ -43,7 +43,7 @@ services:
       - PORT=8080
       - APP_ENV=production
       - JWT_SECRET=${JWT_SECRET}
-      - ALLOWED_ORIGINS=http://65.109.82.75,http://localhost,http://127.0.0.1
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://65.109.82.75,http://localhost,http://127.0.0.1,https://corvic.micheldiz.com,http://corvic.micheldiz.com}
     depends_on:
       db-prod:
         condition: service_healthy

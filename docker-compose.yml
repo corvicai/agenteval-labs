@@ -87,11 +87,10 @@ services:
       - ./frontend:/app
       - /app/node_modules
     environment:
-      - VITE_API_URL=http://localhost:8080
-      # - VITE_HMR_HOST=corvic.micheldiz.com
+      - VITE_API_URL=http://go-api:8080
+      - VITE_HMR_CLIENT_PORT=443
+      - VITE_HMR_HOST=corvic.micheldiz.com
 
-    ports:
-      - "5173:5173"
     depends_on:
       - go-api
     networks:

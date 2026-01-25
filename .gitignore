@@ -37,3 +37,6 @@ frontend/dist
 node_modules
 .agent
 /diff_tool/
+.env.prod
+*.sql
+*.sql.gz

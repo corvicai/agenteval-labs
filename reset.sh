@@ -15,8 +15,9 @@ fi
 if [[ "$1" == "--prod" ]]; then
     echo "🚀 Updating Production (App & Proxy)..."
     (cd frontend && npm run build) && \
-    docker compose -f docker-compose.prod.yml up -d --build go-api-prod python-runner-prod && \
-    docker compose -f docker-compose.proxy.prod.yml up -d
+    docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build go-api-prod python-runner-prod && \
+    docker compose --env-file .env.prod -f docker-compose.proxy.prod.yml up -d && \
+    docker compose --env-file .env.prod -f docker-compose.proxy.prod.yml restart nginx
     exit 0
 fi
 

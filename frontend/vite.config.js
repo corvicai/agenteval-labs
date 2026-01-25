@@ -48,7 +48,7 @@ export default defineConfig(({ mode }) => {
             emptyOutDir: true
         },
         server: {
-            port: 5173,
+            port: 3010,
             host: true,
             allowedHosts: true,
             watch: {
@@ -69,7 +69,7 @@ export default defineConfig(({ mode }) => {
                 ? false
                 : {
                     clientPort: hmrPort,
-                    port: 5173,
+                    port: 3010,
                     host: hmrHost,
                     protocol: hmrProtocol
                 }

@@ -4,68 +4,116 @@ set -e
 # Configuration
 PROD_COMPOSE="docker-compose.prod.yml"
 DB_CONTAINER="benchmarking-db-prod"
-BACKUP_FILE="backup_pre_migration_$(date +%Y%m%d%H%M%S).sql.gz"
 ENV_FILE=".env.prod"
 
-echo "🔒 Secure Production Migration Tool"
-echo "==================================="
+echo "🔒 Secure Production Migration & DB Tool"
+echo "======================================="
 
-# 1. Check if production is running
-if [ -z "$(docker compose -f $PROD_COMPOSE ps -q db-prod)" ]; then
-    echo "⚠️  Production DB container ($DB_CONTAINER) is not running."
-    echo "    Attempting to start it temporarily for backup..."
-    docker compose -f $PROD_COMPOSE up -d db-prod
-    sleep 10 # Wait for DB to be ready
-fi
+# Helper functions
+get_db_pass() {
+    if [ -f "$ENV_FILE" ]; then
+        grep "POSTGRES_PASSWORD=" "$ENV_FILE" | cut -d'=' -f2
+    else
+        echo ""
+    fi
+}
 
-# 2. Backup Data
-echo "📦 Backing up current database..."
-docker exec $DB_CONTAINER pg_dump -U postgres benchmarking_prod | gzip > $BACKUP_FILE
-echo "✅ Backup saved to $BACKUP_FILE"
+backup() {
+    local backup_file="backup_$(date +%Y%m%d%H%M%S).sql.gz"
+    echo "📦 Creating backup..."
+    
+    # Detect Source
+    if [ "$(docker ps -q -f name=benchmarking-db-prod)" ]; then
+        SOURCE="benchmarking-db-prod"
+        DB_NAME="benchmarking_prod"
+    elif [ "$(docker ps -q -f name=benchmarking-db)" ]; then
+        SOURCE="benchmarking-db"
+        DB_NAME="benchmarking"
+    else
+        echo "❌ Error: No running database found."
+        exit 1
+    fi
 
-# 3. Generate New Secrets
-echo "🔑 Generating new strong secrets..."
-NEW_DB_PASS=$(openssl rand -base64 32 | tr -d '/+=' | cut -c 1-24)
-NEW_JWT_SECRET=$(openssl rand -base64 64 | tr -d '\n')
+    echo "   Source: $SOURCE"
+    docker exec "$SOURCE" pg_dump -U postgres --no-owner --no-privileges "$DB_NAME" | gzip > "$backup_file"
+    echo "✅ Backup saved to: $backup_file"
+    echo "$backup_file"
+}
 
-# 4. Create/Update .env.prod
-echo "📝 Updating $ENV_FILE..."
-cat > $ENV_FILE <<EOF
-# Production Secrets - Generated on $(date)
-POSTGRES_PASSWORD=$NEW_DB_PASS
-JWT_SECRET=$NEW_JWT_SECRET
-APP_ENV=production
-ALLOWED_ORIGINS=http://localhost
-EOF
-echo "✅ Secrets saved to $ENV_FILE"
+restore() {
+    local backup_file=$1
+    if [ ! -f "$backup_file" ]; then
+        echo "❌ Error: Backup file '$backup_file' not found."
+        exit 1
+    fi
 
-# 5. Destroy Old Infrastructure (including volume to reset DB password)
-echo "🔥 Tearing down old containers and volumes..."
-docker compose -f $PROD_COMPOSE down -v
-echo "✅ Old infrastructure removed."
+    local db_pass=$(get_db_pass)
+    echo "♻️  Restoring data to $DB_CONTAINER..."
+    
+    # Wait for DB to be ready
+    until docker exec "$DB_CONTAINER" pg_isready -U postgres > /dev/null 2>&1; do
+        echo "   ...waiting for database readiness"
+        sleep 2
+    done
 
-# 6. Start New Infrastructure
-echo "🚀 Starting new secure production environment..."
-# Load env vars from file for docker-compose
-export $(cat $ENV_FILE | xargs)
-docker compose -f $PROD_COMPOSE up -d db-prod
+    zcat "$backup_file" | docker exec -i -e PGPASSWORD="$db_pass" "$DB_CONTAINER" psql -U postgres -d benchmarking_prod
+    echo "✅ Restoration completed."
+}
 
-echo "⏳ Waiting for new database to initialize..."
-sleep 15 # Give Postgres time to init with new password
+verify_integrity() {
+    echo "� Verifying data integrity..."
+    local db_pass=$(get_db_pass)
+    local count=$(docker exec -i -e PGPASSWORD="$db_pass" "$DB_CONTAINER" psql -U postgres -d benchmarking_prod -t -c "SELECT COUNT(*) FROM users;" | xargs)
+    echo "   - Current User Count: $count"
+    return 0
+}
 
-# 7. Restore Data
-echo "♻️  Restoring data..."
-# We need to pass the NEW password to psql inside the container? 
-# Usually pg_isready is enough, but to restore we use standard input
-zcat $BACKUP_FILE | docker exec -i -e PGPASSWORD=$NEW_DB_PASS $DB_CONTAINER psql -U postgres benchmarking_prod
+# Main Logic
+ACTION=$1
 
-echo "✅ Data restored successfully."
-
-# 8. Start remaining services
-echo "🚀 Starting API and Runners..."
-docker compose -f $PROD_COMPOSE up -d --build
-
-echo "🎉 Migration Complete!"
-echo "   - New Secrets are in: $ENV_FILE"
-echo "   - Backup saved to:    $BACKUP_FILE"
-echo "   - API should be running securely now."
+case $ACTION in
+    "backup")
+        backup
+        ;;
+    "restore")
+        shift
+        restore "$1"
+        ;;
+    "test-cycle")
+        echo "🧪 Running Production Restoration Test Cycle..."
+        
+        # 1. Backup current
+        BACKUP_FILE=$(backup | tail -n 1)
+        
+        # 2. Count before
+        echo "📊 Pre-wipe verification:"
+        verify_integrity
+        
+        # 3. Wipe Prod
+        echo "🔥 Wiping production environment..."
+        docker compose -f "$PROD_COMPOSE" down -v
+        echo "✅ Volume wiped."
+        
+        # 4. Recreate
+        echo "🚀 Restarting empty production DB..."
+        export $(grep -v '^#' $ENV_FILE | xargs)
+        docker compose -f "$PROD_COMPOSE" up -d db-prod
+        
+        # 5. Restore
+        restore "$BACKUP_FILE"
+        
+        # 6. Verify
+        echo "📊 Post-restore verification:"
+        verify_integrity
+        
+        # 7. Restart App
+        echo "🚀 Restarting full production stack..."
+        docker compose -f "$PROD_COMPOSE" up -d
+        
+        echo "🎉 Test Cycle Complete. Production is back online with restored data."
+        ;;
+    *)
+        echo "Usage: $0 {backup|restore <file>|test-cycle}"
+        exit 1
+        ;;
+esac
