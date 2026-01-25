@@ -9,6 +9,13 @@
       @close="showSummary = false"
     />
 
+    <!-- Start Run Error Toast -->
+    <div v-if="startRunError" class="error-toast">
+      <span class="icon">⚠️</span>
+      <span class="message">{{ startRunError }}</span>
+      <button class="close-btn" @click="startRunError = null">×</button>
+    </div>
+
     <!-- Modals -->
     <RunSetupModal
        v-if="showRunSetup"
@@ -229,6 +236,7 @@ const selectedDetails = ref(null)
 const isDev = import.meta.env.DEV
 const latestRunCache = new Map()
 const pendingResultsBuffer = ref([])
+const startRunError = ref(null)
 
 // Init logic for Question Set
 watch(() => props.questionSets, (sets) => {
@@ -738,7 +746,13 @@ async function handleStartRun({ questionSetId, agentIds }) {
     }
   } catch (e) {
     console.error('Failed to start run:', e)
-    alert(e.message || 'Failed to start run. Please check your agent configurations.')
+    // Show toast error
+    startRunError.value = e.message || 'Failed to start run. Please check your agent configurations.'
+    // Auto-clear after 5 seconds
+    setTimeout(() => {
+      if (startRunError.value) startRunError.value = null
+    }, 5000)
+    
     isRunning.value = false
     pendingResultsBuffer.value = []
   }
@@ -1221,5 +1235,51 @@ defineExpose({
 
 /* Add any other specific styles from App.css if you want them scoped, 
    otherwise they inherit from global App.css */
+
+.error-toast {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #fee2e2;
+  color: #7f1d1d;
+  padding: 1rem 1.5rem;
+  border-radius: 8px;
+  border: 1px solid #fca5a5;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-weight: 500;
+  max-width: 90vw;
+  animation: slide-down 0.3s ease-out;
+}
+
+.error-toast .icon {
+  font-size: 1.25rem;
+}
+
+.error-toast .close-btn {
+  background: transparent;
+  border: none;
+  color: #991b1b;
+  font-size: 1.5rem;
+  line-height: 1;
+  padding: 0;
+  margin-left: 0.5rem;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.error-toast .close-btn:hover {
+  opacity: 1;
+}
+
+@keyframes slide-down {
+  from { top: -50px; opacity: 0; }
+  to { top: 20px; opacity: 1; }
+}
 
 </style>

@@ -69,6 +69,12 @@
               <option value="admin">Admins Only</option>
               <option value="user">Users Only</option>
             </select>
+            <select v-model="userTimeFilter" class="filter-select time-filter">
+              <option value="">All Time</option>
+              <option value="24h">Last 24 Hours</option>
+              <option value="3d">Last 3 Days</option>
+              <option value="1w">Last 1 Week</option>
+            </select>
           </div>
           <span v-if="filteredUsers.length !== users.length" class="filter-count">
             Showing {{ filteredUsers.length }} of {{ users.length }}
@@ -81,6 +87,7 @@
               <tr>
                 <th>User</th>
                 <th>Organization</th>
+                <th>Invited By</th>
                 <th>Workspaces</th>
                 <th>Role</th>
                 <th>Created</th>
@@ -103,6 +110,12 @@
                   <span class="org-badge">{{ user.organization_name || 'No Org' }}</span>
                 </td>
                 <td>
+                  <span v-if="user.invited_by_name" class="invited-by-badge">
+                    {{ user.invited_by_name }}
+                  </span>
+                  <span v-else class="text-muted small">System</span>
+                </td>
+                <td>
                   <div class="workspace-pills">
                     <span v-for="ws in user.workspaces" :key="ws.id" class="ws-pill">
                       {{ ws.name }}
@@ -111,9 +124,9 @@
                   </div>
                 </td>
                 <td>
-                  <span class="role-badge" :class="{ admin: user.is_admin }">
-                    {{ user.is_admin ? 'Admin' : 'User' }}
-                  </span>
+                  <span v-if="user.is_admin" class="role-badge admin">Admin</span>
+                  <span v-else-if="user.role === 'manager'" class="role-badge manager">Manager</span>
+                  <span v-else class="role-badge member">Member</span>
                 </td>
                 <td>
                   <span class="date-badge">{{ formatDate(user.created_at) }}</span>
@@ -180,6 +193,12 @@
               <option value="active">Active Only</option>
               <option value="suspended">Suspended Only</option>
             </select>
+            <select v-model="orgTimeFilter" class="filter-select time-filter">
+              <option value="">All Time</option>
+              <option value="24h">Last 24 Hours</option>
+              <option value="3d">Last 3 Days</option>
+              <option value="1w">Last 1 Week</option>
+            </select>
           </div>
           <span v-if="filteredOrganizations.length !== organizations.length" class="filter-count">
             Showing {{ filteredOrganizations.length }} of {{ organizations.length }}
@@ -207,7 +226,10 @@
                   </div>
                 </td>
                 <td>
-                  <span class="org-badge">{{ org.manager_name || 'No Manager' }}</span>
+                  <div class="manager-info">
+                    <span class="org-badge">{{ org.manager_name || 'No Manager' }}</span>
+                    <span v-if="org.manager_id" class="primary-badge" title="Primary Manager">⭐</span>
+                  </div>
                 </td>
                 <td>
                   <span class="workspace-badge">{{ org.user_count || 0 }} Users</span>
@@ -325,6 +347,13 @@
               <span>Grant Administrator Privileges</span>
             </label>
           </div>
+          <div v-if="formData.organization_id" class="form-group">
+            <label>Organization Role</label>
+            <select v-model="formData.role" class="form-select">
+              <option value="member">Member</option>
+              <option value="manager">Manager</option>
+            </select>
+          </div>
           <div v-if="formError" class="modal-error">{{ formError }}</div>
           <div class="modal-actions">
             <button type="button" class="btn btn-secondary" @click="closeModals">Cancel</button>
@@ -351,12 +380,29 @@
           </div>
           <div class="form-group">
             <label>Manager (Organization Admin)</label>
+            <div class="manager-selection-filters">
+              <input 
+                v-model="managerSearch" 
+                type="text" 
+                placeholder="Search manager..." 
+                class="form-input-small"
+              />
+              <select v-model="managerTimeFilter" class="form-select-small">
+                <option value="">Any Time</option>
+                <option value="24h">Joined < 24h</option>
+                <option value="3d">Joined < 3d</option>
+                <option value="1w">Joined < 1w</option>
+              </select>
+            </div>
             <select v-model="orgForm.manager_id" class="form-select">
               <option :value="null">No Manager</option>
-              <option v-for="user in users" :key="user.id" :value="user.id">
+              <option v-for="user in filteredManagers" :key="user.id" :value="user.id">
                 {{ user.name }} ({{ user.email }})
               </option>
             </select>
+            <div v-if="filteredManagers.length === 0 && managerSearch" class="form-help text-danger">
+              No users match your criteria.
+            </div>
           </div>
           <div v-if="formError" class="modal-error">{{ formError }}</div>
           <div class="modal-actions">
@@ -396,7 +442,7 @@ const props = defineProps({
 
 const { state: wsState } = useWSStore()
 
-const emit = defineEmits(['close', 'view-user-profile', 'view-org-profile'])
+const emit = defineEmits(['close', 'view-user-profile', 'view-org-profile', 'tab-change'])
 
 const currentTab = ref(props.initialTab);
 const users = ref([]);
@@ -419,8 +465,12 @@ const editingOrg = ref(null)
 const userSearch = ref('')
 const userOrgFilter = ref('')
 const userRoleFilter = ref('')
+const userTimeFilter = ref('') // New
 const orgSearch = ref('')
 const orgStatusFilter = ref('')
+const orgTimeFilter = ref('') // New
+const managerSearch = ref('') // New
+const managerTimeFilter = ref('') // New
 
 // Computed: Filtered Users
 const filteredUsers = computed(() => {
@@ -459,6 +509,30 @@ const filteredOrganizations = computed(() => {
       (orgStatusFilter.value === 'suspended' && org.is_suspended)
     
     return matchesSearch && matchesStatus
+  })
+})
+
+const filteredManagers = computed(() => {
+  return users.value.filter(user => {
+    const searchLower = managerSearch.value.toLowerCase()
+    const matchesSearch = !managerSearch.value || 
+      user.name?.toLowerCase().includes(searchLower) ||
+      user.email?.toLowerCase().includes(searchLower)
+    
+    // Time filter for managers can be handled if we want to filter the existing users list
+    // However, if users are already filtered by the main userTimeFilter, we might miss some.
+    // So usually managers list should be separate or we accept the limitation.
+    // The user asked to "apply similar filters to the manager selection dropdown".
+    // I'll assume they want to filter the current 'users' list by time as well if selected.
+    
+    if (!managerTimeFilter.value) return matchesSearch
+
+    const threshold = new Date()
+    if (managerTimeFilter.value === '24h') threshold.setHours(threshold.getHours() - 24)
+    else if (managerTimeFilter.value === '3d') threshold.setDate(threshold.getDate() - 3)
+    else if (managerTimeFilter.value === '1w') threshold.setDate(threshold.getDate() - 7)
+
+    return matchesSearch && new Date(user.created_at) >= threshold
   })
 })
 
@@ -516,8 +590,8 @@ async function loadData() {
   try {
     // Use WebSocket for admin data
     const [usersList, orgsList] = await Promise.all([
-      wsService.adminGetUsers(),
-      wsService.adminGetOrganizations()
+      wsService.adminGetUsers({ time_range: userTimeFilter.value }),
+      wsService.adminGetOrganizations({ time_range: orgTimeFilter.value })
     ])
     users.value = usersList
     organizations.value = orgsList
@@ -544,14 +618,20 @@ async function loadLoginLogs() {
 
 function editUser(user) {
   editingUserId.value = user.id
-  formData.value = { name: user.name, email: user.email, is_admin: user.is_admin }
+  formData.value = { 
+    name: user.name, 
+    email: user.email, 
+    is_admin: user.is_admin,
+    role: user.role || 'member',
+    organization_id: user.organization_id // might need to ensure this is set in handleAdminGetUsers
+  }
   showEditModal.value = true
 }
 
 function closeModals() {
   showCreateModal.value = false
   showEditModal.value = false
-  formData.value = { name: '', email: '', password: '', is_admin: false }
+  formData.value = { name: '', email: '', password: '', is_admin: false, role: 'member', organization_id: '' }
   formError.value = ''
   editingUserId.value = null
 }
@@ -716,9 +796,18 @@ onMounted(() => {
 // Watch tab change to load data
 import { watch } from 'vue'
 watch(currentTab, (newTab) => {
+  emit('tab-change', newTab)
   if (newTab === 'logs' && loginLogs.value.length === 0) {
     loadLoginLogs()
   }
+})
+
+watch(userTimeFilter, () => {
+  loadData()
+})
+
+watch(orgTimeFilter, () => {
+  loadData()
 })
 </script>
 
@@ -1271,4 +1360,64 @@ td {
   max-width: 200px;
 }
 
+.role-badge.manager {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.role-badge.member {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.invited-by-badge {
+  font-size: 11px;
+  background: #fef9c3;
+  color: #854d0e;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.manager-info {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.primary-badge {
+  font-size: 14px;
+  color: #fbbf24;
+  cursor: help;
+}
+
+.manager-selection-filters {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.form-input-small, .form-select-small {
+  padding: 6px 10px !important;
+  font-size: 0.85rem !important;
+  border-radius: 6px !important;
+  height: auto !important;
+}
+
+.form-input-small {
+  flex: 2;
+}
+
+.form-select-small {
+  flex: 1;
+}
+
+.text-danger {
+  color: #ef4444;
+}
+
+.form-help {
+  font-size: 0.8rem;
+  margin-top: 4px;
+}
 </style>

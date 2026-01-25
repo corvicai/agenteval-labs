@@ -217,7 +217,8 @@
             </div>
             <div class="info-item">
               <label>Name</label>
-              <span class="value-primary">{{ orgData.name }}</span>
+              <input v-if="isEditing" v-model="editForm.name" class="profile-input" />
+              <span v-else class="value-primary">{{ orgData.name }}</span>
             </div>
             <div class="info-item">
               <label>Status</label>
@@ -264,6 +265,7 @@
                   <th>Role</th>
                   <th>Workspaces</th>
                   <th>Joined</th>
+                  <th v-if="canEdit">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -280,6 +282,15 @@
                   </td>
                   <td>{{ user.workspace_count || 0 }}</td>
                   <td>{{ formatDate(user.created_at) }}</td>
+                  <td v-if="canEdit">
+                     <button 
+                       v-if="user.id !== orgData.manager_id" 
+                       class="btn-text-danger" 
+                       @click.stop="confirmRemoveUser(user)"
+                     >
+                       Remove
+                     </button>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -378,9 +389,15 @@ export default {
       return user.is_admin;
     },
     canEdit() {
-      if (this.entityType !== 'user') return this.isAdmin;
       const user = JSON.parse(localStorage.getItem('user') || '{}');
-      return user.is_admin || user.id === this.entityId;
+      if (this.entityType === 'user') {
+        return user.is_admin || user.id === this.entityId;
+      } else {
+        // Org: Admin or Manager of that org
+        // We need orgData to be loaded to know the manager_id
+        if (!this.orgData) return false;
+        return user.is_admin || this.orgData.manager_id === user.id;
+      }
     },
     canChangePassword() {
       if (this.entityType !== 'user') return false;
@@ -452,8 +469,12 @@ export default {
       this.$emit('view-org', orgId)
     },
     startEditing() {
-      this.editForm.name = this.userData.name
-      this.editForm.email = this.userData.email
+      if (this.entityType === 'user') {
+        this.editForm.name = this.userData.name
+        this.editForm.email = this.userData.email
+      } else {
+        this.editForm.name = this.orgData.name
+      }
       this.isEditing = true
     },
     cancelEditing() {
@@ -462,21 +483,31 @@ export default {
     async saveProfile() {
       this.saving = true
       try {
-        const result = await wsService.adminUpdateUser({
-          id: this.entityId,
-          name: this.editForm.name,
-          email: this.editForm.email
-        })
-        this.userData = { ...this.userData, ...result }
-        this.isEditing = false
-        
-        // If updating self, update localStorage
-        const localUser = JSON.parse(localStorage.getItem('user') || '{}')
-        if (localUser.id === this.entityId) {
-          localStorage.setItem('user', JSON.stringify({ ...localUser, name: result.name, email: result.email }))
-          this.$emit('updated', result)
+        if (this.entityType === 'user') {
+          const result = await wsService.adminUpdateUser({
+            id: this.entityId,
+            name: this.editForm.name,
+            email: this.editForm.email
+          })
+          this.userData = { ...this.userData, ...result }
+          
+          // If updating self, update localStorage
+          const localUser = JSON.parse(localStorage.getItem('user') || '{}')
+          if (localUser.id === this.entityId) {
+            localStorage.setItem('user', JSON.stringify({ ...localUser, name: result.name, email: result.email }))
+            this.$emit('updated', result)
+          }
+        } else {
+          // Organization update
+          const result = await wsService.adminUpdateOrg({
+            id: this.entityId,
+            name: this.editForm.name
+          })
+          // Result might be the full org object or just fields. existing handler returns full object usually.
+          this.orgData = { ...this.orgData, ...result }
         }
-        
+
+        this.isEditing = false
         alert('Profile updated successfully')
       } catch (e) {
         alert('Failed to update profile: ' + e.message)
@@ -532,6 +563,20 @@ export default {
         await this.loadProfile() // Refresh
       } catch (e) {
         alert('Failed to delete passkey: ' + e.message)
+      }
+    },
+    confirmRemoveUser(user) {
+      if (confirm(`Are you sure you want to remove ${user.name} from this organization? Workspaces owned by this user might become inaccessible.`)) {
+        this.removeUserFromOrg(user.id)
+      }
+    },
+    async removeUserFromOrg(userId) {
+      try {
+        await wsService.adminRemoveUserFromOrg(userId, this.entityId)
+        alert('User removed from organization')
+        await this.loadProfile() // Refresh list
+      } catch (e) {
+        alert('Failed to remove user: ' + e.message)
       }
     }
   }

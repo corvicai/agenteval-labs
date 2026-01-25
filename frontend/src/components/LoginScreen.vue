@@ -541,13 +541,14 @@ onMounted(async () => {
 .login-container {
   min-height: 100vh;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   padding: 1rem;
+  overflow-y: auto; /* Allow scrolling on small screens */
 }
 
 .login-card {
+  margin: auto; /* Vertically and horizontally center if space allows, otherwise scroll safe */
   background: white;
   border-radius: 16px;
   padding: 2rem;
