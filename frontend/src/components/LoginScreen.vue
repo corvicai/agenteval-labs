@@ -7,120 +7,144 @@
         <p class="login-subtitle">{{ isRegister ? 'Create your account' : 'Sign in to continue' }}</p>
       </div>
 
-      <form v-if="!showOrgSelector" @submit.prevent="handleSubmit" class="login-form">
-        <div v-if="error" class="error-message">{{ error }}</div>
+      <div v-if="!showOrgSelector && !requiresInviteCode" class="login-auth-phase">
+        <div class="social-login-section animate-in">
+          <div v-if="socialError" class="error-message">
+            <div>{{ socialError.message }}</div>
+            <div v-if="socialError.email" class="error-meta">Email: {{ socialError.email }}</div>
+            <div v-if="socialError.name" class="error-meta">Nome: {{ socialError.name }}</div>
+          </div>
+          <button @click="handleSocialLogin('google')" class="btn btn-social btn-google" :disabled="loading">
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" />
+            <span>Continue with Google</span>
+          </button>
+          <button @click="handleSocialLogin('github')" class="btn btn-social btn-github" :disabled="loading">
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/github.svg" alt="GitHub" />
+            <span>Continue with GitHub</span>
+          </button>
 
-        <div v-if="isRegister" class="registration-flow">
-          <!-- Role Selection -->
-          <div class="role-toggle">
-            <button 
-              type="button" 
-              class="role-toggle-btn" 
-              :class="{ active: form.role === 'user' }"
-              @click="form.role = 'user'"
-            >
-              🏢 Joining Org
-            </button>
-            <button 
-              type="button" 
-              class="role-toggle-btn" 
-              :class="{ active: form.role === 'manager' }"
-              @click="form.role = 'manager'"
-            >
-              🚀 Creating New Org
+          <div class="legacy-toggle-divider">
+            <button @click="showLegacyAuth = !showLegacyAuth" class="btn-legacy-toggle">
+              {{ showLegacyAuth ? 'Hide legacy login' : 'Or use traditional login' }}
             </button>
           </div>
+        </div>
 
-          <div class="form-section">
-            <div class="section-title">👤 User Details</div>
-            <div class="form-group">
-              <label>Full Name</label>
-              <input v-model="form.name" name="name" autocomplete="name" type="text" placeholder="Your name" required />
+        <form v-if="showLegacyAuth" @submit.prevent="handleSubmit" class="login-form animate-in">
+          <div v-if="error" class="error-message">{{ error }}</div>
+
+          <div v-if="isRegister" class="registration-flow">
+            <!-- Role Selection -->
+            <div class="role-toggle">
+              <button 
+                type="button" 
+                class="role-toggle-btn" 
+                :class="{ active: form.role === 'user' }"
+                @click="form.role = 'user'"
+              >
+                🏢 Joining Org
+              </button>
+              <button 
+                type="button" 
+                class="role-toggle-btn" 
+                :class="{ active: form.role === 'manager' }"
+                @click="form.role = 'manager'"
+              >
+                🚀 Creating New Org
+              </button>
             </div>
+
+            <div class="form-section">
+              <div class="section-title">👤 User Details</div>
+              <div class="form-group">
+                <label>Full Name</label>
+                <input v-model="form.name" name="name" autocomplete="name" type="text" placeholder="Your name" required />
+              </div>
+              <div class="form-group">
+                <label>Email</label>
+                <input v-model="form.email" name="email" autocomplete="username" type="email" placeholder="you@example.com" required />
+              </div>
+              <div class="form-group">
+                <label>Password</label>
+                <input v-model="form.password" name="password" autocomplete="new-password" type="password" placeholder="••••••••" required />
+              </div>
+            </div>
+
+            <div class="form-section">
+              <div class="section-title">{{ form.role === 'manager' ? '🏢 Organization' : '📩 Invitation' }}</div>
+              
+              <div v-if="form.role === 'manager'" class="form-group animate-in">
+                <label>Organization Name</label>
+                <input 
+                  v-model="form.organization_name" 
+                  name="organization_name"
+                  type="text" 
+                  placeholder="e.g. ACME Corp"
+                  required
+                />
+                <small class="form-help text-muted">A new organization will be created for you.</small>
+              </div>
+
+              <div v-else class="form-group animate-in">
+                <label>Invite Code</label>
+                <input 
+                  v-model="form.invite_code" 
+                  name="invite_code"
+                  type="text" 
+                  placeholder="Enter your invite code"
+                  required
+                />
+                <small class="form-help text-muted">You must have an invite code to join an organization.</small>
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="login-fields">
             <div class="form-group">
               <label>Email</label>
-              <input v-model="form.email" name="email" autocomplete="username" type="email" placeholder="you@example.com" required />
+              <input 
+                v-model="form.email" 
+                name="email"
+                autocomplete="username"
+                type="email" 
+                placeholder="you@example.com"
+                required
+              />
             </div>
+
             <div class="form-group">
               <label>Password</label>
-              <input v-model="form.password" name="password" autocomplete="new-password" type="password" placeholder="••••••••" required />
-            </div>
-          </div>
-
-          <div class="form-section">
-            <div class="section-title">{{ form.role === 'manager' ? '🏢 Organization' : '📩 Invitation' }}</div>
-            
-            <div v-if="form.role === 'manager'" class="form-group animate-in">
-              <label>Organization Name</label>
               <input 
-                v-model="form.organization_name" 
-                name="organization_name"
-                type="text" 
-                placeholder="e.g. ACME Corp"
+                v-model="form.password" 
+                name="password"
+                autocomplete="current-password"
+                type="password" 
+                placeholder="••••••••"
                 required
               />
-              <small class="form-help text-muted">A new organization will be created for you.</small>
-            </div>
-
-            <div v-else class="form-group animate-in">
-              <label>Invite Code</label>
-              <input 
-                v-model="form.invite_code" 
-                name="invite_code"
-                type="text" 
-                placeholder="Enter your invite code"
-                required
-              />
-              <small class="form-help text-muted">You must have an invite code to join an organization.</small>
             </div>
           </div>
-        </div>
 
-        <div v-else class="login-fields">
-          <div class="form-group">
-            <label>Email</label>
-            <input 
-              v-model="form.email" 
-              name="email"
-              autocomplete="username"
-              type="email" 
-              placeholder="you@example.com"
-              required
-            />
-          </div>
-
-          <div class="form-group">
-            <label>Password</label>
-            <input 
-              v-model="form.password" 
-              name="password"
-              autocomplete="current-password"
-              type="password" 
-              placeholder="••••••••"
-              required
-            />
-          </div>
-        </div>
-
-        <button type="submit" class="btn btn-primary btn-submit" :disabled="loading">
-          <span v-if="loading" class="loading-spinner"></span>
-          {{ isRegister ? 'Create Account' : 'Sign In' }}
-        </button>
-
-        <div v-if="!isRegister && isWebAuthnSupported" class="passkey-section">
-          <div class="passkey-divider">
-            <span>or</span>
-          </div>
-          <button 
-            type="button" 
-            class="btn btn-secondary btn-passkey" 
-            @click="handlePasskeyLogin" 
-            :disabled="loading"
-          >
-            🔑 Sign in with Passkey
+          <button type="submit" class="btn btn-primary btn-submit" :disabled="loading">
+            <span v-if="loading" class="loading-spinner"></span>
+            {{ isRegister ? 'Create Account' : 'Sign In' }}
           </button>
-        </div>
-      </form>
+
+          <div v-if="!isRegister && isWebAuthnSupported" class="passkey-section">
+            <div class="passkey-divider">
+              <span>or</span>
+            </div>
+            <button 
+              type="button" 
+              class="btn btn-secondary btn-passkey" 
+              @click="handlePasskeyLogin" 
+              :disabled="loading"
+            >
+              🔑 Sign in with Passkey
+            </button>
+          </div>
+        </form>
+      </div>
 
       <div v-else-if="requiresInviteCode" class="join-org-view animate-in">
         <div class="join-org-header">
@@ -280,8 +304,12 @@ import CorvicLogo from './CorvicLogo.vue'
 import { wsService } from '../services/websocket.js'
 import * as api from '../services/api.js'
 import { webauthnService } from '../services/webauthn.js'
+import { fetchSignInMethodsForEmail } from 'firebase/auth'
+import { auth, loginWithGoogle, loginWithGithub, getIdToken } from '../services/firebase.js'
 
 const emit = defineEmits(['login'])
+
+const showLegacyAuth = ref(import.meta.env.VITE_ENABLE_LEGACY_AUTH === 'true')
 
 // Dev mode detection
 const isDev = import.meta.env.DEV && !import.meta.env.PROD
@@ -308,6 +336,7 @@ const form = ref({
   role: 'user'
 });
 const error = ref('')
+const socialError = ref(null)
 const loading = ref(false)
 const showBootstrapLink = ref(false)
 
@@ -323,6 +352,79 @@ const bootstrapEmail = ref('')
 const bootstrapPassword = ref('')
 const bootstrapError = ref('')
 const bootstrapOrganizationName = ref('') // Added this based on the template
+
+async function handleSocialLogin(provider) {
+  error.value = ''
+  socialError.value = null
+  loading.value = true
+  try {
+    let user;
+    if (provider === 'google') {
+      user = await loginWithGoogle()
+    } else {
+      user = await loginWithGithub()
+    }
+
+    if (user) {
+      const token = await getIdToken()
+      const result = await wsService.authenticateWithFirebase(token)
+      
+      if (result.success) {
+        // Save user/workspace info like in legacy login
+        if (result.user) localStorage.setItem('user', JSON.stringify(result.user))
+        if (result.workspace) localStorage.setItem('workspace', JSON.stringify(result.workspace))
+        if (result.token) localStorage.setItem('token', result.token) // Internal token for handshake consistency
+        
+        emit('login')
+      }
+    }
+  } catch (e) {
+    console.error('Social login failed:', e)
+    if (e?.code === 'auth/account-exists-with-different-credential') {
+      socialError.value = await buildAccountExistsError(e)
+    } else {
+      socialError.value = {
+        message: 'Failed to sign in with ' + provider + '. ' + (e?.message || ''),
+        email: '',
+        name: ''
+      }
+    }
+  } finally {
+    loading.value = false
+  }
+}
+
+async function buildAccountExistsError(errorObj) {
+  const email = errorObj?.customData?.email || ''
+  const name =
+    errorObj?.customData?.displayName ||
+    errorObj?.customData?.name ||
+    errorObj?.customData?._tokenResponse?.displayName ||
+    errorObj?.customData?._tokenResponse?.screenName ||
+    ''
+
+  let providerHint = ''
+  if (email) {
+    try {
+      const methods = await fetchSignInMethodsForEmail(auth, email)
+      if (methods.includes('google.com')) providerHint = 'Google'
+      else if (methods.includes('github.com')) providerHint = 'GitHub'
+      else if (methods.includes('password')) providerHint = 'Email and password'
+    } catch (err) {
+      console.warn('Failed to fetch sign-in methods:', err)
+    }
+  }
+
+  const message = providerHint
+    ? `An account already exists with this email. Sign in with ${providerHint} to continue, then link providers in your profile.`
+    : 'An account already exists with this email. Sign in with the original provider to continue, then link providers in your profile.'
+
+  return {
+    message,
+    email: email || '(nao informado)',
+    name: name || '(nao informado)'
+  }
+}
 
 async function handleSubmit() {
   error.value = ''
@@ -583,6 +685,91 @@ onMounted(async () => {
   margin-bottom: 0.5rem;
 }
 
+.social-login-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.btn-social {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.875rem;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  border: 1px solid #e2e8f0;
+  background: white;
+  color: #374151;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.btn-social img {
+  width: 20px;
+  height: 20px;
+}
+
+.btn-social:hover:not(:disabled) {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+}
+
+.btn-google {
+  /* Google colors if desired */
+}
+
+.btn-github {
+  background: #24292e;
+  color: white;
+  border-color: #24292e;
+}
+
+.btn-github:hover:not(:disabled) {
+  background: #1b1f23;
+  border-color: #1b1f23;
+}
+
+.legacy-toggle-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  margin: 1.5rem 0;
+}
+
+.legacy-toggle-divider::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-bottom: 1px solid #e2e8f0;
+  z-index: 1;
+}
+
+.btn-legacy-toggle {
+  position: relative;
+  z-index: 2;
+  background: white;
+  padding: 0 1rem;
+  border: none;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.btn-legacy-toggle:hover {
+  color: #49399d;
+}
+
 .role-toggle-btn {
   flex: 1;
   padding: 0.6rem;
@@ -686,6 +873,12 @@ onMounted(async () => {
   padding: 0.75rem 1rem;
   border-radius: 8px;
   font-size: 0.875rem;
+}
+
+.error-meta {
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
+  color: #b91c1c;
 }
 
 .btn-submit {

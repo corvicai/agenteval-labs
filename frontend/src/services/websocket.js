@@ -105,10 +105,25 @@ class WebSocketService {
             const ws = new WebSocket(wsUrl)
             this.ws = ws
 
-            ws.onopen = () => {
+            ws.onopen = async () => {
                 if (this.ws !== ws) return
                 console.log('[WS] Connected')
                 this.reconnectAttempts = 0
+
+                // If we have a firebase token, authenticate immediately
+                if (this.firebaseToken) {
+                    try {
+                        const result = await this.request('AUTH', { token: this.firebaseToken })
+                        console.log('[WS] Firebase Authentication successful')
+                        this._emit('authenticated', result)
+                    } catch (e) {
+                        console.error('[WS] Firebase Authentication failed:', e)
+                        this._emit('auth_failed', { error: e.message })
+                        // If auth fails, we might want to stay connected but limited, or close.
+                        // For now we just stay connected and let the UI handle the error.
+                    }
+                }
+
                 this._emit('connected', {})
                 resolve()
             }
@@ -194,6 +209,14 @@ class WebSocketService {
         }
         this.workspaceId = null
         this.token = null
+    }
+
+    async authenticateWithFirebase(token) {
+        this.firebaseToken = token
+        if (!this.isConnected()) {
+            await this.connectAnonymous()
+        }
+        return this.request('AUTH', { token })
     }
 
     _rejectPendingRequests(message) {
@@ -533,6 +556,10 @@ class WebSocketService {
 
     webAuthnDeleteKey(keyId) {
         return this.request('REQ_WEBAUTHN_DELETE_KEY', { id: keyId })
+    }
+
+    createOrganization(name) {
+        return this.request('REQ_CREATE_ORGANIZATION', { name })
     }
 
     joinOrganization(inviteCode) {

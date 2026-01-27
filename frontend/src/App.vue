@@ -38,6 +38,9 @@
     <!-- Login Screen -->
     <LoginScreen v-if="!isAuthenticated" @login="onLogin" class="no-print" />
 
+    <!-- Onboarding Screen -->
+    <OnboardingScreen v-else-if="showOnboarding" @completed="onOnboardingCompleted" />
+
     <!-- Loading State while connection is establishing -->
     <div v-else-if="!appReady" class="app-init-loader">
       <div class="spinner"></div>
@@ -391,6 +394,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import LoginScreen from './components/LoginScreen.vue'
+import OnboardingScreen from './components/OnboardingScreen.vue'
 import CorvicLogo from './components/CorvicLogo.vue'
 import BenchmarkArena from './components/BenchmarkArena.vue'
 import BenchmarkDocumentView from './components/BenchmarkDocumentView.vue'
@@ -467,6 +471,7 @@ const showQuestionEditor = ref(false)
 const isZenMode = ref(false)
 const previousQuestionSet = ref(null) // Used to restore when canceling new set creation
 const showRunSetup = ref(false)
+const showOnboarding = ref(false)
 
 const workspaces = ref([])
 const workspacesLoading = ref(false)
@@ -691,12 +696,25 @@ async function onLogin() {
     } catch (e) {
       console.log('Could not fetch user profile:', e)
     }
+
+    // Check if onboarding is needed (Authenticated but no organizations)
+    if (isAuthenticated.value && (!userOrganizations.value || userOrganizations.value.length === 0)) {
+       console.log('[App] No organizations found, showing Onboarding Screen')
+       showOnboarding.value = true
+    }
+
   } catch (err) {
     console.error('[App] Login initialization failed:', err)
     } finally {
       appReady.value = true
       isLoggingIn.value = false
     }
+}
+
+function onOnboardingCompleted() {
+  showOnboarding.value = false
+  // Fully reload state to ensure everything is fresh
+  window.location.reload()
 }
 
 // Admin Profile Navigation
