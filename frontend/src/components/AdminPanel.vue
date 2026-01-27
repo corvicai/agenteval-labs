@@ -40,9 +40,15 @@
       <div v-if="currentTab === 'users'" class="tab-view">
         <div class="tab-actions">
           <h3>User Directory</h3>
-          <button class="btn btn-primary" @click="showCreateModal = true">
-            + Create User
-          </button>
+          <div class="action-group">
+            <button class="btn btn-secondary" @click="loadData" :disabled="isRefreshing">
+              <span v-if="isRefreshing" class="spinner-inline"></span>
+              <span v-else>🔄</span> Refresh
+            </button>
+            <button class="btn btn-primary" @click="showCreateModal = true">
+              + Create User
+            </button>
+          </div>
         </div>
         
         <!-- Filter Bar -->
@@ -172,7 +178,13 @@
       <div v-else-if="currentTab === 'organizations'" class="tab-view">
         <div class="tab-actions">
           <h3>Organization Directory</h3>
-          <button class="btn btn-primary" @click="openOrgModal()">+ Create Organization</button>
+          <div class="action-group">
+            <button class="btn btn-secondary" @click="loadData" :disabled="isRefreshing">
+              <span v-if="isRefreshing" class="spinner-inline"></span>
+              <span v-else>🔄</span> Refresh
+            </button>
+            <button class="btn btn-primary" @click="openOrgModal()">+ Create Organization</button>
+          </div>
         </div>
         
         <!-- Filter Bar -->
@@ -267,7 +279,12 @@
       <div v-else-if="currentTab === 'logs'" class="tab-view">
         <div class="tab-actions">
           <h3>Recent Login Activity</h3>
-          <button class="btn btn-secondary" @click="loadLoginLogs">🔄 Refresh</button>
+          <div class="action-group">
+            <button class="btn btn-secondary" @click="loadLoginLogs" :disabled="isRefreshingLogs">
+              <span v-if="isRefreshingLogs" class="spinner-inline"></span>
+              <span v-else>🔄</span> Refresh
+            </button>
+          </div>
         </div>
 
         <div class="table-container">
@@ -416,6 +433,48 @@
       </div>
     </div>
 
+    <!-- Delete User Modal -->
+    <div v-if="showDeleteModal" class="modal-overlay" @click.self="showDeleteModal = false">
+      <div class="modal-container delete-modal">
+        <div class="modal-header">
+          <h3 class="text-danger">🗑️ Delete User</h3>
+          <button class="btn-close" @click="showDeleteModal = false">×</button>
+        </div>
+        <div class="modal-body p-4">
+          <p>You are about to delete user <strong>{{ userToDelete?.name }}</strong> ({{ userToDelete?.email }}).</p>
+          
+          <div class="delete-options mt-4">
+            <label class="option-card" :class="{ selected: deleteMode === 'hard' }">
+              <input type="radio" v-model="deleteMode" value="hard" name="deleteMode" />
+              <div class="option-content">
+                <span class="option-title">Hard Delete (Complete Wipe)</span>
+                <span class="option-desc">Permanently remove user, all their workspaces, runs, and results from the database and Firebase.</span>
+              </div>
+            </label>
+            
+            <label class="option-card" :class="{ selected: deleteMode === 'ghost' }">
+              <input type="radio" v-model="deleteMode" value="ghost" name="deleteMode" />
+              <div class="option-content">
+                <span class="option-title">Anonymize (Ghost Mode) 👻</span>
+                <span class="option-desc">Keep evaluation history but wipe all text content from responses. Anonymizes the profile and removes Firebase login.</span>
+              </div>
+            </label>
+          </div>
+          
+          <div class="alert alert-warning mt-4">
+            ⚠️ This action is irreversible. Please confirm you want to proceed.
+          </div>
+        </div>
+        <div class="modal-actions p-4">
+          <button class="btn btn-secondary" @click="showDeleteModal = false">Cancel</button>
+          <button class="btn btn-danger" @click="confirmDeleteUser" :disabled="formLoading">
+            <span v-if="formLoading" class="spinner-small"></span>
+            Confirm Delete
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Confirmation Dialog -->
     <ConfirmDialog
       v-model:visible="showConfirmDialog"
@@ -450,12 +509,17 @@ const organizations = ref([]);
 const loginLogs = ref([]);
 const loading = ref(true); // Changed to true initially
 const error = ref('')
+const isRefreshing = ref(false)
+const isRefreshingLogs = ref(false)
 
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
-const showOrgModal = ref(false) // New
+const showOrgModal = ref(false)
+const showDeleteModal = ref(false)
+const userToDelete = ref(null)
+const deleteMode = ref('hard')
 const formData = ref({ name: '', email: '', password: '', is_admin: false })
-const orgForm = ref({ name: '', manager_id: null }) // Updated
+const orgForm = ref({ name: '', manager_id: null })
 const formLoading = ref(false)
 const formError = ref('')
 const editingUserId = ref(null)
@@ -585,6 +649,8 @@ function viewOrgProfile(orgId) {
 
 
 async function loadData() {
+  if (isRefreshing.value) return
+  isRefreshing.value = true
   loading.value = true
   error.value = ''
   try {
@@ -604,15 +670,20 @@ async function loadData() {
     error.value = 'Failed to load administrative data: ' + e.message
   } finally {
     loading.value = false
+    isRefreshing.value = false
   }
 }
 
 async function loadLoginLogs() {
+  if (isRefreshingLogs.value) return
+  isRefreshingLogs.value = true
   try {
     const logs = await wsService.adminGetLoginLogs(100)
     loginLogs.value = logs || []
   } catch (e) {
     console.error('Failed to load logs:', e)
+  } finally {
+    isRefreshingLogs.value = false
   }
 }
 
@@ -695,22 +766,25 @@ function toggleAdmin(user) {
 
 
 function deleteUser(user) {
-  confirmDialogConfig.value = {
-    title: 'Delete User',
-    message: `Are you sure you want to delete "${user.name}"? This action cannot be undone.`,
-    confirmText: 'Delete',
-    cancelText: 'Cancel',
-    variant: 'danger'
+  userToDelete.value = user
+  deleteMode.value = 'hard'
+  showDeleteModal.value = true
+}
+
+async function confirmDeleteUser() {
+  if (!userToDelete.value) return
+  formLoading.value = true
+  try {
+    await wsService.adminDeleteUser(userToDelete.value.id, deleteMode.value)
+    showDeleteModal.value = false
+    userToDelete.value = null
+    // List will refresh via WebSocket event if implemented, or we manual refresh
+    await loadData()
+  } catch (e) {
+    alert('Failed to delete: ' + e.message)
+  } finally {
+    formLoading.value = false
   }
-  pendingAction.value = async () => {
-    try {
-      await wsService.adminDeleteUser(user.id)
-      loadData()
-    } catch (e) {
-      alert('Failed to delete: ' + e.message)
-    }
-  }
-  showConfirmDialog.value = true
 }
 
 // Organization Methods
@@ -791,6 +865,15 @@ async function executeConfirmedAction() {
 
 onMounted(() => {
   loadData();
+
+  // Listen for real-time updates to users and organizations
+  wsService.on('EVT_DATA_CHANGED', (payload) => {
+    if ((payload.resource === 'USER' || payload.resource === 'ORGANIZATION') && 
+        (payload.action === 'DELETE' || payload.action === 'UPDATE' || payload.action === 'CREATE')) {
+      console.log(`[AdminPanel] ${payload.resource} data changed remotely, refreshing...`, payload)
+      loadData()
+    }
+  })
 })
 
 // Watch tab change to load data
@@ -923,6 +1006,12 @@ watch(orgTimeFilter, () => {
   font-size: 1.1rem;
   font-weight: 500;
   color: var(--text-primary);
+}
+
+.action-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 
 /* Filter Bar Styles */
@@ -1239,6 +1328,23 @@ td {
   to { transform: rotate(360deg); }
 }
 
+.spinner-inline {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(0, 0, 0, 0.1);
+  border-top-color: #6366f1;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -1419,5 +1525,73 @@ td {
 .form-help {
   font-size: 0.8rem;
   margin-top: 4px;
+}
+
+/* Delete User Modal Styles */
+.delete-modal {
+  max-width: 500px;
+}
+
+.delete-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.option-card {
+  display: flex;
+  gap: 12px;
+  padding: 16px;
+  border: 2px solid #e2e8f0;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: white;
+}
+
+.option-card:hover {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.option-card.selected {
+  border-color: #6366f1;
+  background: #f5f3ff;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.1);
+}
+
+.option-card input[type="radio"] {
+  width: auto;
+  margin-top: 4px;
+}
+
+.option-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.option-title {
+  font-weight: 600;
+  color: #1e293b;
+  font-size: 0.95rem;
+}
+
+.option-desc {
+  font-size: 0.85rem;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+.alert {
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.alert-warning {
+  background: #fffbeb;
+  color: #92400e;
+  border: 1px solid #fde68a;
 }
 </style>

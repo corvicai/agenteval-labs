@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"log"
 	"strings"
 	"time"
 
@@ -480,6 +482,12 @@ func (h *Hub) handleAdminCreateUser(c *Connection, env models.Envelope) {
 	}
 	h.db.Create(&client)
 
+	// Broadcast creation
+	h.BroadcastEvent(uuid.Nil, "USER", "CREATE", map[string]any{
+		"id":   user.ID.String(),
+		"name": user.Name,
+	})
+
 	c.SendResponse(DataAdminUsers, env.CorrelationID, map[string]any{
 		"id":              user.ID.String(),
 		"name":            user.Name,
@@ -529,6 +537,12 @@ func (h *Hub) handleAdminCreateOrg(c *Connection, env models.Envelope) {
 		c.SendError(env.CorrelationID, "failed to create organization")
 		return
 	}
+
+	// Broadcast creation
+	h.BroadcastEvent(uuid.Nil, "ORGANIZATION", "CREATE", map[string]any{
+		"id":   org.ID.String(),
+		"name": org.Name,
+	})
 
 	c.SendResponse(DataAdminOrganizations, env.CorrelationID, org)
 }
@@ -643,6 +657,11 @@ func (h *Hub) handleAdminUpdateUser(c *Connection, env models.Envelope) {
 		}
 	}
 
+	// Broadcast update
+	h.BroadcastEvent(uuid.Nil, "USER", "UPDATE", map[string]any{
+		"id": targetUser.ID.String(),
+	})
+
 	c.SendResponse(DataAdminUsers, env.CorrelationID, targetUser)
 }
 
@@ -653,14 +672,15 @@ func (h *Hub) handleAdminDeleteUser(c *Connection, env models.Envelope) {
 	}
 
 	// Check if current user is admin
-	var user models.User
-	if err := h.db.First(&user, "id = ?", c.UserID).Error; err != nil || !user.IsAdmin {
+	var adminUser models.User
+	if err := h.db.First(&adminUser, "id = ?", c.UserID).Error; err != nil || !adminUser.IsAdmin {
 		c.SendError(env.CorrelationID, "admin access required")
 		return
 	}
 
 	var req struct {
-		ID string `json:"id"`
+		ID   string `json:"id"`
+		Mode string `json:"mode"` // "hard" (wipe everything) or "ghost" (keep evaluations, wipe answers)
 	}
 	if err := json.Unmarshal([]byte(env.Payload), &req); err != nil {
 		c.SendError(env.CorrelationID, "invalid payload")
@@ -678,17 +698,194 @@ func (h *Hub) handleAdminDeleteUser(c *Connection, env models.Envelope) {
 		return
 	}
 
-	// Cleanup user associations and the user itself
-	h.db.Transaction(func(tx *gorm.DB) error {
-		tx.Where("user_id = ?", targetUID).Delete(&models.UserOrganization{})
-		tx.Where("user_id = ?", targetUID).Delete(&models.Workspace{}) // Note: cascading deletes should handle nested resources if configured
+	// Fetch target user first
+	var targetUser models.User
+	if err := h.db.First(&targetUser, "id = ?", targetUID).Error; err != nil {
+		c.SendError(env.CorrelationID, "user not found")
+		return
+	}
+
+	firebaseUID := targetUser.FirebaseUID
+
+	// Handle deletion based on mode
+	err = h.db.Transaction(func(tx *gorm.DB) error {
+		if req.Mode == "ghost" {
+			log.Printf("[ADMIN] Ghost-deleting user: %s (%s)", targetUser.Email, targetUser.ID)
+
+			// 1. Wipe all answer content across all workspaces of this user
+			// Subquery to find all workspace IDs for this user
+			wsIDsQuery := tx.Model(&models.Workspace{}).Select("id").Where("user_id = ?", targetUID)
+
+			// Update RunResults to remove content
+			if err := tx.Model(&models.RunResult{}).
+				Where("run_id IN (SELECT id FROM runs WHERE workspace_id IN (?))", wsIDsQuery).
+				Update("answer", "[CONTENT DELETED BY USER]").Error; err != nil {
+				return err
+			}
+
+			// 2. Anonymize user record
+			// We change email and name to avoid collisions and protect privacy
+			ghostID := uuid.New().String()[:8]
+			if err := tx.Model(&targetUser).Updates(map[string]any{
+				"name":         "Ghost User " + ghostID,
+				"email":        "deleted-" + ghostID + "@example.ghost",
+				"firebase_uid": "",
+				"is_suspended": true, // Prevent any accidental login
+			}).Error; err != nil {
+				return err
+			}
+
+			return nil
+		}
+
+		// Mode "hard" (Default) - Complete wipe
+		log.Printf("[ADMIN] Hard-deleting user and all data: %s (%s)", targetUser.Email, targetUser.ID)
+
+		// 0. Nullify references in other tables to avoid FK constraints
+		// Organizations
+		if err := tx.Model(&models.Organization{}).Where("manager_id = ?", targetUID).Update("manager_id", nil).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.Organization{}).Where("created_by_user_id = ?", targetUID).Update("created_by_user_id", nil).Error; err != nil {
+			return err
+		}
+
+		// User Invites
+		if err := tx.Model(&models.User{}).Where("invited_by_user_id = ?", targetUID).Update("invited_by_user_id", nil).Error; err != nil {
+			return err
+		}
+
+		// UserOrganization Invites
+		if err := tx.Model(&models.UserOrganization{}).Where("invited_by_user_id = ?", targetUID).Update("invited_by_user_id", nil).Error; err != nil {
+			return err
+		}
+
+		// Invite Codes created by this user
+		if err := tx.Where("created_by = ?", targetUID).Delete(&models.InviteCode{}).Error; err != nil {
+			return err
+		}
+
+		// 1. Audit Logs
+		if err := tx.Where("user_id = ?", targetUID).Delete(&models.AuditLog{}).Error; err != nil {
+			return err
+		}
+
+		// 2. Login Logs
+		if err := tx.Where("user_id = ?", targetUID).Delete(&models.LoginLog{}).Error; err != nil {
+			return err
+		}
+
+		// 3. Passkeys
+		if err := tx.Where("user_id = ?", targetUID).Delete(&models.Passkey{}).Error; err != nil {
+			return err
+		}
+
+		// 4. Invite Code Usages
+		if err := tx.Where("user_id = ?", targetUID).Delete(&models.InviteCodeUsage{}).Error; err != nil {
+			return err
+		}
+
+		// Get all workspace IDs for cleanup
+		var wsIDs []uuid.UUID
+		tx.Model(&models.Workspace{}).Where("user_id = ?", targetUID).Pluck("id", &wsIDs)
+
+		if len(wsIDs) > 0 {
+			// Wipe Evaluations
+			if err := tx.Exec(`DELETE FROM evaluations WHERE run_result_id IN (
+				SELECT id FROM run_results WHERE run_id IN (
+					SELECT id FROM runs WHERE workspace_id IN (?)
+				)
+			)`, wsIDs).Error; err != nil {
+				return err
+			}
+
+			// Wipe Run Results
+			if err := tx.Exec(`DELETE FROM run_results WHERE run_id IN (
+				SELECT id FROM runs WHERE workspace_id IN (?)
+			)`, wsIDs).Error; err != nil {
+				return err
+			}
+
+			// Wipe Runs
+			if err := tx.Where("workspace_id IN (?)", wsIDs).Delete(&models.Run{}).Error; err != nil {
+				return err
+			}
+
+			// Wipe Agent Configs for Question Sets (Junction)
+			if err := tx.Exec(`DELETE FROM question_set_agents WHERE question_set_id IN (
+				SELECT id FROM question_sets WHERE client_id IN (
+					SELECT id FROM clients WHERE workspace_id IN (?)
+				)
+			)`, wsIDs).Error; err != nil {
+				return err
+			}
+
+			// Wipe Question Sets
+			if err := tx.Exec(`DELETE FROM question_sets WHERE client_id IN (
+				SELECT id FROM clients WHERE workspace_id IN (?)
+			)`, wsIDs).Error; err != nil {
+				return err
+			}
+
+			// Wipe Clients
+			if err := tx.Where("workspace_id IN (?)", wsIDs).Delete(&models.Client{}).Error; err != nil {
+				return err
+			}
+
+			// Wipe Agents
+			if err := tx.Where("workspace_id IN (?)", wsIDs).Delete(&models.Agent{}).Error; err != nil {
+				return err
+			}
+
+			// Wipe StatsCache entries and other workspace scoped items if any
+			if err := tx.Where("scope = 'workspace' AND scope_id IN (?)", wsIDs).Delete(&models.StatsCache{}).Error; err != nil {
+				return err
+			}
+
+			// Wipe Workspaces
+			if err := tx.Where("user_id = ?", targetUID).Delete(&models.Workspace{}).Error; err != nil {
+				return err
+			}
+		}
+
+		// 5. Org links
+		if err := tx.Where("user_id = ?", targetUID).Delete(&models.UserOrganization{}).Error; err != nil {
+			return err
+		}
+
+		// 6. Finally wipe the user
 		if err := tx.Delete(&models.User{}, "id = ?", targetUID).Error; err != nil {
 			return err
 		}
+
 		return nil
 	})
 
-	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "deleted"})
+	if err != nil {
+		log.Printf("[ADMIN] Transaction failed during user deletion: %v", err)
+		c.SendError(env.CorrelationID, "failed to delete user: "+err.Error())
+		return
+	}
+
+	// Broadcast change to all admins (refresh list)
+	h.BroadcastEvent(uuid.Nil, "USER", "DELETE", map[string]string{"id": req.ID, "mode": req.Mode})
+
+	// Remote Firebase delete (Best effort)
+	if firebaseUID != "" && h.Firebase != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := h.Firebase.DeleteUser(ctx, firebaseUID); err != nil {
+			log.Printf("[FIREBASE] WARN: Failed to delete user from firebase: %v", err)
+			// We don't fail the whole request because the local data IS gone
+		} else {
+			log.Printf("[FIREBASE] User %s deleted from firebase", firebaseUID)
+		}
+	}
+
+	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{
+		"status": "deleted",
+		"mode":   req.Mode,
+	})
 }
 
 func (h *Hub) handleAdminUpdateOrg(c *Connection, env models.Envelope) {
@@ -796,6 +993,11 @@ func (h *Hub) handleAdminUpdateOrg(c *Connection, env models.Envelope) {
 		}()
 	}
 
+	// Broadcast update
+	h.BroadcastEvent(uuid.Nil, "ORGANIZATION", "UPDATE", map[string]any{
+		"id": org.ID.String(),
+	})
+
 	c.SendResponse(DataAdminOrganizations, env.CorrelationID, org)
 }
 
@@ -829,6 +1031,11 @@ func (h *Hub) handleAdminDeleteOrg(c *Connection, env models.Envelope) {
 		c.SendError(env.CorrelationID, "failed to delete organization")
 		return
 	}
+
+	// Broadcast deletion
+	h.BroadcastEvent(uuid.Nil, "ORGANIZATION", "DELETE", map[string]any{
+		"id": orgID.String(),
+	})
 
 	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "deleted"})
 }
