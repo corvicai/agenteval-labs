@@ -71,7 +71,7 @@
         <button v-if="!agents.length" class="btn btn-warning" @click="$emit('configure-agents')">
           🤖 Configure Agents
         </button>
-        <button v-else class="btn btn-primary" @click="startRunSetup" :disabled="isRunning">
+        <button v-else class="btn btn-primary" @click="startRunSetup" :disabled="isRunning || !currentQuestionSet">
           {{ isRunning ? '⏳ Running...' : '▶️ Run Benchmark' }}
         </button>
         <button class="btn btn-secondary btn-history-arena" @click="$emit('view-history', currentQuestionSet || {})">
