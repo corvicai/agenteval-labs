@@ -725,14 +725,47 @@ func (h *Hub) handleAdminUpdateOrg(c *Connection, env models.Envelope) {
 	if req.Name != "" {
 		org.Name = req.Name
 	}
-	if req.ManagerID != "" {
+
+	// Handle Managers
+	if len(req.ManagerIDs) > 0 {
+		// New multi-manager logic
+
+		// 1. Reset all users in this org to 'member' role initially (transaction safe ideally, but simple update here)
+		h.db.Model(&models.UserOrganization{}).Where("organization_id = ?", org.ID).Update("role", "member")
+
+		// 2. Set 'manager' role for selected IDs
+		for _, midStr := range req.ManagerIDs {
+			mid, err := uuid.Parse(midStr)
+			if err == nil && mid != uuid.Nil {
+				h.db.Model(&models.UserOrganization{}).
+					Where("organization_id = ? AND user_id = ?", org.ID, mid).
+					Update("role", "manager")
+			}
+		}
+
+		// 3. Sync legacy ManagerID to the first one for backward compat
+		firstMid, _ := uuid.Parse(req.ManagerIDs[0])
+		org.ManagerID = &firstMid
+
+	} else if req.ManagerID != "" {
+		// Legacy single manager logic (frontend sending old payload or specific single set)
 		mID, _ := uuid.Parse(req.ManagerID)
 		if mID != uuid.Nil {
 			org.ManagerID = &mID
+
+			// Reset others to member
+			h.db.Model(&models.UserOrganization{}).Where("organization_id = ?", org.ID).Update("role", "member")
+			// Set new manager
+			h.db.Model(&models.UserOrganization{}).
+				Where("organization_id = ? AND user_id = ?", org.ID, mID).
+				Update("role", "manager")
 		} else {
 			org.ManagerID = nil
+			// No manager, reset all
+			h.db.Model(&models.UserOrganization{}).Where("organization_id = ?", org.ID).Update("role", "member")
 		}
 	}
+
 	if req.IsSuspended != nil {
 		org.IsSuspended = *req.IsSuspended
 	}

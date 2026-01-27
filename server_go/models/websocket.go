@@ -162,10 +162,11 @@ type ChangePasswordPayload struct {
 }
 
 type AdminUpdateOrgPayload struct {
-	ID          string `json:"id"`
-	Name        string `json:"name,omitempty"`
-	ManagerID   string `json:"manager_id,omitempty"`
-	IsSuspended *bool  `json:"is_suspended,omitempty"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name,omitempty"`
+	ManagerID   string   `json:"manager_id,omitempty"`  // Legacy: single ID
+	ManagerIDs  []string `json:"manager_ids,omitempty"` // New: multiple IDs
+	IsSuspended *bool    `json:"is_suspended,omitempty"`
 }
 
 type AdminRemoveUserFromOrgPayload struct {

@@ -294,24 +294,32 @@
         </section>
 
         <section class="profile-card manager-card">
-          <h3>👔 Manager</h3>
-          <div v-if="orgData.manager" class="info-grid">
-            <div class="info-item">
-              <label>Manager ID</label>
-              <span class="mono">{{ orgData.manager_id }}</span>
-            </div>
-            <div class="info-item">
-              <label>Name</label>
-              <span class="value-primary clickable" @click="viewUser(orgData.manager_id)">
-                {{ orgData.manager.name }}
-              </span>
-            </div>
-            <div class="info-item">
-              <label>Email</label>
-              <span>{{ orgData.manager.email }}</span>
+          <h3>👔 Managers</h3>
+          <div v-if="managersList.length > 0" class="info-grid">
+            <div class="info-item full-width">
+               <div class="manager-list">
+                 <div v-for="m in managersList" :key="m.id" class="manager-chip clickable" @click="viewUser(m.id)">
+                    <span class="avatar">👤</span>
+                    <span class="name">{{ m.name }}</span>
+                 </div>
+               </div>
             </div>
           </div>
-          <p v-else class="empty-state">No manager assigned</p>
+          <div v-else-if="!isEditing" class="empty-state">
+            No manager assigned
+          </div>
+          
+          <div v-if="isEditing" class="info-grid mt-4">
+             <div class="info-item full-width">
+               <label>Assign Managers</label>
+               <div class="multi-select-container">
+                 <div v-for="u in orgData.users" :key="u.id" class="checkbox-item">
+                    <input type="checkbox" :id="'mgr-'+u.id" :value="u.id" v-model="editForm.manager_ids">
+                    <label :for="'mgr-'+u.id">{{ u.name }} <span class="text-muted">({{ u.email }})</span></label>
+                 </div>
+               </div>
+             </div>
+          </div>
         </section>
 
         <section class="profile-card users-card">
@@ -434,7 +442,8 @@ export default {
       saving: false,
       editForm: {
         name: '',
-        email: ''
+        email: '',
+        manager_ids: []
       },
       isChangingPassword: false,
       passForm: {
@@ -505,6 +514,10 @@ export default {
     totalRuns() {
       // Not tracked per workspace generally, but if we had it
       return 0
+    },
+    managersList() {
+      if (!this.orgData?.users) return []
+      return this.orgData.users.filter(u => u.role === 'manager')
     }
   },
   watch: {
@@ -554,6 +567,7 @@ export default {
         this.editForm.email = this.userData.email
       } else {
         this.editForm.name = this.orgData.name
+        this.editForm.manager_ids = this.managersList.map(u => u.id)
       }
       this.isEditing = true
     },
@@ -581,10 +595,21 @@ export default {
           // Organization update
           const result = await wsService.adminUpdateOrg({
             id: this.entityId,
-            name: this.editForm.name
+            name: this.editForm.name,
+            manager_ids: this.editForm.manager_ids
           })
-          // Result might be the full org object or just fields. existing handler returns full object usually.
-          this.orgData = { ...this.orgData, ...result }
+          
+          // Optimistic local update until refresh
+          // We need to update user roles in local orgData
+          if (this.orgData && this.orgData.users) {
+             const updatedUsers = this.orgData.users.map(u => ({
+               ...u,
+               role: this.editForm.manager_ids.includes(u.id) ? 'manager' : 'member'
+             }))
+             this.orgData = { ...this.orgData, ...result, users: updatedUsers }
+          } else {
+             this.orgData = { ...this.orgData, ...result }
+          }
         }
 
         this.isEditing = false
@@ -770,6 +795,56 @@ export default {
   margin-left: auto;
   display: flex;
   gap: 0.5rem;
+}
+
+.manager-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.manager-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: white;
+  padding: 0.4rem 0.8rem;
+  border-radius: 20px;
+  border: 1px solid #e2e8f0;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+
+.manager-chip:hover {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.multi-select-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 200px;
+  overflow-y: auto;
+  background: white;
+  border: 1px solid #e2e8f0;
+  padding: 0.5rem;
+  border-radius: 6px;
+}
+
+.checkbox-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.full-width {
+  grid-column: 1 / -1;
+}
+
+.mt-4 {
+  margin-top: 1rem;
 }
 
 .profile-input {
