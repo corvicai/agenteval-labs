@@ -787,3 +787,103 @@ func (h *Hub) verifyManager(c *Connection) (*uuid.UUID, error) {
 
 	return &c.OrgID, nil
 }
+
+// handleCreateOrganization allows an authenticated user (even without an org) to create a new one
+func (h *Hub) handleCreateOrganization(c *Connection, env models.Envelope) {
+	if !c.IsAuthenticated {
+		c.SendError(env.CorrelationID, "authentication required")
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(env.Payload), &req); err != nil {
+		c.SendError(env.CorrelationID, "invalid payload")
+		return
+	}
+
+	if req.Name == "" {
+		c.SendError(env.CorrelationID, "organization name is required")
+		return
+	}
+
+	tx := h.db.Begin()
+
+	// 1. Create Organization
+	org := models.Organization{
+		ID:        uuid.New(),
+		Name:      req.Name,
+		ManagerID: &c.UserID,
+		CreatedAt: time.Now(),
+	}
+	if err := tx.Create(&org).Error; err != nil {
+		tx.Rollback()
+		c.SendError(env.CorrelationID, "failed to create organization (name might be taken)")
+		return
+	}
+
+	// 2. Link User to Org
+	uo := models.UserOrganization{
+		UserID:         c.UserID,
+		OrganizationID: org.ID,
+		Role:           "manager",
+		JoinedAt:       time.Now(),
+	}
+	if err := tx.Create(&uo).Error; err != nil {
+		tx.Rollback()
+		c.SendError(env.CorrelationID, "failed to link user to organization")
+		return
+	}
+
+	// 3. Create Default Workspace
+	ws := models.Workspace{
+		ID:             uuid.New(),
+		UserID:         c.UserID,
+		OrganizationID: org.ID,
+		Name:           "main",
+		CreatedAt:      time.Now(),
+	}
+	if err := tx.Create(&ws).Error; err != nil {
+		tx.Rollback()
+		c.SendError(env.CorrelationID, "failed to create default workspace")
+		return
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		c.SendError(env.CorrelationID, "failed to finalize creation")
+		return
+	}
+
+	// 4. Update Connection State
+	c.OrgID = org.ID
+	c.WorkspaceID = ws.ID
+
+	// 5. Generate Full Token
+	var user models.User
+	h.db.First(&user, c.UserID)
+	token, _ := middleware.GenerateToken(
+		user.ID.String(),
+		ws.ID.String(),
+		org.ID.String(),
+		user.Email,
+		h.jwtSecret,
+		"",
+	)
+
+	c.SendResponse(DataWsLoginResult, env.CorrelationID, map[string]any{
+		"success": true,
+		"token":   token,
+		"user": map[string]any{
+			"id":       user.ID.String(),
+			"name":     user.Name,
+			"email":    user.Email,
+			"is_admin": user.IsAdmin,
+		},
+		"organization": map[string]any{
+			"id":   org.ID.String(),
+			"name": org.Name,
+		},
+		"workspace": ws,
+	})
+}

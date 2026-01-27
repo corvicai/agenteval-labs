@@ -34,6 +34,7 @@ type UserOrganization struct {
 
 type User struct {
 	ID              uuid.UUID          `gorm:"type:uuid;primaryKey" json:"id"`
+	FirebaseUID     string             `gorm:"index" json:"firebase_uid,omitempty"`
 	Name            string             `gorm:"not null" json:"name"`
 	Email           string             `gorm:"unique;not null" json:"email"`
 	PasswordHash    string             `gorm:"not null" json:"-"` // Hide password hash

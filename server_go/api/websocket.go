@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"benchmarking-platform/internal/firebase"
 	"benchmarking-platform/internal/service"
 	"benchmarking-platform/models"
 	"benchmarking-platform/orchestrator"
@@ -53,10 +54,12 @@ const (
 	ReqGetMe                   = "REQ_GET_ME"
 	ReqCheckAdminExists        = "REQ_CHECK_ADMIN_EXISTS"
 	ReqWsLogin                 = "REQ_WS_LOGIN" // Login via WebSocket
+	ReqAuth                    = "AUTH"         // Firebase Social Auth
 	ReqGetWorkspaceRuns        = "REQ_GET_WORKSPACE_RUNS"
 	ReqSwitchWorkspace         = "REQ_SWITCH_WORKSPACE"
 	ReqCreateWorkspace         = "REQ_CREATE_WORKSPACE"
 	ReqCloneWorkspace          = "REQ_CLONE_WORKSPACE"
+	ReqCreateOrganization      = "REQ_CREATE_ORGANIZATION"
 	ReqJoinOrganization        = "REQ_JOIN_ORGANIZATION"
 	ReqGetWorkspaceClients     = "REQ_GET_WORKSPACE_CLIENTS"
 	ReqUpdateAgent             = "REQ_UPDATE_AGENT"
@@ -187,6 +190,7 @@ type Hub struct {
 	qsService    *service.QuestionSetService
 	agentService *service.AgentService
 	jwtSecret    string
+	Firebase     *firebase.Client
 }
 
 // HubInterface defines the methods required for broadcasting (to avoid import cycles in handlers)
@@ -205,7 +209,7 @@ type Connection struct {
 	RemoteIP        string
 }
 
-func NewHub(db *gorm.DB, engine *orchestrator.Engine, jwtSecret string) *Hub {
+func NewHub(db *gorm.DB, engine *orchestrator.Engine, jwtSecret string, fb *firebase.Client) *Hub {
 	return &Hub{
 		connections:  make(map[uuid.UUID]*Connection),
 		register:     make(chan *Connection),
@@ -217,6 +221,7 @@ func NewHub(db *gorm.DB, engine *orchestrator.Engine, jwtSecret string) *Hub {
 		qsService:    &service.QuestionSetService{},
 		agentService: &service.AgentService{},
 		jwtSecret:    jwtSecret,
+		Firebase:     fb,
 	}
 }
 

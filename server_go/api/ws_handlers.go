@@ -53,12 +53,16 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 		h.handleCheckAdminExists(c, env)
 	case ReqWsLogin:
 		h.handleWsLogin(c, env)
+	case ReqAuth:
+		h.handleAuth(c, env)
 	case ReqGetWorkspaceRuns:
 		h.handleGetWorkspaceRuns(c, env)
 	case ReqSwitchWorkspace:
 		h.handleSwitchWorkspace(c, env)
 	case ReqCreateWorkspace:
 		h.handleCreateWorkspace(c, env)
+	case ReqCreateOrganization:
+		h.handleCreateOrganization(c, env)
 	case ReqJoinOrganization:
 		h.handleJoinOrganization(c, env)
 	case ReqCloneWorkspace:
@@ -164,6 +168,19 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 		h.handleCheckDBPerf(c, env)
 
 	default:
+		// Authentication Guard
+		if !c.IsAuthenticated {
+			// Check if message is in the allowlist for unauthenticated connections
+			switch env.Type {
+			case ReqAuth, ReqCheckAdminExists, ReqWsBootstrapAdmin, ReqWsLogin, ReqWsRegister:
+				// Allow these
+			default:
+				log.Printf("[WS] Rejected unauthenticated message: %s", env.Type)
+				c.SendError(env.CorrelationID, "authentication required")
+				return
+			}
+		}
+
 		log.Printf("[WS] Unknown message type: %s", env.Type)
 		c.SendError(env.CorrelationID, "unknown message type")
 	}

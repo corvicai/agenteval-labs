@@ -364,5 +364,12 @@ func AutoMigrate(db *gorm.DB) error {
 	db.Exec(`ALTER TABLE invite_codes ADD COLUMN IF NOT EXISTS use_count INTEGER DEFAULT 0;`)
 	// We don't drop used_by/used_at to avoid breaking existing data if any, but they are deprecated.
 
+	// Firebase UID migration
+	db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS firebase_uid VARCHAR(255);`)
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_users_firebase_uid ON users(firebase_uid);`)
+
+	// Missing user_orgs column
+	db.Exec(`ALTER TABLE user_organizations ADD COLUMN IF NOT EXISTS invited_by_user_id UUID;`)
+
 	return nil
 }

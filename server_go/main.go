@@ -16,6 +16,7 @@ import (
 	"benchmarking-platform/api"
 	"benchmarking-platform/api/handlers"
 	"benchmarking-platform/internal/db"
+	"benchmarking-platform/internal/firebase"
 	"benchmarking-platform/internal/middleware"
 	"benchmarking-platform/models"
 	"benchmarking-platform/orchestrator"
@@ -118,8 +119,14 @@ func main() {
 
 	engine := orchestrator.NewEngine(database, pythonURL, workerCount)
 
+	// Initialize Firebase Admin SDK
+	fbClient, err := firebase.InitFirebase()
+	if err != nil {
+		log.Printf("[FIREBASE] ERROR: Failed to initialize Firebase: %v", err)
+	}
+
 	// Initialize WebSocket hub
-	hub := api.NewHub(database, engine, jwtSecret)
+	hub := api.NewHub(database, engine, jwtSecret, fbClient)
 	go hub.Run()
 
 	engine.SetEventCallback(func(workspaceID uuid.UUID, eventType string, correlationID string, payload any) {
