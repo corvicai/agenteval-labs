@@ -1,8 +1,25 @@
 import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
+
+// Prefer repo root .env when present; fall back to frontend/.env in container builds.
+const configDir = fileURLToPath(new URL('.', import.meta.url))
+const parentDir = path.resolve(configDir, '..')
+const envDir = fs.existsSync(path.join(parentDir, '.env')) ? parentDir : configDir
 
 export default defineConfig(({ mode }) => {
-    const env = loadEnv(mode, process.cwd(), '')
+    const env = loadEnv(mode, envDir, '')
+
+    // Explicitly expose VITE_ variables to the client
+    // This is a robust fallback if auto-detection fails
+    const processEnv = {}
+    for (const key in env) {
+        if (key.startsWith('VITE_')) {
+            processEnv[`import.meta.env.${key}`] = JSON.stringify(env[key])
+        }
+    }
     const disableHmr = env.VITE_DISABLE_HMR === '1'
     const apiUrl = env.VITE_API_URL || 'http://go-api:8080'
     let hmrHost = env.VITE_HMR_HOST || undefined
@@ -32,6 +49,8 @@ export default defineConfig(({ mode }) => {
     const wsUrl = apiUrl.replace(/^http/, 'ws')
 
     return {
+        envDir,
+        define: processEnv,
         plugins: [vue()],
         build: {
             // Generate unique filenames with content hash for cache-busting
