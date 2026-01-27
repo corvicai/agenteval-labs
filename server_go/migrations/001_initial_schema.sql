@@ -1,98 +1,225 @@
 -- 001_initial_schema.sql
--- Complete database schema for Benchmarking Platform
+-- consolidated schema for Benchmarking Platform
 
--- Organizations (must be created first for foreign key references)
+-- Organizations
 CREATE TABLE IF NOT EXISTS organizations (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name TEXT UNIQUE NOT NULL,
+    id UUID PRIMARY KEY,
+    name VARCHAR(255) UNIQUE NOT NULL,
     is_suspended BOOLEAN DEFAULT false,
+    audit_logs_enabled BOOLEAN DEFAULT false,
     manager_id UUID,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_by_user_id UUID,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
 );
 
 -- Users
 CREATE TABLE IF NOT EXISTS users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name TEXT NOT NULL,
-    email TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
+    id UUID PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
     is_admin BOOLEAN DEFAULT false,
-    organization_id UUID REFERENCES organizations(id),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    is_suspended BOOLEAN DEFAULT false,
+    invited_by_user_id UUID,
+    last_login_at TIMESTAMP,
+    terms_accepted_at TIMESTAMP,
+    firebase_uid VARCHAR(255),
+    created_at TIMESTAMP DEFAULT NOW()
 );
 
--- Add manager foreign key (after users table exists)
-ALTER TABLE organizations ADD CONSTRAINT fk_org_manager 
-    FOREIGN KEY (manager_id) REFERENCES users(id);
+-- Indices for users
+CREATE INDEX IF NOT EXISTS idx_users_firebase_uid ON users(firebase_uid);
+
+-- Add manager FK (after users table exists)
+DO $$ 
+BEGIN 
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_org_manager') THEN
+        ALTER TABLE organizations ADD CONSTRAINT fk_org_manager FOREIGN KEY (manager_id) REFERENCES users(id);
+    END IF;
+END $$;
 
 -- Workspaces
 CREATE TABLE IF NOT EXISTS workspaces (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    organization_id UUID REFERENCES organizations(id),
-    name TEXT NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Clients
 CREATE TABLE IF NOT EXISTS clients (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY,
     workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    name VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Agents
 CREATE TABLE IF NOT EXISTS agents (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY,
     workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    provider_type TEXT NOT NULL, -- 'mcp', 'openai', 'evaluator'
+    name VARCHAR(255) NOT NULL,
+    provider_type VARCHAR(50) NOT NULL,
     config JSONB NOT NULL DEFAULT '{}',
     enabled BOOLEAN DEFAULT true,
     position INTEGER DEFAULT 0,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    max_concurrency INTEGER DEFAULT 5,
+    created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Question Sets
 CREATE TABLE IF NOT EXISTS question_sets (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY,
     client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    version TEXT,
-    data JSONB NOT NULL, -- The categories/questions structure
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    name VARCHAR(255) NOT NULL,
+    version VARCHAR(50),
+    data JSONB NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Runs
 CREATE TABLE IF NOT EXISTS runs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY,
     workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     question_set_id UUID NOT NULL REFERENCES question_sets(id),
-    status TEXT NOT NULL DEFAULT 'running', -- 'running', 'completed', 'failed'
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    status VARCHAR(50) NOT NULL DEFAULT 'running',
+    total_tasks INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Run Results
 CREATE TABLE IF NOT EXISTS run_results (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY,
     run_id UUID NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    question_id TEXT NOT NULL, -- Stable ID from question set
-    status TEXT NOT NULL, -- 'success', 'error'
+    question_id VARCHAR(255) NOT NULL,
+    status VARCHAR(50) NOT NULL,
     answer TEXT,
+    error TEXT,
     metadata JSONB DEFAULT '{}',
     duration_ms INTEGER,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Evaluations
 CREATE TABLE IF NOT EXISTS evaluations (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY,
     run_result_id UUID NOT NULL REFERENCES run_results(id) ON DELETE CASCADE,
-    rater_type TEXT NOT NULL, -- 'user', 'agent'
-    rater_id UUID, -- References users(id) or agents(id)
-    rating TEXT NOT NULL, -- 'like', 'dislike', 'valid', 'wrong'
+    rater_type VARCHAR(50) NOT NULL,
+    rater_id UUID,
+    rating VARCHAR(50) NOT NULL,
+    rating_code INTEGER,
+    score INTEGER,
     comments TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT NOW()
 );
 
--- Indices for workspace isolation and performance
-CREATE INDEX IF NOT EXISTS idx_users_org_id ON users(organization_id);
+-- Stats Cache
+CREATE TABLE IF NOT EXISTS stats_caches (
+    id UUID PRIMARY KEY,
+    scope VARCHAR(20) NOT NULL,
+    scope_id UUID,
+    data JSONB NOT NULL,
+    computed_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Indices for stats_cache
+CREATE UNIQUE INDEX IF NOT EXISTS idx_stats_cache_scope ON stats_caches(scope, COALESCE(scope_id, '00000000-0000-0000-0000-000000000000'::uuid));
+CREATE INDEX IF NOT EXISTS idx_stats_cache_scope_type ON stats_caches(scope);
+CREATE INDEX IF NOT EXISTS idx_stats_cache_expires ON stats_caches(expires_at);
+
+-- Question Set Agents
+CREATE TABLE IF NOT EXISTS question_set_agents (
+    question_set_id UUID NOT NULL REFERENCES question_sets(id) ON DELETE CASCADE,
+    agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    enabled BOOLEAN DEFAULT true,
+    position INT DEFAULT 0,
+    config JSONB,
+    created_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (question_set_id, agent_id)
+);
+
+-- Indices for question_set_agents
+CREATE INDEX IF NOT EXISTS idx_qsa_question_set ON question_set_agents(question_set_id);
+CREATE INDEX IF NOT EXISTS idx_qsa_agent ON question_set_agents(agent_id);
+
+-- User Organizations
+CREATE TABLE IF NOT EXISTS user_organizations (
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    role VARCHAR(50) NOT NULL DEFAULT 'member',
+    invited_by_user_id UUID,
+    joined_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (user_id, organization_id)
+);
+
+-- Audit Logs
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id UUID PRIMARY KEY,
+    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
+    action VARCHAR(100) NOT NULL,
+    resource_type VARCHAR(100) NOT NULL,
+    resource_id VARCHAR(100),
+    details TEXT,
+    remote_ip VARCHAR(50),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Login Logs
+CREATE TABLE IF NOT EXISTS login_logs (
+    id UUID PRIMARY KEY,
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    user_email VARCHAR(255) NOT NULL,
+    organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL,
+    ip_address VARCHAR(50) NOT NULL,
+    user_agent TEXT,
+    status VARCHAR(50) NOT NULL,
+    failure_reason TEXT,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Invite Codes
+CREATE TABLE IF NOT EXISTS invite_codes (
+    code VARCHAR(255) PRIMARY KEY,
+    created_by UUID NOT NULL REFERENCES users(id),
+    organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+    role VARCHAR(50) DEFAULT 'member',
+    is_new_org BOOLEAN DEFAULT false,
+    expires_at TIMESTAMP NOT NULL,
+    max_uses INTEGER DEFAULT 1,
+    use_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Invite Code Usages
+CREATE TABLE IF NOT EXISTS invite_code_usages (
+    id UUID PRIMARY KEY,
+    code VARCHAR(255) NOT NULL REFERENCES invite_codes(code) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    used_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Passkeys
+CREATE TABLE IF NOT EXISTS passkeys (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    credential_id BYTEA UNIQUE NOT NULL,
+    public_key BYTEA NOT NULL,
+    attestation VARCHAR(50),
+    sign_count BIGINT DEFAULT 0,
+    backup_eligible BOOLEAN DEFAULT false,
+    backup_state BOOLEAN DEFAULT false,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- General Indices
+CREATE INDEX IF NOT EXISTS idx_users_org_id_deprecated ON users(id); -- note: users no longer have organization_id directly
 CREATE INDEX IF NOT EXISTS idx_workspaces_user_id ON workspaces(user_id);
 CREATE INDEX IF NOT EXISTS idx_workspaces_org_id ON workspaces(organization_id);
 CREATE INDEX IF NOT EXISTS idx_clients_workspace_id ON clients(workspace_id);
@@ -101,3 +228,21 @@ CREATE INDEX IF NOT EXISTS idx_question_sets_client_id ON question_sets(client_i
 CREATE INDEX IF NOT EXISTS idx_runs_workspace_id ON runs(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_run_results_run_id ON run_results(run_id);
 CREATE INDEX IF NOT EXISTS idx_evaluations_run_result_id ON evaluations(run_result_id);
+CREATE INDEX IF NOT EXISTS idx_evaluations_rating_code ON evaluations(rating_code);
+
+-- Data Backfills
+UPDATE evaluations SET rating_code = CASE
+    WHEN rating = 'like' THEN 1
+    WHEN rating = 'valid' THEN 2
+    WHEN rating = 'dislike' THEN 3
+    WHEN rating = 'wrong' THEN 4
+    ELSE NULL
+END WHERE rating_code IS NULL;
+
+UPDATE evaluations SET score = CASE
+    WHEN rating_code = 1 THEN 100
+    WHEN rating_code = 2 THEN 75
+    WHEN rating_code = 3 THEN 25
+    WHEN rating_code = 4 THEN 0
+    ELSE NULL
+END WHERE score IS NULL;
