@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"benchmarking-platform/internal/middleware"
@@ -171,7 +172,9 @@ func (h *Hub) handleWsLogin(c *Connection, env models.Envelope) {
 			OrganizationID: orgID,
 			CreatedAt:      time.Now(),
 		}
-		h.db.Create(&logEntry)
+		if err := h.db.Create(&logEntry).Error; err != nil {
+			log.Printf("[LOGIN_LOG] ERROR: Failed to create log entry: %v", err)
+		}
 	}
 
 	// Find user by email

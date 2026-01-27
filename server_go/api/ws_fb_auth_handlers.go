@@ -125,7 +125,9 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 		OrganizationID: orgID,
 		CreatedAt:      time.Now(),
 	}
-	h.db.Create(&logEntry)
+	if err := h.db.Create(&logEntry).Error; err != nil {
+		log.Printf("[LOGIN_LOG] ERROR: Failed to create log entry (OAuth): %v", err)
+	}
 
 	log.Printf("[FIREBASE] User authenticated: %s (%s) - Onboarding: %v", user.Email, user.ID, requiresOnboarding)
 
