@@ -82,6 +82,7 @@ func AutoMigrate(db *gorm.DB) error {
 			is_suspended BOOLEAN DEFAULT false,
 			invited_by_user_id UUID,
 			last_login_at TIMESTAMP,
+			terms_accepted_at TIMESTAMP,
 			created_at TIMESTAMP
 		)
 	`).Error; err != nil {
@@ -370,6 +371,7 @@ func AutoMigrate(db *gorm.DB) error {
 
 	// Missing user_orgs column
 	db.Exec(`ALTER TABLE user_organizations ADD COLUMN IF NOT EXISTS invited_by_user_id UUID;`)
+	db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMP;`)
 
 	return nil
 }

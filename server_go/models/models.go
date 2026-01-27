@@ -47,6 +47,7 @@ type User struct {
 	InvitedByUserID *uuid.UUID         `gorm:"type:uuid" json:"invited_by_user_id"`
 	InvitedBy       *User              `gorm:"foreignKey:InvitedByUserID;constraint:false" json:"invited_by,omitempty"`
 	LastLoginAt     *time.Time         `json:"last_login_at,omitempty"`
+	TermsAcceptedAt *time.Time         `json:"terms_accepted_at,omitempty"`
 	CreatedAt       time.Time          `json:"created_at"`
 }
 
