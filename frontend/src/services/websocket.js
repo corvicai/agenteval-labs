@@ -538,20 +538,44 @@ class WebSocketService {
     }
 
     // WebAuthn methods
-    webAuthnRegisterBegin() {
-        return this.request('REQ_WEBAUTHN_REGISTER_BEGIN', {})
+    async webAuthnRegisterBegin() {
+        const data = await this.request('REQ_WEBAUTHN_REGISTER_BEGIN', {})
+        this._webAuthnRegSessionId = data.session_id
+        return data.options
     }
 
     webAuthnRegisterFinish(response) {
-        return this.request('REQ_WEBAUTHN_REGISTER_FINISH', { response })
+        return this.request('REQ_WEBAUTHN_REGISTER_FINISH', {
+            response,
+            session_id: this._webAuthnRegSessionId
+        })
     }
 
-    webAuthnLoginBegin(email) {
-        return this.request('REQ_WEBAUTHN_LOGIN_BEGIN', { email })
+    async webAuthnLoginBegin(email) {
+        const data = await this.request('REQ_WEBAUTHN_LOGIN_BEGIN', { email })
+        this._webAuthnLoginSessionId = data.session_id
+        this._webAuthnLoginEmail = email
+        return data.options
     }
 
-    webAuthnLoginFinish(email, response) {
-        return this.request('REQ_WEBAUTHN_LOGIN_FINISH', { email, response })
+    async webAuthnLoginFinish(email, response) {
+        const targetEmail = email || this._webAuthnLoginEmail
+        const sessionId = this._webAuthnLoginSessionId
+
+        const result = await this.request('REQ_WEBAUTHN_LOGIN_FINISH', {
+            email: targetEmail,
+            response,
+            session_id: sessionId
+        })
+
+        if (result.token) {
+            localStorage.setItem('token', result.token)
+            localStorage.setItem('user', JSON.stringify(result.user))
+            this.token = result.token
+            this._establishConnection() // Re-connect with token
+        }
+
+        return result
     }
 
     webAuthnDeleteKey(keyId) {

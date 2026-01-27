@@ -645,9 +645,9 @@ export default {
     async registerPasskey() {
       this.registeringPasskey = true
       try {
-        const options = await api.webAuthnRegisterBegin()
+        const options = await wsService.webAuthnRegisterBegin()
         const credential = await webauthnService.createCredential(options)
-        await api.webAuthnRegisterFinish(credential)
+        await wsService.webAuthnRegisterFinish(credential)
         alert('Passkey registered successfully')
         await this.loadProfile() // Refresh
       } catch (e) {
