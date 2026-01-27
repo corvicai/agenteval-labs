@@ -86,6 +86,9 @@
         <button class="btn btn-secondary" @click="$emit('toggle-zen', true)">
           🧘 Zen
         </button>
+        <button class="btn btn-secondary" @click="reloadResults" title="Reload Results">
+          🔄
+        </button>
         <button v-if="isRunning" class="btn btn-danger" @click="cancelBenchmark">
           ⛔ Cancel
         </button>
@@ -262,6 +265,14 @@ watch(() => props.initialQuestionSetId, (newId) => {
     if (found) {
       currentQuestionSet.value = found
     }
+  }
+})
+
+// Watch for workspaceId changes to trigger fetch if it was skipped
+watch(() => props.workspaceId, (newId) => {
+  if (newId && currentQuestionSet.value && !isRunning.value) {
+    console.log('[Arena] WorkspaceID arrived, fetching results for QS:', currentQuestionSet.value.id)
+    fetchLatestResultsForQS(currentQuestionSet.value.id)
   }
 })
 
@@ -599,6 +610,22 @@ function getCachedRunForQS(qsId) {
 
 function setCachedRunForQS(qsId, data) {
   latestRunCache.set(qsId, { data, runId: data?.run?.id || null })
+}
+
+function reloadResults() {
+  if (currentQuestionSet.value) {
+    console.log('[Arena] Manually reloading results...')
+    fetchLatestResultsForQS(currentQuestionSet.value.id)
+  }
+}
+
+function ensureResultsLoaded() {
+  setTimeout(() => {
+    if (currentQuestionSet.value && !currentRun.value && !isLoadingResults.value && !isRunning.value) {
+       console.log('[Arena] Auto-healing: Results missing, triggering reload...')
+       reloadResults()
+    }
+  }, 1000)
 }
 
 function applyRunLiteData(data) {
@@ -969,6 +996,9 @@ onMounted(async () => {
             }
         } catch (e) { console.error('Failed to restore active run:', e) }
     }
+    
+    // Safety check for loaded results
+    ensureResultsLoaded()
 
     wsService.on('EVT_TASK_QUEUED', (data) => {
         const agentId = data.agent_id
