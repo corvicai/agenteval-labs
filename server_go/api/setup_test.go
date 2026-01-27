@@ -4,6 +4,7 @@ import (
 	"benchmarking-platform/internal/middleware"
 	"benchmarking-platform/models"
 	"encoding/json"
+	"log"
 	"os"
 	"testing"
 	"time"
@@ -12,13 +13,27 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 var db *gorm.DB
 
 func setup() {
 	var err error
-	db, err = gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	newLogger := logger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
+		logger.Config{
+			SlowThreshold:             time.Second,   // Slow SQL threshold
+			LogLevel:                  logger.Silent, // Log level
+			IgnoreRecordNotFoundError: true,          // Ignore ErrRecordNotFound error for logger
+			ParameterizedQueries:      true,          // Don't include params in the SQL log
+			Colorful:                  false,         // Disable color
+		},
+	)
+
+	db, err = gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		Logger: newLogger,
+	})
 	if err != nil {
 		panic("failed to connect database")
 	}
@@ -30,14 +45,27 @@ func setup() {
 		&models.UserOrganization{},
 		&models.Workspace{},
 		&models.InviteCode{},
+		&models.InviteCodeUsage{},
+		&models.Passkey{},
+		&models.AuditLog{},
+		&models.LoginLog{},
+		&models.StatsCache{},
+		&models.Agent{},
+		&models.Client{},
+		&models.QuestionSet{},
+		&models.QuestionSetAgent{},
+		&models.Run{},
+		&models.RunResult{},
+		&models.Evaluation{},
 	)
 }
 
 func createTestUser(t *testing.T, isAdmin bool) (models.User, string) {
+	uniqueID := uuid.New().String()
 	user := models.User{
 		ID:           uuid.New(),
-		Name:         "Test User",
-		Email:        "test@example.com",
+		Name:         "Test User " + uniqueID,
+		Email:        "test_" + uniqueID + "@example.com",
 		PasswordHash: "hash",
 		IsAdmin:      isAdmin,
 	}
@@ -46,9 +74,17 @@ func createTestUser(t *testing.T, isAdmin bool) (models.User, string) {
 	// Admin needs org and workspace too for token generation usually, or at least dummy ones
 	org := models.Organization{
 		ID:   uuid.New(),
-		Name: "Test Org",
+		Name: "Test Org " + uniqueID,
 	}
 	db.Create(&org)
+
+	// Link user to org
+	db.Create(&models.UserOrganization{
+		UserID:         user.ID,
+		OrganizationID: org.ID,
+		Role:           "manager",
+		JoinedAt:       time.Now(),
+	})
 
 	return user, generateTestToken(user.ID, uuid.Nil, org.ID)
 }
@@ -111,17 +147,8 @@ func sendWSRequest(t *testing.T, token string, msgType string, payload any) *mod
 		Payload:       payloadBytes,
 	}
 
-	// Dispatch based on Type manual routing for tests
-	switch env.Type {
-	case ReqAdminGenerateInvite:
-		hub.handleAdminGenerateInvite(conn, env)
-	case ReqManagerGenerateInvite:
-		hub.handleManagerGenerateInvite(conn, env)
-	case ReqWsRegister:
-		hub.handleWsRegister(conn, env)
-	default:
-		// Fallback or ignore for now
-	}
+	// Dispatch using central handler
+	hub.HandleWSMessage(conn, env)
 
 	// Capture response from channel
 	select {

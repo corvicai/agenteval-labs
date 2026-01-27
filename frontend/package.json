@@ -5,7 +5,9 @@
     "scripts": {
         "dev": "vite --host --port 3010",
         "build": "vite build",
-        "preview": "vite preview --port 3010"
+        "preview": "vite preview --port 3010",
+        "test": "vitest",
+        "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
         "@github/webauthn-json": "^2.1.1",
@@ -15,8 +17,11 @@
         "vue": "^3.4.0"
     },
     "devDependencies": {
-        "@vitejs/plugin-vue": "^5.0.0",
-        "vite": "^5.0.0"
+        "@vitejs/plugin-vue": "^5.2.4",
+        "@vue/test-utils": "^2.4.6",
+        "jsdom": "^27.4.0",
+        "vite": "^5.0.0",
+        "vitest": "^4.0.18"
     },
     "overrides": {
         "esbuild": "^0.25.0"
