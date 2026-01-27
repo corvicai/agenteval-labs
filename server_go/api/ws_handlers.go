@@ -124,7 +124,7 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 	case ReqAdminRemoveUserFromOrg:
 		h.handleAdminRemoveUserFromOrg(c, env)
 	case ReqAdminGetLoginLogs:
-		// h.handleAdminGetLoginLogs(c, env) // Temporarily disabled or missing
+		h.handleAdminGetLoginLogs(c, env)
 
 	// Manager handlers
 	case ReqManagerGetWorkspaces:
