@@ -56,6 +56,66 @@
           </div>
         </section>
 
+        <section v-if="isSelf" class="profile-card providers-card">
+          <h3>🔗 Linked Providers</h3>
+          <p class="text-muted">Link multiple sign-in methods to use the same account.</p>
+          <div class="provider-list">
+            <div class="provider-row">
+              <div class="provider-info">
+                <span class="provider-icon">🟢</span>
+                <div>
+                  <div class="provider-name">Google</div>
+                  <div class="provider-status">
+                    {{ isProviderLinked('google.com') ? 'Linked' : 'Not linked' }}
+                  </div>
+                </div>
+              </div>
+              <button
+                class="btn btn-secondary"
+                @click="linkProvider('google')"
+                :disabled="linkingProvider || isProviderLinked('google.com')"
+              >
+                {{ linkingProvider === 'google' ? 'Linking...' : 'Link Google' }}
+              </button>
+            </div>
+
+            <div class="provider-row">
+              <div class="provider-info">
+                <span class="provider-icon">🐙</span>
+                <div>
+                  <div class="provider-name">GitHub</div>
+                  <div class="provider-status">
+                    {{ isProviderLinked('github.com') ? 'Linked' : 'Not linked' }}
+                  </div>
+                </div>
+              </div>
+              <button
+                class="btn btn-secondary"
+                @click="linkProvider('github')"
+                :disabled="linkingProvider || isProviderLinked('github.com')"
+              >
+                {{ linkingProvider === 'github' ? 'Linking...' : 'Link GitHub' }}
+              </button>
+            </div>
+
+            <div class="provider-row">
+              <div class="provider-info">
+                <span class="provider-icon">✉️</span>
+                <div>
+                  <div class="provider-name">Email and Password</div>
+                  <div class="provider-status">
+                    {{ isProviderLinked('password') ? 'Linked' : 'Not linked' }}
+                  </div>
+                </div>
+              </div>
+              <span class="text-muted">Managed via email/password login</span>
+            </div>
+          </div>
+
+          <div v-if="providerLinkError" class="inline-error">{{ providerLinkError }}</div>
+          <div v-if="providerLinkSuccess" class="inline-success">{{ providerLinkSuccess }}</div>
+        </section>
+
         <section v-if="userData.organizations?.length" class="profile-card org-card">
           <h3>🏢 Organizations ({{ userData.organizations.length }})</h3>
           <div class="table-container">
@@ -354,6 +414,8 @@
 <script>
 import { wsService } from '../services/websocket.js'
 import { webauthnService } from '../services/webauthn.js'
+import { onAuthStateChanged, linkWithPopup, reauthenticateWithPopup } from 'firebase/auth'
+import { auth, googleProvider, githubProvider } from '../services/firebase.js'
 
 export default {
   name: 'AdminProfileView',
@@ -380,7 +442,12 @@ export default {
         new: '',
         confirm: ''
       },
-      registeringPasskey: false
+      registeringPasskey: false,
+      linkedProviders: [],
+      linkingProvider: '',
+      providerLinkError: '',
+      providerLinkSuccess: '',
+      authUnsubscribe: null
     }
   },
   computed: {
@@ -404,6 +471,10 @@ export default {
       const user = JSON.parse(localStorage.getItem('user') || '{}');
       // Self or SuperAdmin can change
       return user.id === this.entityId || user.is_admin;
+    },
+    isSelf() {
+      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      return this.entityType === 'user' && user.id === this.entityId;
     },
     isWebAuthnSupported() {
       return webauthnService.isSupported()
@@ -439,6 +510,15 @@ export default {
   watch: {
     entityId: { immediate: true, handler: 'loadProfile' },
     entityType: { handler: 'loadProfile' }
+  },
+  mounted() {
+    this.loadLinkedProviders()
+    this.authUnsubscribe = onAuthStateChanged(auth, () => {
+      this.loadLinkedProviders()
+    })
+  },
+  beforeUnmount() {
+    if (this.authUnsubscribe) this.authUnsubscribe()
   },
   methods: {
     async loadProfile() {
@@ -563,6 +643,69 @@ export default {
         await this.loadProfile() // Refresh
       } catch (e) {
         alert('Failed to delete passkey: ' + e.message)
+      }
+    },
+    loadLinkedProviders() {
+      if (!this.isSelf) {
+        this.linkedProviders = []
+        return
+      }
+      const user = auth.currentUser
+      if (!user) {
+        this.linkedProviders = []
+        return
+      }
+      this.linkedProviders = (user.providerData || []).map((p) => p.providerId)
+    },
+    isProviderLinked(providerId) {
+      return this.linkedProviders.includes(providerId)
+    },
+    async linkProvider(providerKey) {
+      if (!this.isSelf) return
+      this.providerLinkError = ''
+      this.providerLinkSuccess = ''
+      this.linkingProvider = providerKey
+      try {
+        const user = auth.currentUser
+        if (!user) throw new Error('No authenticated Firebase user found.')
+
+        let provider = null
+        let label = ''
+        if (providerKey === 'google') {
+          provider = googleProvider
+          label = 'Google'
+        } else if (providerKey === 'github') {
+          provider = githubProvider
+          label = 'GitHub'
+        } else {
+          throw new Error('Unsupported provider.')
+        }
+
+        try {
+          await linkWithPopup(user, provider)
+        } catch (e) {
+          if (e?.code === 'auth/requires-recent-login') {
+            await reauthenticateWithPopup(user, provider)
+            await linkWithPopup(user, provider)
+          } else {
+            throw e
+          }
+        }
+
+        await user.reload()
+        this.loadLinkedProviders()
+        this.providerLinkSuccess = `${label} linked successfully.`
+      } catch (e) {
+        if (e?.code === 'auth/popup-closed-by-user') {
+          return
+        }
+        if (e?.code === 'auth/credential-already-in-use') {
+          this.providerLinkError = 'This provider is already linked to another account.'
+        } else {
+          this.providerLinkError = e?.message || 'Failed to link provider.'
+        }
+      } finally {
+        this.linkingProvider = ''
       }
     },
     confirmRemoveUser(user) {
@@ -694,6 +837,64 @@ export default {
   color: #475569;
   border-bottom: 1px solid #e2e8f0;
   padding-bottom: 0.75rem;
+}
+
+.provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.provider-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.provider-info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.provider-icon {
+  font-size: 1.25rem;
+}
+
+.provider-name {
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.provider-status {
+  font-size: 0.85rem;
+  color: #64748b;
+}
+
+.inline-error {
+  margin-top: 0.75rem;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #dc2626;
+  padding: 0.6rem 0.8rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.inline-success {
+  margin-top: 0.75rem;
+  background: #ecfdf3;
+  border: 1px solid #bbf7d0;
+  color: #15803d;
+  padding: 0.6rem 0.8rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
 }
 
 .info-grid {
