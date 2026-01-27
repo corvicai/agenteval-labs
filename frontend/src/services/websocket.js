@@ -472,8 +472,8 @@ class WebSocketService {
         return this.request('REQ_ADMIN_UPDATE_USER', userData)
     }
 
-    adminDeleteUser(userId) {
-        return this.request('REQ_ADMIN_DELETE_USER', { id: userId })
+    adminDeleteUser(userId, mode = 'hard') {
+        return this.request('REQ_ADMIN_DELETE_USER', { id: userId, mode: mode })
     }
 
     adminCreateOrg(orgData) {
@@ -560,6 +560,10 @@ class WebSocketService {
 
     createOrganization(name) {
         return this.request('REQ_CREATE_ORGANIZATION', { name })
+    }
+
+    acceptTerms() {
+        return this.request('REQ_ACCEPT_TERMS', {})
     }
 
     joinOrganization(inviteCode) {

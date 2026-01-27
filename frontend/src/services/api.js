@@ -1,4 +1,5 @@
 const API_BASE = '/api'
+import { logoutFirebase } from './firebase.js'
 
 // Helper for fetch with error handling
 export async function request(url, options = {}) {
@@ -89,6 +90,20 @@ export async function login(email, password, organizationId = null) {
     return result
 }
 
+export async function acceptTerms() {
+    const response = await fetch(`${API_BASE}/auth/accept-terms`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+    })
+    if (!response.ok) {
+        const err = await response.json()
+        throw new Error(err.error || 'Failed to accept terms')
+    }
+    return await response.json()
+}
+
 export async function joinOrganization(inviteCode) {
     const result = await request('/auth/join-organization', {
         method: 'POST',
@@ -124,6 +139,9 @@ export async function selectOrganization(orgId) {
 export async function logout() {
     try {
         await fetch(`${API_BASE}/auth/logout`, { method: 'POST', credentials: 'include' })
+        const ws = (await import('./websocket.js')).default
+        if (ws) ws.disconnect()
+        await logoutFirebase()
     } catch (e) {
         console.warn('Logout request failed', e)
     }

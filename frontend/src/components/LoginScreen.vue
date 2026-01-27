@@ -14,6 +14,7 @@
             <div v-if="socialError.email" class="error-meta">Email: {{ socialError.email }}</div>
             <div v-if="socialError.name" class="error-meta">Nome: {{ socialError.name }}</div>
           </div>
+          <!-- Removed pre-login ToS checkbox -->
           <button @click="handleSocialLogin('google')" class="btn btn-social btn-google" :disabled="loading">
             <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" />
             <span>Continue with Google</span>
@@ -125,6 +126,10 @@
             </div>
           </div>
 
+          <div v-if="isRegister" class="form-group checkbox-group animate-in">
+            <!-- Redundant checkbox removed as it is now global -->
+          </div>
+
           <button type="submit" class="btn btn-primary btn-submit" :disabled="loading">
             <span v-if="loading" class="loading-spinner"></span>
             {{ isRegister ? 'Create Account' : 'Sign In' }}
@@ -173,6 +178,9 @@
           <button type="button" class="btn btn-ghost mt-4" @click="handleCancelJoin">
             ← Back to login
           </button>
+          <button type="button" class="btn-cancel-delete" @click="handleCancelAndCleanup" :disabled="loading">
+            Delete my data and start over
+          </button>
         </form>
       </div>
 
@@ -200,6 +208,9 @@
         </div>
         <button class="btn btn-ghost mt-4" @click="handleCancelSelect">
           ← Back to login
+        </button>
+        <button type="button" class="btn-cancel-delete" @click="handleCancelAndCleanup" :disabled="loading">
+          Delete my data and start over
         </button>
       </div>
 
@@ -245,6 +256,26 @@
               <button type="submit" class="btn btn-primary" :disabled="loading">Create Admin</button>
             </div>
           </form>
+        </div>
+      </div>
+
+      <div v-if="showTermsModal" class="modal-overlay" @click.self="showTermsModal = false">
+        <div class="bootstrap-modal terms-modal">
+          <h3>📄 Terms of Service</h3>
+          <div class="terms-content">
+            <p><strong>Terms of Service and Privacy Policy</strong></p>
+            <p>By registering for the Benchmarking Platform, you agree to the following terms:</p>
+            <ol>
+              <li><strong>Data Collection:</strong> We collect data related to your use of the platform, including agent execution logs, evaluation results, performance metrics, and system interactions. This data is used to improve benchmarking features and provide statistical insights.</li>
+              <li><strong>Data Privacy:</strong> We guarantee that we do not collect or store private, confidential, or sensitive data (such as access credentials, API secrets, or personally identifiable information) that is not strictly necessary for the operation of the service or that has not been voluntarily provided for evaluation.</li>
+              <li><strong>Third-Party APIs:</strong> The use of third-party AI models (e.g., OpenAI) may be subject to the respective terms of service of those providers.</li>
+              <li><strong>Responsibility:</strong> Users are responsible for the actions and outputs of the agents configured on the platform.</li>
+            </ol>
+          </div>
+          <div class="modal-actions">
+            <button v-if="requiresTerms" type="button" class="btn btn-primary" @click="handleAcceptTermsAction">I Accept the Terms</button>
+            <button v-else type="button" class="btn btn-primary" @click="showTermsModal = false">Close</button>
+          </div>
         </div>
       </div>
     </div>
@@ -305,7 +336,7 @@ import { wsService } from '../services/websocket.js'
 import * as api from '../services/api.js'
 import { webauthnService } from '../services/webauthn.js'
 import { fetchSignInMethodsForEmail } from 'firebase/auth'
-import { auth, loginWithGoogle, loginWithGithub, getIdToken } from '../services/firebase.js'
+import { auth, loginWithGoogle, loginWithGithub, getIdToken, deleteCurrentUser } from '../services/firebase.js'
 
 const emit = defineEmits(['login'])
 
@@ -327,6 +358,8 @@ const devUsers = [
 const managers = ref([])
 
 const isRegister = ref(false)
+const acceptTerms = ref(false)
+const showTermsModal = ref(false)
 const form = ref({
   name: '',
   email: '',
@@ -342,6 +375,7 @@ const showBootstrapLink = ref(false)
 
 const showOrgSelector = ref(false)
 const requiresInviteCode = ref(false)
+const requiresTerms = ref(false)
 const availableOrganizations = ref([])
 const isWebAuthnSupported = ref(webauthnService.isSupported())
 
@@ -370,6 +404,16 @@ async function handleSocialLogin(provider) {
       const result = await wsService.authenticateWithFirebase(token)
       
       if (result.success) {
+        if (result.requires_terms) {
+          requiresTerms.value = true
+          showTermsModal.value = true
+          // IMPORTANT: Save state even if ToS is required, so onLogin has data later
+          if (result.user) localStorage.setItem('user', JSON.stringify(result.user))
+          if (result.workspace) localStorage.setItem('workspace', JSON.stringify(result.workspace))
+          if (result.token) localStorage.setItem('token', result.token)
+          return
+        }
+        
         // Save user/workspace info like in legacy login
         if (result.user) localStorage.setItem('user', JSON.stringify(result.user))
         if (result.workspace) localStorage.setItem('workspace', JSON.stringify(result.workspace))
@@ -465,10 +509,42 @@ async function handleSubmit() {
         return
       }
       
+      if (result.requires_terms) {
+        requiresTerms.value = true
+        showTermsModal.value = true
+        return
+      }
+      
       emit('login')
     }
   } catch (e) {
     error.value = e.message
+  } finally {
+    loading.value = false
+  }
+}
+
+async function handleAcceptTermsAction() {
+  loading.value = true
+  try {
+    const result = await api.acceptTerms()
+    
+    // Update local user record if backend returned an updated one (with TermsAcceptedAt)
+    if (result && (result.user || result.ID)) {
+       const updatedUser = result.user || result
+       localStorage.setItem('user', JSON.stringify(updatedUser))
+    }
+    
+    requiresTerms.value = false
+    showTermsModal.value = false
+    acceptTerms.value = true
+    
+    // Force WebSocket disconnect so onLogin in App.vue creates a fresh, authenticated connection
+    wsService.disconnect()
+    
+    emit('login')
+  } catch (e) {
+    error.value = "Failed to accept terms: " + e.message
   } finally {
     loading.value = false
   }
@@ -536,6 +612,24 @@ function handleCancelJoin() {
 function handleCancelSelect() {
   showOrgSelector.value = false
   error.value = ''
+}
+
+async function handleCancelAndCleanup() {
+  if (confirm('Are you sure you want to cancel and delete your authentication data? This will permenantly remove your login from this system.')) {
+    loading.value = true
+    try {
+      await deleteCurrentUser()
+      // Local storage cleanup
+      localStorage.removeItem('user')
+      localStorage.removeItem('workspace')
+      localStorage.removeItem('token')
+      window.location.reload() // Go back to fresh login
+    } catch (e) {
+      error.value = 'Cleanup failed: ' + e.message
+    } finally {
+      loading.value = false
+    }
+  }
 }
 
 async function handleBootstrap() {
@@ -698,6 +792,14 @@ onMounted(async () => {
   margin-bottom: 1.5rem;
 }
 
+.tos-agreement {
+  margin-bottom: 0.5rem;
+  padding: 0.5rem;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
 .btn-social {
   display: flex;
   align-items: center;
@@ -826,6 +928,59 @@ onMounted(async () => {
 @keyframes slideDown {
   from { opacity: 0; transform: translateY(-10px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+.checkbox-group {
+  margin: 0.5rem 0;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.75rem !important;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.checkbox-label input {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.checkbox-label a {
+  color: #49399d;
+  text-decoration: underline;
+}
+
+.terms-modal {
+  max-width: 500px;
+}
+
+.terms-content {
+  max-height: 400px;
+  overflow-y: auto;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: #374151;
+  padding: 1rem;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  margin-bottom: 1rem;
+}
+
+.terms-content ol {
+  padding-left: 1.25rem;
+  margin: 1rem 0;
+}
+
+.terms-content li {
+  margin-bottom: 0.75rem;
 }
 
 .login-fields {
@@ -1314,6 +1469,26 @@ onMounted(async () => {
 .btn-ghost:hover {
   color: #49399d;
   background: #f1f5f9;
+}
+
+.btn-cancel-delete {
+  margin-top: 1.5rem;
+  background: transparent;
+  border: none;
+  color: #fca5a5;
+  font-size: 0.8rem;
+  text-decoration: underline;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.btn-cancel-delete:hover:not(:disabled) {
+  color: #ef4444;
+}
+
+.btn-cancel-delete:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 @keyframes fadeIn {

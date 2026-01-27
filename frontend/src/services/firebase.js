@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider, GithubAuthProvider, signInWithPopup } from "firebase/auth";
+import { getAuth, GoogleAuthProvider, GithubAuthProvider, signInWithPopup, signOut } from "firebase/auth";
 
 // Firebase configuration from environment variables
 // These should be set in .env or provided by the user
@@ -39,6 +39,29 @@ export const loginWithGithub = async () => {
 export const getIdToken = async () => {
     if (!auth.currentUser) return null;
     return await auth.currentUser.getIdToken(true);
+};
+
+export const deleteCurrentUser = async () => {
+    if (!auth.currentUser) return;
+    try {
+        await auth.currentUser.delete();
+        console.log('[Firebase] User deleted successfully');
+    } catch (e) {
+        console.error('[Firebase] Failed to delete user:', e);
+        if (e.code === 'auth/requires-recent-login') {
+            throw new Error('This operation is sensitive and requires recent authentication. Please log out and log in again before deleting your account.');
+        }
+        throw e;
+    }
+};
+
+export const logoutFirebase = async () => {
+    try {
+        await signOut(auth);
+        console.log('[Firebase] Signed out successfully');
+    } catch (e) {
+        console.error('[Firebase] Sign out failed:', e);
+    }
 };
 
 export { auth, googleProvider, githubProvider };
