@@ -395,26 +395,13 @@ func (h *Hub) handleManagerGenerateInvite(c *Connection, env models.Envelope) {
 		payload.MaxUses = 1
 	}
 
-	code := generateRandomCode(8)
-	invite := models.InviteCode{
-		Code:           code,
-		CreatedBy:      c.UserID,
-		OrganizationID: orgID,
-		Role:           "member", // Managers invite members
-		IsNewOrg:       false,
-		ExpiresAt:      time.Now().Add(24 * time.Hour * 7),
-		MaxUses:        payload.MaxUses,
-		UseCount:       0,
-		CreatedAt:      time.Now(),
-	}
-
-	if err := h.db.Create(&invite).Error; err != nil {
-		c.SendError(env.CorrelationID, "failed to create invite: "+err.Error())
+	inviteCodeStr, err := models.GenerateInviteForOrg(h.db, c.UserID, *orgID, payload.MaxUses)
+	if err != nil {
+		c.SendError(env.CorrelationID, "failed to generate invite: "+err.Error())
 		return
 	}
 
 	c.SendResponse(DataResponse, env.CorrelationID, map[string]any{
-		"code":       invite.Code,
-		"expires_at": invite.ExpiresAt,
+		"code": inviteCodeStr,
 	})
 }

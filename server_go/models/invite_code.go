@@ -1,6 +1,8 @@
 package models
 
 import (
+	"crypto/rand"
+	"math/big"
 	"time"
 
 	"github.com/google/uuid"
@@ -66,9 +68,8 @@ const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456
 func generateRandomCode(n int) string {
 	b := make([]byte, n)
 	for i := range b {
-		b[i] = letterBytes[time.Now().UnixNano()%int64(len(letterBytes))]
-		// Note: strictly speaking math/rand seeded is better but for MVP this is ok or use crypto/rand
+		num, _ := rand.Int(rand.Reader, big.NewInt(int64(len(letterBytes))))
+		b[i] = letterBytes[num.Int64()]
 	}
-	// Better implementation using crypto/rand to avoid collisions slightly better
 	return string(b)
 }

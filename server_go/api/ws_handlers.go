@@ -97,6 +97,14 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 		h.handleWsBootstrapAdmin(c, env)
 
 	// WebAuthn handlers
+	case ReqWebAuthnRegisterBegin:
+		h.handleWebAuthnRegisterBegin(c, env)
+	case ReqWebAuthnRegisterFinish:
+		h.handleWebAuthnRegisterFinish(c, env)
+	case ReqWebAuthnLoginBegin:
+		h.handleWebAuthnLoginBegin(c, env)
+	case ReqWebAuthnLoginFinish:
+		h.handleWebAuthnLoginFinish(c, env)
 	case ReqWebAuthnDeleteKey:
 		h.handleWebAuthnDeleteKey(c, env)
 

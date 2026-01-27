@@ -14,6 +14,7 @@ import (
 	"benchmarking-platform/models"
 	"benchmarking-platform/orchestrator"
 
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"gorm.io/gorm"
@@ -181,17 +182,19 @@ const (
 
 // Hub manages WebSocket connections
 type Hub struct {
-	connections  map[uuid.UUID]*Connection
-	register     chan *Connection
-	unregister   chan *Connection
-	mu           sync.RWMutex
-	db           *gorm.DB
-	engine       *orchestrator.Engine
-	statsService *service.StatsService
-	qsService    *service.QuestionSetService
-	agentService *service.AgentService
-	jwtSecret    string
-	Firebase     *firebase.Client
+	connections      map[uuid.UUID]*Connection
+	register         chan *Connection
+	unregister       chan *Connection
+	mu               sync.RWMutex
+	db               *gorm.DB
+	engine           *orchestrator.Engine
+	statsService     *service.StatsService
+	qsService        *service.QuestionSetService
+	agentService     *service.AgentService
+	jwtSecret        string
+	Firebase         *firebase.Client
+	WebAuthn         *webauthn.WebAuthn
+	webauthnSessions map[string]*webauthn.SessionData
 }
 
 // HubInterface defines the methods required for broadcasting (to avoid import cycles in handlers)
@@ -211,19 +214,40 @@ type Connection struct {
 }
 
 func NewHub(db *gorm.DB, engine *orchestrator.Engine, jwtSecret string, fb *firebase.Client) *Hub {
-	return &Hub{
-		connections:  make(map[uuid.UUID]*Connection),
-		register:     make(chan *Connection),
-		unregister:   make(chan *Connection),
-		db:           db,
-		engine:       engine,
-		statsService: service.NewStatsService(db),
-		// qsService and agentService will be initialized if needed, or we can initialize them here
-		qsService:    &service.QuestionSetService{},
-		agentService: &service.AgentService{},
-		jwtSecret:    jwtSecret,
-		Firebase:     fb,
+	h := &Hub{
+		connections:      make(map[uuid.UUID]*Connection),
+		register:         make(chan *Connection),
+		unregister:       make(chan *Connection),
+		db:               db,
+		engine:           engine,
+		statsService:     service.NewStatsService(db),
+		qsService:        &service.QuestionSetService{},
+		agentService:     &service.AgentService{},
+		jwtSecret:        jwtSecret,
+		Firebase:         fb,
+		webauthnSessions: make(map[string]*webauthn.SessionData),
 	}
+
+	rpID := os.Getenv("RP_ID")
+	if rpID == "" {
+		rpID = "localhost"
+	}
+
+	origin := os.Getenv("RP_ORIGIN")
+	if origin == "" {
+		origin = "http://localhost:3010"
+	}
+
+	w, err := webauthn.New(&webauthn.Config{
+		RPDisplayName: "Benchmarking Platform",
+		RPID:          rpID,
+		RPOrigins:     []string{origin},
+	})
+	if err == nil {
+		h.WebAuthn = w
+	}
+
+	return h
 }
 
 func (h *Hub) Run() {

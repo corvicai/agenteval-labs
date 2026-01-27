@@ -1086,7 +1086,7 @@ func (h *Hub) handleAdminGenerateInvite(c *Connection, env models.Envelope) {
 		}
 
 		c.SendResponse(DataResponse, env.CorrelationID, map[string]string{
-			"invite_code":     inviteCodeStr,
+			"code":            inviteCodeStr,
 			"organization_id": orgID.String(),
 		})
 		return
@@ -1103,8 +1103,8 @@ func (h *Hub) handleAdminGenerateInvite(c *Connection, env models.Envelope) {
 			return
 		}
 		c.SendResponse(DataResponse, env.CorrelationID, map[string]string{
-			"invite_code": inviteCodeStr,
-			"type":        "new_org",
+			"code": inviteCodeStr,
+			"type": "new_org",
 		})
 		return
 	}
