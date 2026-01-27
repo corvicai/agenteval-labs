@@ -55,6 +55,8 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 		h.handleWsLogin(c, env)
 	case ReqAuth:
 		h.handleAuth(c, env)
+	case ReqAcceptTerms:
+		h.handleAcceptTerms(c, env)
 	case ReqGetWorkspaceRuns:
 		h.handleGetWorkspaceRuns(c, env)
 	case ReqSwitchWorkspace:

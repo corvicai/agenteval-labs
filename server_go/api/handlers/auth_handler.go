@@ -80,6 +80,7 @@ type AuthResponse struct {
 	RequiresOrgSelection bool              `json:"requires_org_selection,omitempty"`
 	RequiresInviteCode   bool              `json:"requires_invite_code,omitempty"`
 	AvailableOrgs        []AuthOrgResponse `json:"available_orgs,omitempty"`
+	RequiresTerms        bool              `json:"requires_terms,omitempty"`
 }
 
 type AuthOrgResponse struct {
@@ -303,6 +304,7 @@ func (h *AuthHandler) Register(c echo.Context) error {
 	if orgID == uuid.Nil {
 		resp.RequiresInviteCode = true
 	}
+	resp.RequiresTerms = user.TermsAcceptedAt == nil
 
 	return c.JSON(http.StatusCreated, resp)
 }
@@ -494,10 +496,11 @@ func (h *AuthHandler) Login(c echo.Context) error {
 	userResp.OrganizationName = org.Name
 
 	return c.JSON(http.StatusOK, AuthResponse{
-		Token:     token,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
-		User:      userResp,
-		Workspace: &workspace,
+		Token:         token,
+		ExpiresAt:     time.Now().Add(24 * time.Hour),
+		User:          userResp,
+		Workspace:     &workspace,
+		RequiresTerms: user.TermsAcceptedAt == nil,
 	})
 }
 
@@ -569,6 +572,21 @@ func (h *AuthHandler) Logout(c echo.Context) error {
 	cookie.Path = "/"
 	c.SetCookie(cookie)
 	return c.JSON(http.StatusOK, map[string]string{"message": "Logged out"})
+}
+
+// AcceptTerms persists the user's agreement to the Terms of Service
+func (h *AuthHandler) AcceptTerms(c echo.Context) error {
+	userID := middleware.GetUserID(c)
+	if userID == uuid.Nil {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Authentication required"})
+	}
+
+	now := time.Now()
+	if err := h.db.Model(&models.User{}).Where("id = ?", userID).Update("terms_accepted_at", &now).Error; err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update terms acceptance"})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"status": "success"})
 }
 
 // JoinOrganizationRequest payload

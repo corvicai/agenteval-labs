@@ -101,6 +101,7 @@ const (
 	ReqAdminRemoveUserFromOrg = "REQ_ADMIN_REMOVE_USER_FROM_ORG"
 	ReqAdminGetLoginLogs      = "REQ_ADMIN_GET_LOGIN_LOGS"
 	ReqChangePassword         = "REQ_CHANGE_PASSWORD"
+	ReqAcceptTerms            = "REQ_ACCEPT_TERMS"
 
 	// Legacy Comands (mapped to correct ones or kept for compatibility)
 	CmdAdminProfile     = "CMD_ADMIN_PROFILE"

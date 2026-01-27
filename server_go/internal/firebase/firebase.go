@@ -58,3 +58,7 @@ func InitFirebase() (*Client, error) {
 func (c *Client) VerifyIDToken(ctx context.Context, idToken string) (*auth.Token, error) {
 	return c.Auth.VerifyIDToken(ctx, idToken)
 }
+
+func (c *Client) DeleteUser(ctx context.Context, uid string) error {
+	return c.Auth.DeleteUser(ctx, uid)
+}
