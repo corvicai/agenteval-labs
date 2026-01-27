@@ -13,6 +13,12 @@ import (
 )
 
 func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
+	// Reset connection state to prevent session bleeding from previous user on same connection
+	c.UserID = uuid.Nil
+	c.OrgID = uuid.Nil
+	c.WorkspaceID = uuid.Nil
+	c.IsAuthenticated = false
+
 	if h.Firebase == nil {
 		c.SendError(env.CorrelationID, "Firebase auth is not configured on the server")
 		return
@@ -72,6 +78,10 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 		h.db.Model(&user).Update("firebase_uid", uid)
 	}
 
+	requiresTerms := user.TermsAcceptedAt == nil
+	// Special Case: If it's a new user just created, we might consider them as needing ToS
+	// unless we auto-accept (not requested). User wants to show terms if not signed.
+
 	// Get user's active organization and workspace
 	var workspace models.Workspace
 	err = h.db.Preload("User").Preload("Organization").
@@ -85,12 +95,15 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 		// User has no workspace -> Needs Onboarding
 		requiresOnboarding = true
 		log.Printf("[FIREBASE] User %s has no workspace, requiring onboarding.", user.Email)
-	} else {
-		// Update connection with authenticated info
-		c.UserID = user.ID
+	}
+
+	// ALWAYS update connection with authenticated info if we have a user
+	c.UserID = user.ID
+	c.IsAuthenticated = true
+
+	if !requiresOnboarding {
 		c.OrgID = workspace.OrganizationID
 		c.WorkspaceID = workspace.ID
-		c.IsAuthenticated = true
 	}
 
 	// Generate internal JWT (Workspace/Org might be empty if onboarding needed)
@@ -135,6 +148,7 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 		"success":             true,
 		"token":               token,
 		"requires_onboarding": requiresOnboarding,
+		"requires_terms":      requiresTerms,
 		"user": map[string]any{
 			"id":       user.ID.String(),
 			"name":     user.Name,
@@ -152,4 +166,19 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 	}
 
 	c.SendResponse(DataWsLoginResult, env.CorrelationID, response)
+}
+
+func (h *Hub) handleAcceptTerms(c *Connection, env models.Envelope) {
+	if !c.IsAuthenticated {
+		c.SendError(env.CorrelationID, "authentication required")
+		return
+	}
+
+	now := time.Now()
+	if err := h.db.Model(&models.User{}).Where("id = ?", c.UserID).Update("terms_accepted_at", &now).Error; err != nil {
+		c.SendError(env.CorrelationID, "failed to update terms acceptance")
+		return
+	}
+
+	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "success"})
 }

@@ -242,6 +242,11 @@ func (h *Hub) handleWsLogin(c *Connection, env models.Envelope) {
 		for _, uo := range userOrgs {
 			orgs = append(orgs, uo.Organization)
 		}
+
+		// Update connection with user info even before org is selected
+		c.UserID = user.ID
+		c.IsAuthenticated = true
+
 		recordLog(&user.ID, "success", "pending_org_selection", nil)
 		c.SendResponse(DataWsLoginResult, env.CorrelationID, map[string]any{
 			"requires_org_selection": true,

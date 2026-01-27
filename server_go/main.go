@@ -175,6 +175,7 @@ func main() {
 	authProtected.POST("/auth/logout", authHandler.Logout)
 	authProtected.POST("/auth/join-organization", authHandler.JoinOrganization)
 	authProtected.POST("/auth/select-organization", authHandler.SelectOrganization)
+	authProtected.POST("/auth/accept-terms", authHandler.AcceptTerms)
 
 	// WebAuthn Protected Flow
 	authProtected.POST("/auth/webauthn/register/begin", authHandler.WebAuthnRegisterBegin)
