@@ -107,6 +107,26 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 	now := time.Now()
 	h.db.Model(&user).Update("last_login_at", &now)
 
+	// Record Login Log
+	var orgID *uuid.UUID
+	if !requiresOnboarding {
+		id := workspace.OrganizationID
+		orgID = &id
+	}
+
+	logEntry := models.LoginLog{
+		ID:             uuid.New(),
+		UserID:         &user.ID,
+		UserEmail:      user.Email,
+		IPAddress:      c.RemoteIP,
+		UserAgent:      c.Conn.RemoteAddr().String(), // Best effort for WS
+		Status:         "success",
+		FailureReason:  "firebase_oauth", // Marking as oauth for clarity
+		OrganizationID: orgID,
+		CreatedAt:      time.Now(),
+	}
+	h.db.Create(&logEntry)
+
 	log.Printf("[FIREBASE] User authenticated: %s (%s) - Onboarding: %v", user.Email, user.ID, requiresOnboarding)
 
 	response := map[string]any{
