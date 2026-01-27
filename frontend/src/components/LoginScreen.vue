@@ -382,6 +382,12 @@ async function handleSocialLogin(provider) {
     console.error('Social login failed:', e)
     if (e?.code === 'auth/account-exists-with-different-credential') {
       socialError.value = await buildAccountExistsError(e)
+    } else if (e?.code === 'auth/unauthorized-domain' || e?.message?.includes('auth/unauthorized-domain')) {
+      socialError.value = {
+        message: 'OAuth is disabled on this domain. Please use traditional login.',
+        email: '',
+        name: ''
+      }
     } else {
       socialError.value = {
         message: 'Failed to sign in with ' + provider + '. ' + (e?.message || ''),
