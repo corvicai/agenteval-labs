@@ -1,0 +1,14 @@
+---
+steps:
+  - name: gcr.io/cloud-builders/docker
+    script: |
+      docker build -t $_IMAGE_REPO_BASE/$_SERVICE_NAME:$COMMIT_SHA --file=infra/$_SERVICE_NAME/Dockerfile .
+      docker tag $_IMAGE_REPO_BASE/$_SERVICE_NAME:$COMMIT_SHA $_IMAGE_REPO_BASE/$_SERVICE_NAME:$_RELEASE_TAG
+images:
+- $_IMAGE_REPO_BASE/$_SERVICE_NAME:$COMMIT_SHA
+- $_IMAGE_REPO_BASE/$_SERVICE_NAME:$_RELEASE_TAG
+options:
+  automapSubstitutions: true
+  substitutionOption: ALLOW_LOOSE
+  logging: CLOUD_LOGGING_ONLY
+  requestedVerifyOption: VERIFIED
