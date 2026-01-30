@@ -55,7 +55,7 @@ func seedExampleSetupIfFirstWorkspace(db *gorm.DB, userID uuid.UUID, workspace m
 		WorkspaceID:  workspace.ID,
 		Name:         "Example Agent (configure me)",
 		ProviderType: "mcp",
-		Config:       datatypes.JSON(agentConfigBytes),
+		Config:       models.EncryptedJSON(agentConfigBytes),
 		Enabled:      true,
 		Position:     0,
 	}

@@ -289,10 +289,10 @@ type UpdateAgentsRequest struct {
 }
 
 type AgentConfig struct {
-	AgentID  string         `json:"agent_id"`
-	Enabled  bool           `json:"enabled"`
-	Position int            `json:"position"`
-	Config   datatypes.JSON `json:"config"`
+	AgentID  string               `json:"agent_id"`
+	Enabled  bool                 `json:"enabled"`
+	Position int                  `json:"position"`
+	Config   models.EncryptedJSON `json:"config"`
 }
 
 // UpdateAgents updates the agent configuration for a specific question set

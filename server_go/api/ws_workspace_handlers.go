@@ -9,7 +9,6 @@ import (
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
-	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -184,7 +183,7 @@ func (h *Hub) handleUpdateAgent(c *Connection, env models.Envelope) {
 
 	agent.Name = payload.Name
 	agent.ProviderType = payload.ProviderType
-	agent.Config = datatypes.JSON(configJSON)
+	agent.Config = models.EncryptedJSON(configJSON)
 	agent.Enabled = payload.Enabled
 	agent.Position = payload.Position
 	if payload.MaxConcurrency > 0 {
@@ -231,7 +230,7 @@ func (h *Hub) handleCreateAgent(c *Connection, env models.Envelope) {
 		WorkspaceID:    wsID,
 		Name:           payload.Name,
 		ProviderType:   payload.ProviderType,
-		Config:         datatypes.JSON(configJSON),
+		Config:         models.EncryptedJSON(configJSON),
 		Enabled:        true,
 		MaxConcurrency: 5, // Default: 5 parallel requests
 	}

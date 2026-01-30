@@ -85,15 +85,15 @@ type Client struct {
 }
 
 type Agent struct {
-	ID             uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
-	WorkspaceID    uuid.UUID      `gorm:"type:uuid;not null" json:"workspace_id"`
-	Name           string         `gorm:"not null" json:"name"`
-	ProviderType   string         `gorm:"not null" json:"provider_type"` // 'mcp', 'openai', 'evaluator'
-	Config         datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"config"`
-	Enabled        bool           `gorm:"default:true" json:"enabled"`
-	Position       int            `gorm:"default:0" json:"position"`
-	MaxConcurrency int            `gorm:"default:5" json:"max_concurrency"` // Max parallel requests (default: 5)
-	CreatedAt      time.Time      `json:"created_at"`
+	ID             uuid.UUID     `gorm:"type:uuid;primaryKey" json:"id"`
+	WorkspaceID    uuid.UUID     `gorm:"type:uuid;not null" json:"workspace_id"`
+	Name           string        `gorm:"not null" json:"name"`
+	ProviderType   string        `gorm:"not null" json:"provider_type"` // 'mcp', 'openai', 'evaluator'
+	Config         EncryptedJSON `gorm:"type:text;not null;default:''" json:"config"`
+	Enabled        bool          `gorm:"default:true" json:"enabled"`
+	Position       int           `gorm:"default:0" json:"position"`
+	MaxConcurrency int           `gorm:"default:5" json:"max_concurrency"` // Max parallel requests (default: 5)
+	CreatedAt      time.Time     `json:"created_at"`
 }
 
 type QuestionSet struct {
@@ -179,13 +179,13 @@ type AgentStats struct {
 // QuestionSetAgent represents the many-to-many relationship between Question Sets and Agents
 // Each Question Set can have its own agent configuration
 type QuestionSetAgent struct {
-	QuestionSetID uuid.UUID      `gorm:"type:uuid;primaryKey" json:"question_set_id"`
-	AgentID       uuid.UUID      `gorm:"type:uuid;primaryKey" json:"agent_id"`
-	Agent         Agent          `gorm:"foreignKey:AgentID" json:"agent,omitempty"`
-	Config        datatypes.JSON `gorm:"type:jsonb" json:"config,omitempty"`
-	Enabled       bool           `json:"enabled"`
-	Position      int            `json:"position"`
-	CreatedAt     time.Time      `json:"created_at"`
+	QuestionSetID uuid.UUID     `gorm:"type:uuid;primaryKey" json:"question_set_id"`
+	AgentID       uuid.UUID     `gorm:"type:uuid;primaryKey" json:"agent_id"`
+	Agent         Agent         `gorm:"foreignKey:AgentID" json:"agent,omitempty"`
+	Config        EncryptedJSON `gorm:"type:text" json:"config,omitempty"`
+	Enabled       bool          `json:"enabled"`
+	Position      int           `json:"position"`
+	CreatedAt     time.Time     `json:"created_at"`
 }
 type AuditLog struct {
 	ID             uuid.UUID    `gorm:"type:uuid;primaryKey" json:"id"`

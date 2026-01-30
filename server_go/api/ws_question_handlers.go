@@ -264,7 +264,7 @@ func (h *Hub) handleUpdateQuestionSetAgents(c *Connection, env models.Envelope) 
 			mappings = append(mappings, models.QuestionSetAgent{
 				QuestionSetID: qsID,
 				AgentID:       agentID,
-				Config:        datatypes.JSON(configJSON),
+				Config:        models.EncryptedJSON(configJSON),
 				Enabled:       a.Enabled,
 				Position:      a.Position,
 			})
