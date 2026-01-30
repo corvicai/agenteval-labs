@@ -93,7 +93,7 @@ func (h *Hub) handleWebAuthnRegisterFinish(c *Connection, env models.Envelope) {
 		SignCount:      credential.Authenticator.SignCount,
 		BackupEligible: credential.Flags.BackupEligible,
 		BackupState:    credential.Flags.BackupState,
-		CreatedAt:      time.Now(),
+		CreatedAt:      time.Now().UTC(),
 	}
 
 	if err := h.db.Create(&passkey).Error; err != nil {
@@ -189,7 +189,7 @@ func (h *Hub) handleWebAuthnLoginFinish(c *Connection, env models.Envelope) {
 		}
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	h.db.Model(&user).Update("last_login_at", &now)
 
 	var workspace models.Workspace

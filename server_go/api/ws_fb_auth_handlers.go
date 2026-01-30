@@ -65,7 +65,7 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 			Email:        email,
 			Name:         name,
 			PasswordHash: "EXTERNAL_AUTH", // Should not be used for comparison
-			CreatedAt:    time.Now(),
+			CreatedAt:    time.Now().UTC(),
 		}
 
 		if err := h.db.Create(&user).Error; err != nil {
@@ -117,7 +117,7 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 	)
 
 	// Update last login
-	now := time.Now()
+	now := time.Now().UTC()
 	h.db.Model(&user).Update("last_login_at", &now)
 
 	// Record Login Log
@@ -136,7 +136,7 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 		Status:         "success",
 		FailureReason:  "firebase_oauth", // Marking as oauth for clarity
 		OrganizationID: orgID,
-		CreatedAt:      time.Now(),
+		CreatedAt:      time.Now().UTC(),
 	}
 	if err := h.db.Create(&logEntry).Error; err != nil {
 		log.Printf("[LOGIN_LOG] ERROR: Failed to create log entry (OAuth): %v", err)
@@ -174,7 +174,7 @@ func (h *Hub) handleAcceptTerms(c *Connection, env models.Envelope) {
 		return
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	if err := h.db.Model(&models.User{}).Where("id = ?", c.UserID).Update("terms_accepted_at", &now).Error; err != nil {
 		c.SendError(env.CorrelationID, "failed to update terms acceptance")
 		return

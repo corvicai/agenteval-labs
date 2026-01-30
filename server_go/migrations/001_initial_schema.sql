@@ -9,8 +9,8 @@ CREATE TABLE IF NOT EXISTS organizations (
     audit_logs_enabled BOOLEAN DEFAULT false,
     manager_id UUID,
     created_by_user_id UUID,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Users
@@ -22,10 +22,10 @@ CREATE TABLE IF NOT EXISTS users (
     is_admin BOOLEAN DEFAULT false,
     is_suspended BOOLEAN DEFAULT false,
     invited_by_user_id UUID,
-    last_login_at TIMESTAMP,
-    terms_accepted_at TIMESTAMP,
+    last_login_at TIMESTAMPTZ,
+    terms_accepted_at TIMESTAMPTZ,
     firebase_uid VARCHAR(255),
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Indices for users
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Clients
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS clients (
     id UUID PRIMARY KEY,
     workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Agents
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS agents (
     enabled BOOLEAN DEFAULT true,
     position INTEGER DEFAULT 0,
     max_concurrency INTEGER DEFAULT 5,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Question Sets
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS question_sets (
     name VARCHAR(255) NOT NULL,
     version VARCHAR(50),
     data JSONB NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Runs
@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS runs (
     question_set_id UUID NOT NULL REFERENCES question_sets(id),
     status VARCHAR(50) NOT NULL DEFAULT 'running',
     total_tasks INTEGER DEFAULT 0,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Run Results
@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS run_results (
     error TEXT,
     metadata JSONB DEFAULT '{}',
     duration_ms INTEGER,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Evaluations
@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS evaluations (
     rating_code INTEGER,
     score INTEGER,
     comments TEXT,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Stats Cache
@@ -122,10 +122,10 @@ CREATE TABLE IF NOT EXISTS stats_caches (
     scope VARCHAR(20) NOT NULL,
     scope_id UUID,
     data JSONB NOT NULL,
-    computed_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    expires_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Indices for stats_cache
@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS question_set_agents (
     enabled BOOLEAN DEFAULT true,
     position INT DEFAULT 0,
     config JSONB,
-    created_at TIMESTAMP DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (question_set_id, agent_id)
 );
 
@@ -154,7 +154,7 @@ CREATE TABLE IF NOT EXISTS user_organizations (
     organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
     role VARCHAR(50) NOT NULL DEFAULT 'member',
     invited_by_user_id UUID,
-    joined_at TIMESTAMP DEFAULT NOW(),
+    joined_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (user_id, organization_id)
 );
 
@@ -168,7 +168,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     resource_id VARCHAR(100),
     details TEXT,
     remote_ip VARCHAR(50),
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Login Logs
@@ -181,7 +181,7 @@ CREATE TABLE IF NOT EXISTS login_logs (
     user_agent TEXT,
     status VARCHAR(50) NOT NULL,
     failure_reason TEXT,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Invite Codes
@@ -191,10 +191,10 @@ CREATE TABLE IF NOT EXISTS invite_codes (
     organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
     role VARCHAR(50) DEFAULT 'member',
     is_new_org BOOLEAN DEFAULT false,
-    expires_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
     max_uses INTEGER DEFAULT 1,
     use_count INTEGER DEFAULT 0,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Invite Code Usages
@@ -202,7 +202,7 @@ CREATE TABLE IF NOT EXISTS invite_code_usages (
     id UUID PRIMARY KEY,
     code VARCHAR(255) NOT NULL REFERENCES invite_codes(code) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    used_at TIMESTAMP DEFAULT NOW()
+    used_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Passkeys
@@ -215,7 +215,7 @@ CREATE TABLE IF NOT EXISTS passkeys (
     sign_count BIGINT DEFAULT 0,
     backup_eligible BOOLEAN DEFAULT false,
     backup_state BOOLEAN DEFAULT false,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- General Indices

@@ -15,7 +15,7 @@ func Connect() (*gorm.DB, error) {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		log.Println("[DB] DATABASE_URL not set, using default local DSN")
-		dsn = "host=localhost user=postgres password=postgres dbname=benchmarking port=5432 sslmode=disable"
+		dsn = "host=localhost user=postgres password=postgres dbname=benchmarking port=5432 sslmode=disable TimeZone=UTC"
 	} else {
 		log.Println("[DB] Connecting using DATABASE_URL from environment")
 	}
@@ -59,7 +59,7 @@ func AutoMigrate(db *gorm.DB) error {
 	if err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version VARCHAR(255) PRIMARY KEY,
-			applied_at TIMESTAMP DEFAULT NOW()
+			applied_at TIMESTAMPTZ DEFAULT NOW()
 		)
 	`).Error; err != nil {
 		return fmt.Errorf("create schema_migrations: %w", err)

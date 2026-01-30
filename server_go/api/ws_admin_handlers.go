@@ -39,7 +39,7 @@ func (h *Hub) handleAdminGetUsers(c *Connection, env models.Envelope) {
 
 	query := h.db.Model(&models.User{})
 	if filter.TimeRange != "" {
-		threshold := time.Now()
+		threshold := time.Now().UTC()
 		switch filter.TimeRange {
 		case "24h":
 			threshold = threshold.Add(-24 * time.Hour)
@@ -153,7 +153,7 @@ func (h *Hub) handleAdminGetOrganizations(c *Connection, env models.Envelope) {
 
 	query := h.db.Model(&models.Organization{})
 	if filter.TimeRange != "" {
-		threshold := time.Now()
+		threshold := time.Now().UTC()
 		switch filter.TimeRange {
 		case "24h":
 			threshold = threshold.Add(-24 * time.Hour)
@@ -456,7 +456,7 @@ func (h *Hub) handleAdminCreateUser(c *Connection, env models.Envelope) {
 		UserID:         user.ID,
 		OrganizationID: targetOrgID,
 		Role:           role,
-		JoinedAt:       time.Now(),
+		JoinedAt:       time.Now().UTC(),
 	}
 	h.db.Create(&userOrg)
 
@@ -651,7 +651,7 @@ func (h *Hub) handleAdminUpdateUser(c *Connection, env models.Envelope) {
 					UserID:         targetUser.ID,
 					OrganizationID: orgID,
 					Role:           role,
-					JoinedAt:       time.Now(),
+					JoinedAt:       time.Now().UTC(),
 				})
 			}
 		}

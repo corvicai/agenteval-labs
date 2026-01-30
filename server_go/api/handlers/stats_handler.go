@@ -149,7 +149,7 @@ func (h *StatsHandler) getCachedStats(c echo.Context, scope string, scopeID *uui
 
 		if err := query.First(&cache).Error; err == nil {
 			// Check if not expired
-			if time.Now().Before(cache.ExpiresAt) {
+			if time.Now().UTC().Before(cache.ExpiresAt) {
 				var stats AggregatedStats
 				if err := json.Unmarshal(cache.Data, &stats); err == nil {
 					stats.CacheHit = true
@@ -170,7 +170,7 @@ func (h *StatsHandler) getCachedStats(c echo.Context, scope string, scopeID *uui
 	h.saveToCache(scope, scopeID, stats, ttl)
 
 	stats.CacheHit = false
-	stats.ComputedAt = time.Now()
+	stats.ComputedAt = time.Now().UTC()
 	return c.JSON(http.StatusOK, stats)
 }
 
@@ -359,7 +359,7 @@ func (h *StatsHandler) computeStats(scope string, scopeID *uuid.UUID, c echo.Con
 // saveToCache stores computed stats in the database cache
 func (h *StatsHandler) saveToCache(scope string, scopeID *uuid.UUID, stats *AggregatedStats, ttl time.Duration) {
 	data, _ := json.Marshal(stats)
-	now := time.Now()
+	now := time.Now().UTC()
 
 	cache := models.StatsCache{
 		ID:         uuid.New(),

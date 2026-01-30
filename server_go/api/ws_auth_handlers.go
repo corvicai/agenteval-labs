@@ -170,7 +170,7 @@ func (h *Hub) handleWsLogin(c *Connection, env models.Envelope) {
 			Status:         status,
 			FailureReason:  reason,
 			OrganizationID: orgID,
-			CreatedAt:      time.Now(),
+			CreatedAt:      time.Now().UTC(),
 		}
 		if err := h.db.Create(&logEntry).Error; err != nil {
 			log.Printf("[LOGIN_LOG] ERROR: Failed to create log entry: %v", err)
@@ -193,7 +193,7 @@ func (h *Hub) handleWsLogin(c *Connection, env models.Envelope) {
 	}
 
 	// Update last login
-	now := time.Now()
+	now := time.Now().UTC()
 	h.db.Model(&user).Update("last_login_at", &now)
 
 	// Check if user is suspended
@@ -360,7 +360,7 @@ func (h *Hub) handleWsRegister(c *Connection, env models.Envelope) {
 			return
 		}
 
-		if time.Now().After(invite.ExpiresAt) {
+		if time.Now().UTC().After(invite.ExpiresAt) {
 			c.SendError(env.CorrelationID, "invite code expired")
 			return
 		}
@@ -456,7 +456,7 @@ func (h *Hub) handleWsRegister(c *Connection, env models.Envelope) {
 		OrganizationID:  orgID,
 		Role:            role,
 		InvitedByUserID: &invite.CreatedBy,
-		JoinedAt:        time.Now(),
+		JoinedAt:        time.Now().UTC(),
 	}
 	if err := tx.Create(&uo).Error; err != nil {
 		tx.Rollback()
@@ -490,7 +490,7 @@ func (h *Hub) handleWsRegister(c *Connection, env models.Envelope) {
 		ID:     uuid.New(),
 		Code:   invite.Code,
 		UserID: user.ID,
-		UsedAt: time.Now(),
+		UsedAt: time.Now().UTC(),
 	}
 	if err := tx.Create(&usage).Error; err != nil {
 		tx.Rollback()
@@ -595,7 +595,7 @@ func (h *Hub) handleJoinOrganization(c *Connection, env models.Envelope) {
 		return
 	}
 
-	if invite.ExpiresAt.Before(time.Now()) {
+	if invite.ExpiresAt.Before(time.Now().UTC()) {
 		tx.Rollback()
 		c.SendError(env.CorrelationID, "invite code has expired")
 		return
@@ -621,7 +621,7 @@ func (h *Hub) handleJoinOrganization(c *Connection, env models.Envelope) {
 		OrganizationID:  *invite.OrganizationID,
 		Role:            invite.Role,
 		InvitedByUserID: &invite.CreatedBy,
-		JoinedAt:        time.Now(),
+		JoinedAt:        time.Now().UTC(),
 	}
 	if err := tx.Create(&userOrg).Error; err != nil {
 		tx.Rollback()
@@ -663,7 +663,7 @@ func (h *Hub) handleJoinOrganization(c *Connection, env models.Envelope) {
 		ID:     uuid.New(),
 		Code:   invite.Code,
 		UserID: c.UserID,
-		UsedAt: time.Now(),
+		UsedAt: time.Now().UTC(),
 	}
 	if err := tx.Create(&usage).Error; err != nil {
 		tx.Rollback()
@@ -823,7 +823,7 @@ func (h *Hub) handleCreateOrganization(c *Connection, env models.Envelope) {
 		ID:        uuid.New(),
 		Name:      req.Name,
 		ManagerID: &c.UserID,
-		CreatedAt: time.Now(),
+		CreatedAt: time.Now().UTC(),
 	}
 	if err := tx.Create(&org).Error; err != nil {
 		tx.Rollback()
@@ -836,7 +836,7 @@ func (h *Hub) handleCreateOrganization(c *Connection, env models.Envelope) {
 		UserID:         c.UserID,
 		OrganizationID: org.ID,
 		Role:           "manager",
-		JoinedAt:       time.Now(),
+		JoinedAt:       time.Now().UTC(),
 	}
 	if err := tx.Create(&uo).Error; err != nil {
 		tx.Rollback()
@@ -850,7 +850,7 @@ func (h *Hub) handleCreateOrganization(c *Connection, env models.Envelope) {
 		UserID:         c.UserID,
 		OrganizationID: org.ID,
 		Name:           "main",
-		CreatedAt:      time.Now(),
+		CreatedAt:      time.Now().UTC(),
 	}
 	if err := tx.Create(&ws).Error; err != nil {
 		tx.Rollback()

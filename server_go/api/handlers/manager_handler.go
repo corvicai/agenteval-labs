@@ -135,7 +135,7 @@ func (h *ManagerHandler) CreateOrgUser(c echo.Context) error {
 		UserID:         user.ID,
 		OrganizationID: *orgID,
 		Role:           "member",
-		JoinedAt:       time.Now(),
+		JoinedAt:       time.Now().UTC(),
 	}
 	h.db.Create(&userOrg)
 
@@ -431,7 +431,7 @@ func (h *ManagerHandler) ImpersonateUser(c echo.Context) error {
 	cookie := new(http.Cookie)
 	cookie.Name = "token"
 	cookie.Value = token
-	cookie.Expires = time.Now().Add(24 * time.Hour)
+	cookie.Expires = time.Now().UTC().Add(24 * time.Hour)
 	cookie.HttpOnly = true
 	cookie.Path = "/"
 	cookie.SameSite = http.SameSiteLaxMode

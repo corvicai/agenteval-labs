@@ -148,7 +148,7 @@ func (h *AuthHandler) Register(c echo.Context) error {
 			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invite code usage limit reached"})
 		}
 
-		if invite.ExpiresAt.Before(time.Now()) {
+		if invite.ExpiresAt.Before(time.Now().UTC()) {
 			tx.Rollback()
 			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invite code has expired"})
 		}
@@ -207,7 +207,7 @@ func (h *AuthHandler) Register(c echo.Context) error {
 			OrganizationID:  orgID,
 			Role:            role,
 			InvitedByUserID: user.InvitedByUserID,
-			JoinedAt:        time.Now(),
+			JoinedAt:        time.Now().UTC(),
 		}
 		if err := tx.Create(&userOrg).Error; err != nil {
 			tx.Rollback()
@@ -251,7 +251,7 @@ func (h *AuthHandler) Register(c echo.Context) error {
 				ID:     uuid.New(),
 				Code:   invite.Code,
 				UserID: user.ID,
-				UsedAt: time.Now(),
+				UsedAt: time.Now().UTC(),
 			}
 			if err := tx.Create(&usage).Error; err != nil {
 				tx.Rollback()
@@ -295,7 +295,7 @@ func (h *AuthHandler) Register(c echo.Context) error {
 
 	resp := AuthResponse{
 		Token:     token,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: time.Now().UTC().Add(24 * time.Hour),
 		User:      h.mapUserToResponse(user),
 	}
 	if workspace.ID != uuid.Nil {
@@ -313,7 +313,7 @@ func (h *AuthHandler) setTokenCookie(c echo.Context, token string) {
 	cookie := new(http.Cookie)
 	cookie.Name = "token"
 	cookie.Value = token
-	cookie.Expires = time.Now().Add(24 * time.Hour)
+	cookie.Expires = time.Now().UTC().Add(24 * time.Hour)
 	cookie.HttpOnly = true
 	cookie.Path = "/"
 	cookie.SameSite = http.SameSiteLaxMode
@@ -347,7 +347,7 @@ func (h *AuthHandler) Login(c echo.Context) error {
 			Status:         status,
 			FailureReason:  reason,
 			OrganizationID: orgID,
-			CreatedAt:      time.Now(),
+			CreatedAt:      time.Now().UTC(),
 		}
 		// Log error but don't block auth flow
 		if err := h.db.Create(&logEntry).Error; err != nil {
@@ -373,7 +373,7 @@ func (h *AuthHandler) Login(c echo.Context) error {
 	}
 
 	// Update last login
-	now := time.Now()
+	now := time.Now().UTC()
 	h.db.Model(&user).Update("last_login_at", &now)
 
 	// Check if user is suspended globally
@@ -393,7 +393,7 @@ func (h *AuthHandler) Login(c echo.Context) error {
 		recordLog(&user.ID, "success", "", nil)
 		return c.JSON(http.StatusOK, AuthResponse{
 			Token:              token,
-			ExpiresAt:          time.Now().Add(24 * time.Hour),
+			ExpiresAt:          time.Now().UTC().Add(24 * time.Hour),
 			User:               h.mapUserToResponse(user),
 			RequiresInviteCode: true,
 		})
@@ -442,7 +442,7 @@ func (h *AuthHandler) Login(c echo.Context) error {
 		recordLog(&user.ID, "success", "pending_org_selection", nil) // Success login, but waiting for org
 		return c.JSON(http.StatusOK, AuthResponse{
 			Token:                token,
-			ExpiresAt:            time.Now().Add(24 * time.Hour),
+			ExpiresAt:            time.Now().UTC().Add(24 * time.Hour),
 			User:                 h.mapUserToResponse(user),
 			RequiresOrgSelection: true,
 			AvailableOrgs:        availableOrgs,
@@ -497,7 +497,7 @@ func (h *AuthHandler) Login(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, AuthResponse{
 		Token:         token,
-		ExpiresAt:     time.Now().Add(24 * time.Hour),
+		ExpiresAt:     time.Now().UTC().Add(24 * time.Hour),
 		User:          userResp,
 		Workspace:     &workspace,
 		RequiresTerms: user.TermsAcceptedAt == nil,
@@ -558,7 +558,7 @@ func (h *AuthHandler) RefreshToken(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message":    "Token refreshed",
-		"expires_at": time.Now().Add(24 * time.Hour),
+		"expires_at": time.Now().UTC().Add(24 * time.Hour),
 	})
 }
 
@@ -567,7 +567,7 @@ func (h *AuthHandler) Logout(c echo.Context) error {
 	cookie := new(http.Cookie)
 	cookie.Name = "token"
 	cookie.Value = ""
-	cookie.Expires = time.Now().Add(-1 * time.Hour)
+	cookie.Expires = time.Now().UTC().Add(-1 * time.Hour)
 	cookie.HttpOnly = true
 	cookie.Path = "/"
 	c.SetCookie(cookie)
@@ -581,7 +581,7 @@ func (h *AuthHandler) AcceptTerms(c echo.Context) error {
 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Authentication required"})
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	if err := h.db.Model(&models.User{}).Where("id = ?", userID).Update("terms_accepted_at", &now).Error; err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update terms acceptance"})
 	}
@@ -623,7 +623,7 @@ func (h *AuthHandler) JoinOrganization(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invite code usage limit reached"})
 	}
 
-	if invite.ExpiresAt.Before(time.Now()) {
+	if invite.ExpiresAt.Before(time.Now().UTC()) {
 		tx.Rollback()
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invite code has expired"})
 	}
@@ -646,7 +646,7 @@ func (h *AuthHandler) JoinOrganization(c echo.Context) error {
 		OrganizationID:  *invite.OrganizationID,
 		Role:            invite.Role,
 		InvitedByUserID: &invite.CreatedBy,
-		JoinedAt:        time.Now(),
+		JoinedAt:        time.Now().UTC(),
 	}
 	if err := tx.Create(&userOrg).Error; err != nil {
 		fmt.Printf("[DB ERROR] Failed to join user %s to org %s: %v\n", userID, *invite.OrganizationID, err)
@@ -686,7 +686,7 @@ func (h *AuthHandler) JoinOrganization(c echo.Context) error {
 		ID:     uuid.New(),
 		Code:   invite.Code,
 		UserID: userID,
-		UsedAt: time.Now(),
+		UsedAt: time.Now().UTC(),
 	}
 	if err := tx.Create(&usage).Error; err != nil {
 		tx.Rollback()
@@ -713,7 +713,7 @@ func (h *AuthHandler) JoinOrganization(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, AuthResponse{
 		Token:     token,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: time.Now().UTC().Add(24 * time.Hour),
 		User:      h.mapUserToResponse(user),
 		Workspace: &workspace,
 	})
@@ -774,7 +774,7 @@ func (h *AuthHandler) SelectOrganization(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, AuthResponse{
 		Token:     token,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: time.Now().UTC().Add(24 * time.Hour),
 		User:      h.mapUserToResponse(user),
 		Workspace: &workspace,
 	})
@@ -934,7 +934,7 @@ func (h *AuthHandler) SwitchWorkspace(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, AuthResponse{
 		Token:     token,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: time.Now().UTC().Add(24 * time.Hour),
 		User: UserResponse{
 			ID:             user.ID.String(),
 			Name:           user.Name,
@@ -1055,7 +1055,7 @@ func (h *AuthHandler) CreateUserAdmin(c echo.Context) error {
 		UserID:         user.ID,
 		OrganizationID: targetOrgID,
 		Role:           "member",
-		JoinedAt:       time.Now(),
+		JoinedAt:       time.Now().UTC(),
 	}
 	h.db.Create(&userOrg)
 
@@ -1243,7 +1243,7 @@ func (h *AuthHandler) BootstrapAdmin(c echo.Context) error {
 		UserID:         user.ID,
 		OrganizationID: org.ID,
 		Role:           "manager",
-		JoinedAt:       time.Now(),
+		JoinedAt:       time.Now().UTC(),
 	}
 	if err := tx.Create(&userOrg).Error; err != nil {
 		tx.Rollback()
@@ -1281,7 +1281,7 @@ func (h *AuthHandler) BootstrapAdmin(c echo.Context) error {
 
 	return c.JSON(http.StatusCreated, AuthResponse{
 		Token:     token,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: time.Now().UTC().Add(24 * time.Hour),
 		User:      h.mapUserToResponse(user),
 		Workspace: &workspace,
 	})
@@ -1576,7 +1576,7 @@ func (h *AuthHandler) WebAuthnLoginFinish(c echo.Context) error {
 		}
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	h.db.Model(&user).Update("last_login_at", &now)
 
 	var workspace models.Workspace
@@ -1595,7 +1595,7 @@ func (h *AuthHandler) WebAuthnLoginFinish(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, AuthResponse{
 		Token:     token,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: time.Now().UTC().Add(24 * time.Hour),
 		User:      h.mapUserToResponse(user),
 		Workspace: &workspace,
 	})

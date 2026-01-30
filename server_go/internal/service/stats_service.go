@@ -203,12 +203,12 @@ func (s *StatsService) ComputeStats(scope string, scopeID *uuid.UUID) (*models.A
 			Where("workspaces.organization_id = ?", *scopeID)
 	}
 
-	historyQuery.Where("evaluations.created_at > ?", time.Now().AddDate(0, 0, -30)).
+	historyQuery.Where("evaluations.created_at > ?", time.Now().UTC().AddDate(0, 0, -30)).
 		Group("date").
 		Order("date ASC").
 		Scan(&stats.History)
 
-	stats.ComputedAt = time.Now()
+	stats.ComputedAt = time.Now().UTC()
 	stats.CacheHit = false
 	return &stats, nil
 }

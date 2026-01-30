@@ -183,7 +183,7 @@ func (e *Engine) executeTask(task *Task) {
 		})
 	}
 
-	startTime := time.Now()
+	startTime := time.Now().UTC()
 
 	providerType := task.ProviderType
 	if providerType == "evaluator" {

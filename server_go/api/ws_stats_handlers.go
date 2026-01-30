@@ -92,7 +92,7 @@ func (h *Hub) handleGetWorkspaceStats(c *Connection, env models.Envelope) {
 	if !req.Force {
 		var cache models.StatsCache
 		if err := h.db.Where("scope = ? AND scope_id = ?", "workspace", wsID).First(&cache).Error; err == nil {
-			if time.Now().Before(cache.ExpiresAt) {
+			if time.Now().UTC().Before(cache.ExpiresAt) {
 				var stats models.AggregatedStats
 				if err := json.Unmarshal(cache.Data, &stats); err == nil {
 					stats.CacheHit = true
@@ -112,7 +112,7 @@ func (h *Hub) handleGetWorkspaceStats(c *Connection, env models.Envelope) {
 
 	// Save to Cache
 	data, _ := json.Marshal(stats)
-	now := time.Now()
+	now := time.Now().UTC()
 	cache := models.StatsCache{
 		ID:         uuid.New(),
 		Scope:      "workspace",
@@ -145,7 +145,7 @@ func (h *Hub) handleGetOrgStats(c *Connection, env models.Envelope) {
 	if !req.Force {
 		var cache models.StatsCache
 		if err := h.db.Where("scope = ? AND scope_id = ?", "organization", orgID).First(&cache).Error; err == nil {
-			if time.Now().Before(cache.ExpiresAt) {
+			if time.Now().UTC().Before(cache.ExpiresAt) {
 				var stats models.AggregatedStats
 				if err := json.Unmarshal(cache.Data, &stats); err == nil {
 					stats.CacheHit = true
@@ -165,7 +165,7 @@ func (h *Hub) handleGetOrgStats(c *Connection, env models.Envelope) {
 
 	// Save to Cache
 	data, _ := json.Marshal(stats)
-	now := time.Now()
+	now := time.Now().UTC()
 	cache := models.StatsCache{
 		ID:         uuid.New(),
 		Scope:      "organization",
@@ -198,7 +198,7 @@ func (h *Hub) handleGetGlobalStats(c *Connection, env models.Envelope) {
 	if !req.Force {
 		var cache models.StatsCache
 		if err := h.db.Where("scope = ? AND scope_id IS NULL", "global").First(&cache).Error; err == nil {
-			if time.Now().Before(cache.ExpiresAt) {
+			if time.Now().UTC().Before(cache.ExpiresAt) {
 				var stats models.AggregatedStats
 				if err := json.Unmarshal(cache.Data, &stats); err == nil {
 					stats.CacheHit = true
@@ -218,7 +218,7 @@ func (h *Hub) handleGetGlobalStats(c *Connection, env models.Envelope) {
 
 	// Save to Cache
 	data, _ := json.Marshal(stats)
-	now := time.Now()
+	now := time.Now().UTC()
 	cache := models.StatsCache{
 		ID:         uuid.New(),
 		Scope:      "global",
