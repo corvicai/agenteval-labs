@@ -10,11 +10,12 @@ import (
 	"sync"
 	"time"
 
+	"benchmarking-platform/internal/security"
+	"benchmarking-platform/models"
+
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
-
-	"benchmarking-platform/models"
 )
 
 type Engine struct {
@@ -216,7 +217,23 @@ func (e *Engine) executeTask(task *Task) {
 
 	body, _ := json.Marshal(req)
 
-	resp, err := e.httpClient.Post(fmt.Sprintf("%s/execute", e.pythonRunnerURL), "application/json", bytes.NewBuffer(body))
+	// Request for Python Runner
+	pythonURL := fmt.Sprintf("%s/execute", e.pythonRunnerURL)
+	reqHttp, err := http.NewRequest("POST", pythonURL, bytes.NewBuffer(body))
+	var resp *http.Response
+	if err == nil {
+		reqHttp.Header.Set("Content-Type", "application/json")
+
+		// Service-to-Service Authentication (Cloud Run)
+		token, _ := security.GetGoogleIDToken(e.pythonRunnerURL)
+		if token != "" {
+			reqHttp.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+			// Also add X-Serverless-Authorization for redundancy/compatibility
+			reqHttp.Header.Set("X-Serverless-Authorization", fmt.Sprintf("Bearer %s", token))
+		}
+
+		resp, err = e.httpClient.Do(reqHttp)
+	}
 
 	var executionResult ExecutionResponse
 	if err != nil {
