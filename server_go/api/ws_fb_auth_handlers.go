@@ -82,12 +82,11 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 	// Special Case: If it's a new user just created, we might consider them as needing ToS
 	// unless we auto-accept (not requested). User wants to show terms if not signed.
 
-	// Get user's active organization and workspace
+	// Get user's workspace
 	var workspace models.Workspace
-	err = h.db.Preload("User").Preload("Organization").
-		Joins("JOIN user_organizations ON user_organizations.organization_id = workspaces.organization_id").
-		Where("workspaces.user_id = ?", user.ID).
-		Order("workspaces.created_at DESC").
+	err = h.db.Preload("User").
+		Where("user_id = ?", user.ID).
+		Order("created_at DESC").
 		First(&workspace).Error
 
 	requiresOnboarding := false
@@ -102,15 +101,15 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 	c.IsAuthenticated = true
 
 	if !requiresOnboarding {
-		c.OrgID = workspace.OrganizationID
+		c.OrgID = uuid.Nil // No organizations
 		c.WorkspaceID = workspace.ID
 	}
 
 	// Generate internal JWT (Workspace/Org might be empty if onboarding needed)
 	token, _ := middleware.GenerateToken(
 		user.ID.String(),
-		workspace.ID.String(),              // Empty if onboarding
-		workspace.Organization.ID.String(), // Empty if onboarding (via workspace relation)
+		workspace.ID.String(), // Empty if onboarding
+		"",                    // No organization
 		user.Email,
 		h.jwtSecret,
 		"",
@@ -121,11 +120,7 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 	h.db.Model(&user).Update("last_login_at", &now)
 
 	// Record Login Log
-	var orgID *uuid.UUID
-	if !requiresOnboarding {
-		id := workspace.OrganizationID
-		orgID = &id
-	}
+	var orgID *uuid.UUID // No organizations
 
 	logEntry := models.LoginLog{
 		ID:             uuid.New(),
@@ -158,10 +153,7 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 	}
 
 	if !requiresOnboarding {
-		response["organization"] = map[string]any{
-			"id":   workspace.Organization.ID.String(),
-			"name": workspace.Organization.Name,
-		}
+		// Organizations removed - no organization data to include
 		response["workspace"] = workspace
 	}
 

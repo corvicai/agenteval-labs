@@ -174,10 +174,9 @@ func (h *Hub) handleManagerCreateUser(c *Connection, env models.Envelope) {
 	})
 
 	h.db.Create(&models.Workspace{
-		ID:             uuid.New(),
-		UserID:         user.ID,
-		OrganizationID: *orgID,
-		Name:           "main",
+		ID:     uuid.New(),
+		UserID: user.ID,
+		Name:   "main",
 	})
 
 	c.SendResponse(DataAdminUsers, env.CorrelationID, user)

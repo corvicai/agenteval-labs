@@ -59,18 +59,15 @@ func (h *Hub) handleDevLogin(c *Connection, env models.Envelope) {
 		return
 	}
 
-	var userOrg models.UserOrganization
-	if err := h.db.Preload("Organization").First(&userOrg, "user_id = ?", userID).Error; err != nil {
-		c.SendError(env.CorrelationID, "user has no organization")
+	var workspace models.Workspace
+	if err := h.db.Preload("User").Where("user_id = ?", userID).First(&workspace).Error; err != nil {
+		c.SendError(env.CorrelationID, "user has no workspace")
 		return
 	}
 
-	var workspace models.Workspace
-	h.db.Preload("User").Preload("Organization").Where("user_id = ? AND organization_id = ?", userID, userOrg.OrganizationID).First(&workspace)
-
 	// Update connection
 	c.UserID = user.ID
-	c.OrgID = userOrg.OrganizationID
+	c.OrgID = uuid.Nil // No organizations
 	c.WorkspaceID = workspace.ID
 	c.IsAuthenticated = true
 
@@ -78,7 +75,7 @@ func (h *Hub) handleDevLogin(c *Connection, env models.Envelope) {
 	token, _ := middleware.GenerateToken(
 		user.ID.String(),
 		workspace.ID.String(),
-		userOrg.OrganizationID.String(),
+		"", // No organization
 		user.Email,
 		os.Getenv("JWT_SECRET"),
 		"",
@@ -92,10 +89,6 @@ func (h *Hub) handleDevLogin(c *Connection, env models.Envelope) {
 			"name":     user.Name,
 			"email":    user.Email,
 			"is_admin": user.IsAdmin,
-		},
-		"organization": map[string]any{
-			"id":   userOrg.Organization.ID.String(),
-			"name": userOrg.Organization.Name,
 		},
 		"workspace": workspace,
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"log"
-	"strings"
 	"time"
 
 	"benchmarking-platform/models"
@@ -52,8 +51,7 @@ func (h *Hub) handleAdminGetUsers(c *Connection, env models.Envelope) {
 	}
 
 	var users []models.User
-	query.Preload("Workspaces.Organization").
-		Preload("Workspaces.User").
+	query.Preload("Workspaces.User").
 		Preload("InvitedBy").
 		Order("created_at DESC").
 		Find(&users)
@@ -61,46 +59,16 @@ func (h *Hub) handleAdminGetUsers(c *Connection, env models.Envelope) {
 	// Map to response format
 	result := make([]map[string]any, len(users))
 	for i, u := range users {
-		var orgNames []string
-		var userOrgs []models.UserOrganization
-		var role string
-		var firstOrgID string
-		h.db.Preload("Organization").Where("user_id = ?", u.ID).Find(&userOrgs)
-		for _, uo := range userOrgs {
-			orgNames = append(orgNames, uo.Organization.Name)
-			if role == "" {
-				role = uo.Role
-				firstOrgID = uo.OrganizationID.String()
-			}
-		}
-
-		// Fix for zeroed User and Organization structs in Workspaces due to GORM recursion prevention
-
-		// 1. Prepare safe User (no cycles)
+		// Fix for zeroed User structs in Workspaces due to GORM recursion prevention
+		// Prepare safe User (no cycles)
 		safeUser := u
 		safeUser.Workspaces = nil
 		safeUser.Organizations = nil
 		safeUser.UserOrgs = nil
 
-		// 2. Prepare Org map for lookup
-		orgMap := make(map[uuid.UUID]models.Organization)
-		for _, uo := range userOrgs {
-			// Create safe Org (no cycles)
-			safeOrg := uo.Organization
-			safeOrg.Workspaces = nil
-			safeOrg.Users = nil
-			safeOrg.UserOrgs = nil
-			orgMap[uo.OrganizationID] = safeOrg
-		}
-
 		for j := range u.Workspaces {
 			// Fix User
 			u.Workspaces[j].User = safeUser
-
-			// Fix Organization
-			if org, ok := orgMap[u.Workspaces[j].OrganizationID]; ok {
-				u.Workspaces[j].Organization = org
-			}
 		}
 
 		inviterName := ""
@@ -109,19 +77,15 @@ func (h *Hub) handleAdminGetUsers(c *Connection, env models.Envelope) {
 		}
 
 		result[i] = map[string]any{
-			"id":                u.ID.String(),
-			"name":              u.Name,
-			"email":             u.Email,
-			"is_admin":          u.IsAdmin,
-			"is_suspended":      u.IsSuspended,
-			"created_at":        u.CreatedAt,
-			"last_login_at":     u.LastLoginAt,
-			"workspaces":        u.Workspaces,
-			"org_names":         orgNames,
-			"organization_name": strings.Join(orgNames, ", "),
-			"organization_id":   firstOrgID,
-			"role":              role,
-			"invited_by_name":   inviterName, // Safe access
+			"id":              u.ID.String(),
+			"name":            u.Name,
+			"email":           u.Email,
+			"is_admin":        u.IsAdmin,
+			"is_suspended":    u.IsSuspended,
+			"created_at":      u.CreatedAt,
+			"last_login_at":   u.LastLoginAt,
+			"workspaces":      u.Workspaces,
+			"invited_by_name": inviterName, // Safe access
 		}
 	}
 
@@ -267,7 +231,7 @@ func (h *Hub) handleAdminGetUserProfile(c *Connection, env models.Envelope) {
 
 	// Get workspaces with agent count
 	var wsList []models.Workspace
-	h.db.Preload("User").Preload("Organization").Where("user_id = ?", userID).Find(&wsList)
+	h.db.Preload("User").Where("user_id = ?", userID).Find(&wsList)
 
 	var workspaces []map[string]any
 	workspaces = make([]map[string]any, len(wsList))
@@ -276,12 +240,11 @@ func (h *Hub) handleAdminGetUserProfile(c *Connection, env models.Envelope) {
 		h.db.Model(&models.Agent{}).Where("workspace_id = ?", w.ID).Count(&cnt)
 
 		workspaces[i] = map[string]any{
-			"id":           w.ID,
-			"name":         w.Name,
-			"created_at":   w.CreatedAt,
-			"user":         w.User,
-			"organization": w.Organization,
-			"agent_count":  cnt,
+			"id":          w.ID,
+			"name":        w.Name,
+			"created_at":  w.CreatedAt,
+			"user":        w.User,
+			"agent_count": cnt,
 		}
 	}
 
@@ -467,10 +430,9 @@ func (h *Hub) handleAdminCreateUser(c *Connection, env models.Envelope) {
 	}
 
 	workspace := models.Workspace{
-		ID:             uuid.New(),
-		UserID:         user.ID,
-		OrganizationID: targetOrgID,
-		Name:           wsName,
+		ID:     uuid.New(),
+		UserID: user.ID,
+		Name:   wsName,
 	}
 	h.db.Create(&workspace)
 

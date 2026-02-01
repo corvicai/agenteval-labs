@@ -68,10 +68,7 @@
             {{ q.question.slice(0, 60) }}{{ q.question.length > 60 ? '...' : '' }}
           </option>
         </select>
-        <button v-if="!agents.length" class="btn btn-warning" @click="$emit('configure-agents')">
-          🤖 Configure Agents
-        </button>
-        <button v-else class="btn btn-primary" @click="startRunSetup" :disabled="isRunning || !currentQuestionSet">
+        <button class="btn btn-primary" @click="startRunSetup" :disabled="isRunning || !currentQuestionSet">
           {{ isRunning ? '⏳ Running...' : '▶️ Run Benchmark' }}
         </button>
         <button class="btn btn-secondary btn-history-arena" @click="$emit('view-history', currentQuestionSet || {})">
@@ -206,7 +203,7 @@ const props = defineProps({
   isZenMode: Boolean
 })
 
-const emit = defineEmits(['update:currentQuestionSet', 'configure-agents', 'view-history', 'trigger-print', 'toggle-zen'])
+const emit = defineEmits(['update:currentQuestionSet', 'view-history', 'trigger-print', 'toggle-zen'])
 
 watch(() => props.questionSets, (sets) => {
   console.log('[Arena] Question sets updated:', sets.length)
@@ -492,8 +489,7 @@ function startRunSetup() {
   if (primaryAgents.length === 0) {
     console.warn('[Arena] Start blocked. Enabled count:', enabledAgents.value.length, 'Primary count:', primaryAgents.length)
     console.log('[Arena] Merged Agents dump:', mergedAgents.value)
-    alert('Please enable at least one primary agent to start.')
-    emit('configure-agents')
+    alert('Please enable at least one primary agent to start. Use "Manage Agents" in the header to configure agents.')
     return
   }
   showRunSetup.value = true

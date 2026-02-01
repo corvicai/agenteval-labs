@@ -19,10 +19,8 @@ func (h *Hub) handleGetWorkspaces(c *Connection, env models.Envelope) {
 	}
 
 	var workspaces []models.Workspace
-	// For managers/admins, maybe they should see more?
-	// The original REST API /auth/workspaces returns workspaces owned by the user
-	// Only return workspaces for the current organization
-	h.db.Preload("Organization").Where("user_id = ? AND organization_id = ?", c.UserID, c.OrgID).Find(&workspaces)
+	// Return all workspaces owned by the user (no organization filter)
+	h.db.Where("user_id = ?", c.UserID).Find(&workspaces)
 
 	// Add agent count to each workspace if needed, or just return as is
 	type WorkspaceResponse struct {
@@ -63,9 +61,9 @@ func (h *Hub) handleSwitchWorkspace(c *Connection, env models.Envelope) {
 		return
 	}
 
-	// Verify access
+	// Verify access (workspace must belong to user)
 	var ws models.Workspace
-	if err := h.db.First(&ws, "id = ? AND organization_id = ?", wsID, c.OrgID).Error; err != nil {
+	if err := h.db.First(&ws, "id = ? AND user_id = ?", wsID, c.UserID).Error; err != nil {
 		c.SendError(env.CorrelationID, "workspace not found or access denied")
 		return
 	}
@@ -80,7 +78,7 @@ func (h *Hub) handleSwitchWorkspace(c *Connection, env models.Envelope) {
 	token, err := middleware.GenerateToken(
 		c.UserID.String(),
 		wsID.String(),
-		c.OrgID.String(),
+		"", // No organization
 		user.Email,
 		os.Getenv("JWT_SECRET"),
 		"", // impersonatorID
@@ -103,11 +101,6 @@ func (h *Hub) handleCreateWorkspace(c *Connection, env models.Envelope) {
 		return
 	}
 
-	if c.OrgID == uuid.Nil {
-		c.SendError(env.CorrelationID, "you must be logged into an organization to create relative workspaces")
-		return
-	}
-
 	var payload struct {
 		Name string `json:"name"`
 	}
@@ -117,10 +110,10 @@ func (h *Hub) handleCreateWorkspace(c *Connection, env models.Envelope) {
 	}
 
 	ws := models.Workspace{
-		ID:             uuid.New(),
-		Name:           payload.Name,
-		UserID:         c.UserID,
-		OrganizationID: c.OrgID,
+		ID:     uuid.New(),
+		Name:   payload.Name,
+		UserID: c.UserID,
+		// OrganizationID is not set (will be nil/zero UUID)
 	}
 
 	if err := h.db.Create(&ws).Error; err != nil {
@@ -311,11 +304,6 @@ func (h *Hub) handleCloneWorkspace(c *Connection, env models.Envelope) {
 		return
 	}
 
-	if c.OrgID == uuid.Nil {
-		c.SendError(env.CorrelationID, "you must be logged into an organization to clone workspaces")
-		return
-	}
-
 	var payload struct {
 		SourceWorkspaceID string `json:"source_workspace_id"`
 		NewName           string `json:"new_name"`
@@ -336,9 +324,9 @@ func (h *Hub) handleCloneWorkspace(c *Connection, env models.Envelope) {
 		return
 	}
 
-	// Verify access to source workspace
+	// Verify access to source workspace (must belong to user)
 	var sourceWS models.Workspace
-	if err := h.db.First(&sourceWS, "id = ? AND organization_id = ?", sourceID, c.OrgID).Error; err != nil {
+	if err := h.db.First(&sourceWS, "id = ? AND user_id = ?", sourceID, c.UserID).Error; err != nil {
 		c.SendError(env.CorrelationID, "source workspace not found or access denied")
 		return
 	}
@@ -346,12 +334,12 @@ func (h *Hub) handleCloneWorkspace(c *Connection, env models.Envelope) {
 	// Start transaction
 	tx := h.db.Begin()
 
-	// Create new workspace
+	// Create new workspace (no organization)
 	newWS := models.Workspace{
-		ID:             uuid.New(),
-		Name:           payload.NewName,
-		UserID:         c.UserID,
-		OrganizationID: c.OrgID,
+		ID:     uuid.New(),
+		Name:   payload.NewName,
+		UserID: c.UserID,
+		// OrganizationID is not set (will be nil/zero UUID)
 	}
 
 	if err := tx.Create(&newWS).Error; err != nil {

@@ -58,18 +58,14 @@ func NewAuthHandler(db *gorm.DB, jwtSecret string) *AuthHandler {
 }
 
 type RegisterRequest struct {
-	Name             string `json:"name"`
-	Email            string `json:"email"`
-	Password         string `json:"password"`
-	OrganizationName string `json:"organization_name"`
-	InviteCode       string `json:"invite_code"`
-	Role             string `json:"role"` // 'manager' or 'user'
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type LoginRequest struct {
-	Email          string `json:"email"`
-	Password       string `json:"password"`
-	OrganizationID string `json:"organization_id"` // Optional: for multi-org users
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type AuthResponse struct {
@@ -96,12 +92,11 @@ type UserResponse struct {
 	IsAdmin          bool               `json:"is_admin"`
 	ImpersonatorID   string             `json:"impersonator_id,omitempty"`
 	OrganizationID   string             `json:"organization_id,omitempty"`
-	OrganizationName string             `json:"organization_name,omitempty"`
 	Workspaces       []models.Workspace `json:"workspaces,omitempty"`
 	CreatedAt        time.Time          `json:"created_at"`
 }
 
-// Register creates a new user and their default workspace
+// Register creates a new user and their default workspace (no organizations)
 func (h *AuthHandler) Register(c echo.Context) error {
 	var req RegisterRequest
 	if err := c.Bind(&req); err != nil {
@@ -110,7 +105,6 @@ func (h *AuthHandler) Register(c echo.Context) error {
 
 	req.Name = html.EscapeString(req.Name)
 	req.Email = html.EscapeString(req.Email)
-	req.OrganizationName = html.EscapeString(req.OrganizationName)
 
 	if req.Email == "" || req.Password == "" || req.Name == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Name, email and password are required"})
@@ -129,68 +123,12 @@ func (h *AuthHandler) Register(c echo.Context) error {
 
 	tx := h.db.Begin()
 
-	var orgID uuid.UUID
-	var role = req.Role
-	if role == "" {
-		role = "user"
-	}
-
-	var invite models.InviteCode
-	// 1. Validate Invite Code if provided OR if registering as common user
-	if req.InviteCode != "" {
-		if err := tx.Where("code = ?", req.InviteCode).First(&invite).Error; err != nil {
-			tx.Rollback()
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid invite code"})
-		}
-
-		if invite.UseCount >= invite.MaxUses {
-			tx.Rollback()
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invite code usage limit reached"})
-		}
-
-		if invite.ExpiresAt.Before(time.Now().UTC()) {
-			tx.Rollback()
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invite code has expired"})
-		}
-
-		orgID = *invite.OrganizationID
-		if invite.Role != "" {
-			role = invite.Role
-		}
-	}
-
-	// Generate user ID early to use in Org creation if needed
 	userID := uuid.New()
-
-	// 2. Create Organization if it's a manager role creating a new one (or no orgID yet but manager selected)
-	if orgID == uuid.Nil && role == "manager" {
-		orgName := req.OrganizationName
-		if orgName == "" {
-			orgName = req.Name + "'s Organization"
-		}
-
-		org := models.Organization{
-			ID:              uuid.New(),
-			Name:            orgName,
-			CreatedByUserID: &userID, // Now userID exists
-		}
-		if err := tx.Create(&org).Error; err != nil {
-			tx.Rollback()
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create organization"})
-		}
-		orgID = org.ID
-	}
-
 	user := models.User{
-		ID:              userID,
-		Name:            req.Name,
-		Email:           req.Email,
-		PasswordHash:    string(hashedPassword),
-		InvitedByUserID: &invite.CreatedBy, // Set if invite code was used
-	}
-
-	if req.InviteCode == "" {
-		user.InvitedByUserID = nil
+		ID:           userID,
+		Name:         req.Name,
+		Email:        req.Email,
+		PasswordHash: string(hashedPassword),
 	}
 
 	if err := tx.Create(&user).Error; err != nil {
@@ -198,95 +136,39 @@ func (h *AuthHandler) Register(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create user"})
 	}
 
-	var workspace models.Workspace
-	var client models.Client
-	if orgID != uuid.Nil {
-		// Add to many-to-many junction
-		userOrg := models.UserOrganization{
-			UserID:          user.ID,
-			OrganizationID:  orgID,
-			Role:            role,
-			InvitedByUserID: user.InvitedByUserID,
-			JoinedAt:        time.Now().UTC(),
-		}
-		if err := tx.Create(&userOrg).Error; err != nil {
-			tx.Rollback()
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to join organization"})
-		}
+	// Create default workspace for the user (no organization)
+	workspace := models.Workspace{
+		ID:     uuid.New(),
+		UserID: user.ID,
+		Name:   "main",
+	}
 
-		// Create default workspace for the organization
-		workspace = models.Workspace{
-			ID:             uuid.New(),
-			UserID:         user.ID,
-			OrganizationID: orgID,
-			Name:           "main",
-		}
+	if err := tx.Create(&workspace).Error; err != nil {
+		tx.Rollback()
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create workspace"})
+	}
 
-		if err := tx.Create(&workspace).Error; err != nil {
-			tx.Rollback()
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create workspace"})
-		}
-
-		// Create default client for the workspace
-		client = models.Client{
-			ID:          uuid.New(),
-			WorkspaceID: workspace.ID,
-			Name:        "Default Client",
-		}
-		if err := tx.Create(&client).Error; err != nil {
-			tx.Rollback()
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create client"})
-		}
-
-		// Update invite code if used
-		if req.InviteCode != "" {
-			invite.UseCount++
-			if err := tx.Save(&invite).Error; err != nil {
-				tx.Rollback()
-				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update invite status"})
-			}
-
-			// Record usage
-			usage := models.InviteCodeUsage{
-				ID:     uuid.New(),
-				Code:   invite.Code,
-				UserID: user.ID,
-				UsedAt: time.Now().UTC(),
-			}
-			if err := tx.Create(&usage).Error; err != nil {
-				tx.Rollback()
-				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to record invite usage"})
-			}
-		}
+	// Create default client for the workspace
+	client := models.Client{
+		ID:          uuid.New(),
+		WorkspaceID: workspace.ID,
+		Name:        "Default Client",
+	}
+	if err := tx.Create(&client).Error; err != nil {
+		tx.Rollback()
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create client"})
 	}
 
 	if err := tx.Commit().Error; err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to finalize registration"})
 	}
 
-	if workspace.ID != uuid.Nil && client.ID != uuid.Nil {
-		seedExampleSetupIfFirstWorkspace(h.db, user.ID, workspace, client)
-	}
+	seedExampleSetupIfFirstWorkspace(h.db, user.ID, workspace, client)
 
-	// Fetch full org and workspace for response
-	var finalOrg models.Organization
-	if orgID != uuid.Nil {
-		h.db.First(&finalOrg, "id = ?", orgID)
-		workspace.Organization = finalOrg
-		workspace.User = user
-	}
+	workspace.User = user
 
-	// Generate JWT (workspace and org might be nil/empty strings)
-	wsIDStr := ""
-	if workspace.ID != uuid.Nil {
-		wsIDStr = workspace.ID.String()
-	}
-	orgIDStr := ""
-	if orgID != uuid.Nil {
-		orgIDStr = orgID.String()
-	}
-
-	token, err := middleware.GenerateToken(user.ID.String(), wsIDStr, orgIDStr, user.Email, h.jwtSecret, "")
+	// Generate JWT (no organization)
+	token, err := middleware.GenerateToken(user.ID.String(), workspace.ID.String(), "", user.Email, h.jwtSecret, "")
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to generate token"})
 	}
@@ -297,12 +179,7 @@ func (h *AuthHandler) Register(c echo.Context) error {
 		Token:     token,
 		ExpiresAt: time.Now().UTC().Add(24 * time.Hour),
 		User:      h.mapUserToResponse(user),
-	}
-	if workspace.ID != uuid.Nil {
-		resp.Workspace = &workspace
-	}
-	if orgID == uuid.Nil {
-		resp.RequiresInviteCode = true
+		Workspace: &workspace,
 	}
 	resp.RequiresTerms = user.TermsAcceptedAt == nil
 
@@ -382,124 +259,56 @@ func (h *AuthHandler) Login(c echo.Context) error {
 		return c.JSON(http.StatusForbidden, map[string]string{"error": "Please contact the administrator"})
 	}
 
-	// Get all organizations for the user
-	var userOrgs []models.UserOrganization
-	h.db.Preload("Organization").Find(&userOrgs, "user_id = ?", user.ID)
-
-	if len(userOrgs) == 0 {
-		// User has no organizations, let them in but with a limited token
-		token, _ := middleware.GenerateToken(user.ID.String(), "", "", user.Email, h.jwtSecret, "")
-		h.setTokenCookie(c, token)
-		recordLog(&user.ID, "success", "", nil)
-		return c.JSON(http.StatusOK, AuthResponse{
-			Token:              token,
-			ExpiresAt:          time.Now().UTC().Add(24 * time.Hour),
-			User:               h.mapUserToResponse(user),
-			RequiresInviteCode: true,
-		})
-	}
-
-	var selectedOrgID uuid.UUID
-
-	// Handle organization selection
-	if req.OrganizationID != "" {
-		// User specified an organization
-		targetOrgID, err := uuid.Parse(req.OrganizationID)
-		if err != nil {
-			recordLog(&user.ID, "failed", "invalid_org_id", nil)
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid organization ID"})
-		}
-
-		found := false
-		for _, uo := range userOrgs {
-			if uo.OrganizationID == targetOrgID {
-				selectedOrgID = targetOrgID
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			recordLog(&user.ID, "failed", "org_access_denied", &targetOrgID)
-			return c.JSON(http.StatusForbidden, map[string]string{"error": "User is not a member of this organization"})
-		}
-	} else if len(userOrgs) == 1 {
-		// Only one organization, pick it automatically
-		selectedOrgID = userOrgs[0].OrganizationID
-	} else {
-		// Multiple organizations, require selection
-		availableOrgs := make([]AuthOrgResponse, len(userOrgs))
-		for i, uo := range userOrgs {
-			availableOrgs[i] = AuthOrgResponse{
-				ID:   uo.OrganizationID,
-				Name: uo.Organization.Name,
-				Role: uo.Role,
-			}
-		}
-
-		token, _ := middleware.GenerateToken(user.ID.String(), "", "", user.Email, h.jwtSecret, "")
-		h.setTokenCookie(c, token)
-		recordLog(&user.ID, "success", "pending_org_selection", nil) // Success login, but waiting for org
-		return c.JSON(http.StatusOK, AuthResponse{
-			Token:                token,
-			ExpiresAt:            time.Now().UTC().Add(24 * time.Hour),
-			User:                 h.mapUserToResponse(user),
-			RequiresOrgSelection: true,
-			AvailableOrgs:        availableOrgs,
-		})
-	}
-
-	// Check if selected organization is suspended
-	var org models.Organization
-	if err := h.db.First(&org, "id = ?", selectedOrgID).Error; err == nil {
-		if org.IsSuspended {
-			recordLog(&user.ID, "failed", "org_suspended", &selectedOrgID)
-			return c.JSON(http.StatusForbidden, map[string]string{"error": "Organization is suspended"})
-		}
-	}
-
-	// Get user's first workspace in THIS organization
+	// Get user's first workspace (no organization required)
 	var workspace models.Workspace
-	h.db.Preload("User").Preload("Organization").Where("user_id = ? AND organization_id = ?", user.ID, selectedOrgID).First(&workspace)
+	h.db.Preload("User").Where("user_id = ?", user.ID).First(&workspace)
 
-	// Fix potential GORM recursion zeroing in REST API
-	safeUser := user
-	safeUser.Workspaces = nil
-	safeUser.Organizations = nil
-	safeUser.UserOrgs = nil
-	workspace.User = safeUser
+	// If no workspace exists, create one
+	if workspace.ID == uuid.Nil {
+		workspace = models.Workspace{
+			ID:     uuid.New(),
+			UserID: user.ID,
+			Name:   "main",
+		}
+		if err := h.db.Create(&workspace).Error; err != nil {
+			recordLog(&user.ID, "failed", "workspace_creation_error", nil)
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create workspace"})
+		}
 
-	safeOrg := org
-	safeOrg.Workspaces = nil
-	safeOrg.Users = nil
-	safeOrg.UserOrgs = nil
-	workspace.Organization = safeOrg
+		// Create default client
+		client := models.Client{
+			ID:          uuid.New(),
+			WorkspaceID: workspace.ID,
+			Name:        "Default Client",
+		}
+		if err := h.db.Create(&client).Error; err != nil {
+			// Non-fatal, continue
+		}
+	}
+
+	workspace.User = user
 
 	workspaceID := ""
 	if workspace.ID != uuid.Nil {
 		workspaceID = workspace.ID.String()
 	}
 
-	// Generate JWT
-	token, err := middleware.GenerateToken(user.ID.String(), workspaceID, selectedOrgID.String(), user.Email, h.jwtSecret, "")
+	// Generate JWT (no organization)
+	token, err := middleware.GenerateToken(user.ID.String(), workspaceID, "", user.Email, h.jwtSecret, "")
 	if err != nil {
-		recordLog(&user.ID, "failed", "token_generation_error", &selectedOrgID)
+		recordLog(&user.ID, "failed", "token_generation_error", nil)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to generate token"})
 	}
 
 	h.setTokenCookie(c, token)
 
-	recordLog(&user.ID, "success", "", &selectedOrgID)
-
-	userResp := h.mapUserToResponse(user)
-	userResp.OrganizationID = selectedOrgID.String()
-	userResp.OrganizationName = org.Name
+	recordLog(&user.ID, "success", "", nil)
 
 	return c.JSON(http.StatusOK, AuthResponse{
 		Token:         token,
-		ExpiresAt:     time.Now().UTC().Add(24 * time.Hour),
-		User:          userResp,
-		Workspace:     &workspace,
+		ExpiresAt:    time.Now().UTC().Add(24 * time.Hour),
+		User:         h.mapUserToResponse(user),
+		Workspace:    &workspace,
 		RequiresTerms: user.TermsAcceptedAt == nil,
 	})
 }
@@ -654,12 +463,11 @@ func (h *AuthHandler) JoinOrganization(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to join organization database record"})
 	}
 
-	// Create default workspace for user in this org
+	// Create default workspace for user
 	workspace := models.Workspace{
-		ID:             uuid.New(),
-		UserID:         userID,
-		OrganizationID: *invite.OrganizationID,
-		Name:           "main",
+		ID:     uuid.New(),
+		UserID: userID,
+		Name:   "main",
 	}
 	if err := tx.Create(&workspace).Error; err != nil {
 		tx.Rollback()
@@ -747,15 +555,14 @@ func (h *AuthHandler) SelectOrganization(c echo.Context) error {
 		return c.JSON(http.StatusForbidden, map[string]string{"error": "You do not belong to this organization"})
 	}
 
-	// Get first workspace for this user in this org
+	// Get first workspace for this user
 	var workspace models.Workspace
-	if err := h.db.Where("user_id = ? AND organization_id = ?", userID, orgID).First(&workspace).Error; err != nil {
+	if err := h.db.Where("user_id = ?", userID).First(&workspace).Error; err != nil {
 		// If no workspace exists, create one (shouldn't happen with normal flow, but good for safety)
 		workspace = models.Workspace{
-			ID:             uuid.New(),
-			UserID:         userID,
-			OrganizationID: orgID,
-			Name:           "main",
+			ID:     uuid.New(),
+			UserID: userID,
+			Name:   "main",
 		}
 		h.db.Create(&workspace)
 	}
@@ -815,7 +622,7 @@ func (h *AuthHandler) ListWorkspaces(c echo.Context) error {
 	}
 
 	var workspaces []models.Workspace
-	h.db.Preload("User").Preload("Organization").Where("user_id = ?", userID).Find(&workspaces)
+	h.db.Where("user_id = ?", userID).Find(&workspaces)
 
 	// Fix zeroing for ListWorkspaces
 	var user models.User
@@ -827,23 +634,8 @@ func (h *AuthHandler) ListWorkspaces(c echo.Context) error {
 	safeUser.Organizations = nil
 	safeUser.UserOrgs = nil
 
-	// Pre-fetch orgs for mapping
-	var userOrgs []models.UserOrganization
-	h.db.Preload("Organization").Where("user_id = ?", userID).Find(&userOrgs)
-	orgMap := make(map[uuid.UUID]models.Organization)
-	for _, uo := range userOrgs {
-		safeOrg := uo.Organization
-		safeOrg.Workspaces = nil
-		safeOrg.Users = nil
-		safeOrg.UserOrgs = nil
-		orgMap[uo.OrganizationID] = safeOrg
-	}
-
 	for i := range workspaces {
 		workspaces[i].User = safeUser
-		if o, ok := orgMap[workspaces[i].OrganizationID]; ok {
-			workspaces[i].Organization = o
-		}
 	}
 
 	// Add agent count to each workspace
@@ -880,10 +672,9 @@ func (h *AuthHandler) CreateWorkspace(c echo.Context) error {
 	}
 
 	workspace := models.Workspace{
-		ID:             uuid.New(),
-		UserID:         userID,
-		OrganizationID: middleware.GetOrgID(c),
-		Name:           req.Name,
+		ID:     uuid.New(),
+		UserID: userID,
+		Name:   req.Name,
 	}
 
 	if err := h.db.Create(&workspace).Error; err != nil {
@@ -916,7 +707,7 @@ func (h *AuthHandler) SwitchWorkspace(c echo.Context) error {
 
 	// Verify workspace belongs to user
 	var workspace models.Workspace
-	if err := h.db.Preload("User").Preload("Organization").Where("id = ? AND user_id = ?", wsUUID, userID).First(&workspace).Error; err != nil {
+	if err := h.db.Preload("User").Where("id = ? AND user_id = ?", wsUUID, userID).First(&workspace).Error; err != nil {
 		return c.JSON(http.StatusForbidden, map[string]string{"error": "Workspace not found or access denied"})
 	}
 
@@ -924,8 +715,8 @@ func (h *AuthHandler) SwitchWorkspace(c echo.Context) error {
 	var user models.User
 	h.db.First(&user, "id = ?", userID)
 
-	// Generate new token with new workspace
-	token, err := middleware.GenerateToken(userID.String(), workspaceID, workspace.OrganizationID.String(), user.Email, h.jwtSecret, "")
+	// Generate new token with new workspace (no organization)
+	token, err := middleware.GenerateToken(userID.String(), workspaceID, "", user.Email, h.jwtSecret, "")
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to generate token"})
 	}
@@ -936,11 +727,10 @@ func (h *AuthHandler) SwitchWorkspace(c echo.Context) error {
 		Token:     token,
 		ExpiresAt: time.Now().UTC().Add(24 * time.Hour),
 		User: UserResponse{
-			ID:             user.ID.String(),
-			Name:           user.Name,
-			Email:          user.Email,
-			IsAdmin:        user.IsAdmin,
-			OrganizationID: workspace.OrganizationID.String(),
+			ID:      user.ID.String(),
+			Name:    user.Name,
+			Email:   user.Email,
+			IsAdmin: user.IsAdmin,
 		},
 		Workspace: &workspace,
 	})
@@ -1061,10 +851,9 @@ func (h *AuthHandler) CreateUserAdmin(c echo.Context) error {
 
 	// Create default workspace
 	workspace := models.Workspace{
-		ID:             uuid.New(),
-		UserID:         user.ID,
-		OrganizationID: targetOrgID,
-		Name:           "main",
+		ID:     uuid.New(),
+		UserID: user.ID,
+		Name:   "main",
 	}
 	h.db.Create(&workspace)
 
@@ -1211,19 +1000,6 @@ func (h *AuthHandler) BootstrapAdmin(c echo.Context) error {
 
 	userID := uuid.New()
 
-	org := models.Organization{
-		ID:              uuid.New(),
-		Name:            req.OrganizationName,
-		CreatedByUserID: &userID, // Bootstrap admin created this org
-	}
-	if org.Name == "" {
-		org.Name = "Admin Organization"
-	}
-	if err := tx.Create(&org).Error; err != nil {
-		tx.Rollback()
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create organization"})
-	}
-
 	user := models.User{
 		ID:           userID,
 		Name:         req.Name,
@@ -1238,25 +1014,11 @@ func (h *AuthHandler) BootstrapAdmin(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create admin"})
 	}
 
-	// Add to many-to-many junction
-	userOrg := models.UserOrganization{
-		UserID:         user.ID,
-		OrganizationID: org.ID,
-		Role:           "manager",
-		JoinedAt:       time.Now().UTC(),
-	}
-	if err := tx.Create(&userOrg).Error; err != nil {
-		tx.Rollback()
-		fmt.Printf("Bootstrap Error (UserOrg): %v\n", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to link user to organization"})
-	}
-
-	// Create default workspace
+	// Create default workspace (no organization)
 	workspace := models.Workspace{
-		ID:             uuid.New(),
-		UserID:         user.ID,
-		OrganizationID: org.ID,
-		Name:           "main",
+		ID:     uuid.New(),
+		UserID: user.ID,
+		Name:   "main",
 	}
 	if err := tx.Create(&workspace).Error; err != nil {
 		tx.Rollback()
@@ -1277,7 +1039,7 @@ func (h *AuthHandler) BootstrapAdmin(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to commit transaction"})
 	}
 
-	token, _ := middleware.GenerateToken(user.ID.String(), workspace.ID.String(), org.ID.String(), user.Email, h.jwtSecret, "")
+	token, _ := middleware.GenerateToken(user.ID.String(), workspace.ID.String(), "", user.Email, h.jwtSecret, "")
 
 	return c.JSON(http.StatusCreated, AuthResponse{
 		Token:     token,
@@ -1580,12 +1342,12 @@ func (h *AuthHandler) WebAuthnLoginFinish(c echo.Context) error {
 	h.db.Model(&user).Update("last_login_at", &now)
 
 	var workspace models.Workspace
-	h.db.Preload("User").Preload("Organization").Where("user_id = ?", user.ID).First(&workspace)
+	h.db.Preload("User").Where("user_id = ?", user.ID).First(&workspace)
 
 	token, _ := middleware.GenerateToken(
 		user.ID.String(),
 		workspace.ID.String(),
-		workspace.OrganizationID.String(),
+		"", // No organization
 		user.Email,
 		h.jwtSecret,
 		"",

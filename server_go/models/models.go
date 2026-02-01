@@ -18,7 +18,7 @@ type Organization struct {
 	CreatedBy        *User              `gorm:"foreignKey:CreatedByUserID;constraint:false" json:"created_by,omitempty"`
 	Users            []User             `gorm:"many2many:user_organizations;" json:"users,omitempty"`
 	UserOrgs         []UserOrganization `json:"user_orgs,omitempty"` // For role info
-	Workspaces       []Workspace        `json:"workspaces,omitempty"`
+	// Workspaces removed - workspaces no longer belong to organizations
 	CreatedAt        time.Time          `json:"created_at"`
 }
 
@@ -64,16 +64,14 @@ type Passkey struct {
 }
 
 type Workspace struct {
-	ID             uuid.UUID    `gorm:"type:uuid;primaryKey" json:"id"`
-	UserID         uuid.UUID    `gorm:"type:uuid;not null" json:"user_id"`
-	User           User         `json:"user"`
-	OrganizationID uuid.UUID    `gorm:"type:uuid" json:"organization_id"`
-	Organization   Organization `json:"organization"`
-	Name           string       `gorm:"not null" json:"name"`
-	Clients        []Client     `json:"clients,omitempty"`
-	Agents         []Agent      `json:"agents,omitempty"`
-	Runs           []Run        `json:"runs,omitempty"`
-	CreatedAt      time.Time    `json:"created_at"`
+	ID        uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	UserID    uuid.UUID `gorm:"type:uuid;not null" json:"user_id"`
+	User      User      `json:"user"`
+	Name      string    `gorm:"not null" json:"name"`
+	Clients   []Client  `json:"clients,omitempty"`
+	Agents    []Agent   `json:"agents,omitempty"`
+	Runs      []Run     `json:"runs,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type Client struct {
