@@ -6,6 +6,8 @@ export function isLocalhost(hostname) {
   return hostname.endsWith('.local')
 }
 
+import { config } from '../config'
+
 /**
  * Determine the WebSocket host for connecting to /ws
  * 
@@ -15,13 +17,12 @@ export function isLocalhost(hostname) {
 export function getWebSocketHost() {
   if (typeof window === 'undefined') return ''
 
-  const env = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env : {}
-  const overrideHost = env.VITE_WS_HOST || ''
-  const overridePort = env.VITE_WS_PORT || ''
+  const overrideHost = config.WS_HOST || ''
+  const overridePort = config.WS_PORT || ''
   const hostname = window.location.hostname || ''
   const port = window.location.port || ''
   const host = window.location.host || ''
-  const isDev = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV
+  const isDev = config.DEV
 
   // 1. Explicit override via environment variable
   if (overrideHost) {

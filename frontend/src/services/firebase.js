@@ -1,15 +1,17 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, GithubAuthProvider, signInWithPopup, signOut } from "firebase/auth";
 
+import { config } from "../config";
+
 // Firebase configuration from environment variables
 // These should be set in .env or provided by the user
 const firebaseConfig = {
-    apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "PLACEHOLDER",
-    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "PLACEHOLDER",
-    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "PLACEHOLDER",
-    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "PLACEHOLDER",
-    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "PLACEHOLDER",
-    appId: import.meta.env.VITE_FIREBASE_APP_ID || "PLACEHOLDER"
+    apiKey: config.FIREBASE_API_KEY || "PLACEHOLDER",
+    authDomain: config.FIREBASE_AUTH_DOMAIN || "PLACEHOLDER",
+    projectId: config.FIREBASE_PROJECT_ID || "PLACEHOLDER",
+    storageBucket: config.FIREBASE_STORAGE_BUCKET || "PLACEHOLDER",
+    messagingSenderId: config.FIREBASE_MESSAGING_SENDER_ID || "PLACEHOLDER",
+    appId: config.FIREBASE_APP_ID || "PLACEHOLDER"
 };
 
 console.log('[Firebase] Config loaded:', {
