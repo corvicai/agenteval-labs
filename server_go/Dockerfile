@@ -34,9 +34,6 @@ COPY --from=builder /app/main .
 # Copy migrations
 COPY --from=builder /app/migrations ./migrations
 
-# Copy Firebase service account if it exists
-COPY --from=builder /app/firebase-service-account.json* .
-
 # Expose port
 EXPOSE 8080
 
