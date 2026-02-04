@@ -28,15 +28,18 @@ func InitFirebase() (*Client, error) {
 	var app *firebase.App
 	var err error
 
-	// Try to load credentials from file if it exists
-	if data, readErr := os.ReadFile(serviceAccountPath); readErr == nil {
-		log.Printf("[FIREBASE] Initializing with service account from: %s", serviceAccountPath)
-		// Use type-specific option to mitigate risk of malformed/unexpected JSON types
-		opt := option.WithAuthCredentialsJSON(option.ServiceAccount, data)
-		app, err = firebase.NewApp(ctx, nil, opt)
-	} else {
-		log.Printf("[FIREBASE] INFO: Service account file not found or unreadable at %s. Falling back to default credentials.", serviceAccountPath)
-		// Rely on GOOGLE_APPLICATION_CREDENTIALS or other default mechanisms
+	// prioritize service account file if path is provided and file exists
+	if serviceAccountPath != "" {
+		if data, readErr := os.ReadFile(serviceAccountPath); readErr == nil {
+			log.Printf("[FIREBASE] Initializing with service account from: %s", serviceAccountPath)
+			opt := option.WithAuthCredentialsJSON(option.ServiceAccount, data)
+			app, err = firebase.NewApp(ctx, nil, opt)
+		}
+	}
+
+	// Fallback to Application Default Credentials (ADC)
+	if app == nil {
+		log.Printf("[FIREBASE] Initializing with Application Default Credentials (ADC)")
 		app, err = firebase.NewApp(ctx, nil)
 	}
 
