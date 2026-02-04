@@ -3,21 +3,9 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Add build arguments for Firebase (Vite needs these at build time)
-ARG VITE_FIREBASE_API_KEY
-ARG VITE_FIREBASE_AUTH_DOMAIN
-ARG VITE_FIREBASE_PROJECT_ID
-ARG VITE_FIREBASE_STORAGE_BUCKET
-ARG VITE_FIREBASE_MESSAGING_SENDER_ID
-ARG VITE_FIREBASE_APP_ID
-
-# Set as environment variables for the build process
-ENV VITE_FIREBASE_API_KEY=$VITE_FIREBASE_API_KEY
-ENV VITE_FIREBASE_AUTH_DOMAIN=$VITE_FIREBASE_AUTH_DOMAIN
-ENV VITE_FIREBASE_PROJECT_ID=$VITE_FIREBASE_PROJECT_ID
-ENV VITE_FIREBASE_STORAGE_BUCKET=$VITE_FIREBASE_STORAGE_BUCKET
-ENV VITE_FIREBASE_MESSAGING_SENDER_ID=$VITE_FIREBASE_MESSAGING_SENDER_ID
-ENV VITE_FIREBASE_APP_ID=$VITE_FIREBASE_APP_ID
+# Copy package files
+COPY package*.json ./
+RUN npm install
 
 # Copy package files
 COPY package*.json ./
@@ -41,13 +29,11 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # Copy nginx config template
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 
-# Default environment variables
-ENV PORT=8080
-ENV API_URL=http://go-api:8080
+# Copy entrypoint script
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 
 EXPOSE 8080
 
-# The nginx image supports templates out of the box in newer versions, 
-# but let's be explicit or use the built-in feature if available.
-# Actually, nginx:alpine supports /etc/nginx/templates/*.template since 1.19
+ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["nginx", "-g", "daemon off;"]
