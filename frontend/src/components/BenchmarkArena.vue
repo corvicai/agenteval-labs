@@ -34,62 +34,46 @@
         @saved="onQuestionSetSaved"
       />
 
-    <!-- Questions Panel -->
-    <div v-if="!isZenMode" class="questions-panel">
-      <div class="questions-header-top">
-        <h3>📋 Question Sets</h3>
-        <div class="questions-header-actions">
-           <button class="btn btn-secondary btn-sm" @click="createNewQuestionSet">
-             <span class="icon">➕</span> New Set
-           </button>
-        </div>
-      </div>
-      
-      <div class="qs-list">
-        <div 
-          v-for="qs in questionSets" 
-          :key="qs.id" 
-          class="qs-item" 
-          :class="{ active: currentQuestionSet?.id === qs.id }"
-          @click="selectQuestionSet(qs)"
-        >
-          <span class="qs-name">{{ qs.name }}</span>
-          <span v-if="wsState.runningQuestionSetId === qs.id" class="running-indicator-dot"></span>
-          <span class="qs-meta">{{ getQuestionCount(qs) }} qs</span>
-          <div class="qs-actions">
-            <button class="btn-icon-small" @click.stop="$emit('view-history', qs)" title="View History">📜</button>
-          </div>
-        </div>
-      </div>
-      <div class="questions-select-row">
-        <select v-model="selectedQuestionId" class="questions-select">
-          <option value="">All Questions</option>
-          <option v-for="q in flatQuestions" :key="q.id" :value="q.id">
-            {{ q.question.slice(0, 60) }}{{ q.question.length > 60 ? '...' : '' }}
-          </option>
-        </select>
-        <button class="btn btn-primary" @click="startRunSetup" :disabled="isRunning || !currentQuestionSet">
-          {{ isRunning ? '⏳ Running...' : '▶️ Run Benchmark' }}
-        </button>
-        <button class="btn btn-secondary btn-history-arena" @click="$emit('view-history', currentQuestionSet || {})">
-          📚 History
-        </button>
-        <button class="btn btn-secondary" @click="showQuestionEditor = true" :disabled="!currentQuestionSet">
-          ✏️ Edit Questions
-        </button>
-        <button class="btn btn-secondary btn-pdf" @click="exportToPdf" :disabled="!currentRun">
-          📄 PDF
-        </button>
-        <button class="btn btn-secondary" @click="$emit('toggle-zen', true)">
-          🧘 Zen
-        </button>
-        <button class="btn btn-secondary" @click="reloadResults" title="Reload Results">
-          🔄
-        </button>
-        <button v-if="isRunning" class="btn btn-danger" @click="cancelBenchmark">
-          ⛔ Cancel
-        </button>
-      </div>
+    <!-- Left Sidebar with Tabs -->
+    <LeftSidebar
+      :question-sets="questionSets"
+      :current-question-set="currentQuestionSet"
+      :agents="mergedAgents"
+      :running-question-set-id="wsState.runningQuestionSetId"
+      :is-zen-mode="isZenMode"
+      @create-question-set="createNewQuestionSet"
+      @select-question-set="selectQuestionSet"
+      @view-history="(qs) => $emit('view-history', qs)"
+      @manage-agents="handleManageAgents"
+    />
+
+    
+
+    <!-- Main Content Area -->
+    <div class="benchmark-arena-content">
+    <!-- Action Buttons Row -->
+    <div v-if="!isZenMode" class="action-buttons-row">
+      <button class="btn btn-primary" @click="startRunSetup" :disabled="isRunning || !currentQuestionSet">
+        {{ isRunning ? '⏳ Running...' : '▶️ Run Benchmark' }}
+      </button>
+      <button class="btn btn-secondary btn-history-arena" @click="$emit('view-history', currentQuestionSet || {})">
+        📚 History
+      </button>
+      <button class="btn btn-secondary" @click="showQuestionEditor = true" :disabled="!currentQuestionSet">
+        ✏️ Edit Questions
+      </button>
+      <button class="btn btn-secondary btn-pdf" @click="exportToPdf" :disabled="!currentRun">
+        📄 PDF
+      </button>
+      <button class="btn btn-secondary" @click="$emit('toggle-zen', true)">
+        🧘 Zen
+      </button>
+      <button class="btn btn-secondary" @click="reloadResults" title="Reload Results">
+        🔄
+      </button>
+      <button v-if="isRunning" class="btn btn-danger" @click="cancelBenchmark">
+        ⛔ Cancel
+      </button>
     </div>
 
     <!-- Progress Bar -->
@@ -113,7 +97,73 @@
          <p>Choose a question set from the left panel to start benchmarking.</p>
       </div>
 
-      <div v-else class="chat-container">
+      <!-- Main Content Area: Questions + Chat Panels side by side -->
+      <div v-else-if="flatQuestions.length > 0" class="main-content-area">
+        <!-- Arena Label -->
+        
+        <!-- Zen Mode Exit Button - Inline -->
+        <div v-if="isZenMode" class="zen-mode-exit-inline">
+          <button class="btn btn-secondary btn-exit-zen" @click="emit('toggle-zen', false)">
+            ✕ Exit Zen Mode (Esc)
+          </button>
+        </div>
+        
+        <!-- Questions List View -->
+        <div class="questions-list-view">
+          <div class="questions-list-header">
+            <h2>{{ currentQuestionSet.name }}</h2>
+            <p class="questions-count">{{ flatQuestions.length }} question{{ flatQuestions.length !== 1 ? 's' : '' }}</p>
+          </div>
+          <div class="questions-list-container">
+            <div 
+              v-for="(question, index) in flatQuestions" 
+              :key="question.id || index"
+              class="question-item"
+              :class="{ 'selected': selectedQuestionId === question.id }"
+              @click="selectedQuestionId = question.id"
+            >
+              <div class="question-number">Q{{ index + 1 }}</div>
+              <div class="question-content">
+                <div class="question-text">{{ question.question || question.text }}</div>
+                <div v-if="question.category" class="question-category">{{ question.category }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Chat Panels (when agents/results are available) -->
+        <div v-if="displayAgents.length > 0" class="chat-container">
+          <div class="chat-panels-bar">
+            <div v-for="agent in displayAgents" :key="agent.id" class="chat-panel-wrapper">
+              <ChatPanel 
+                :agent-name="agent.name"
+                :agent-id="agent.id"
+                :agent-url="agent.config?.url || agent.config?.prompt_id || ''"
+                :model="agent.config?.model || ''"
+                :provider="agent.provider_type"
+                :results="getAgentResults(agent.id)"
+                :messages-ref="{ value: null }"
+                :message-refs="{ value: {} }"
+                :on-scroll="() => {}"
+                :selected-question-id="selectedQuestionId"
+                :history-by-question="{}" 
+                :get-question-key="getQuestionKey"
+                :on-validation="(idx, val) => onValidation(agent.id, idx, val)"
+                :on-retry="(idx) => onRetry(agent.id, idx)"
+                :extract-answer-text="extractAnswerText"
+                :extract-answer-meta="extractAnswerMeta"
+                @rerun="rerunQuestion"
+                @rate="rateResult"
+                :dev-mode="isDev"
+                @show-details="(idx) => handleShowDetails(agent.id, idx)"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Fallback: Chat Panels only (when results are available but no questions) -->
+      <div v-else-if="hasResults && displayAgents.length > 0" class="chat-container">
         <div class="chat-panels-bar">
           <div v-for="agent in displayAgents" :key="agent.id" class="chat-panel-wrapper">
             <ChatPanel 
@@ -141,37 +191,16 @@
           </div>
         </div>
       </div>
+
     </div>
 
+    </div>
     <!-- Details Modal -->
     <DetailsModal 
       :is-open="showDetailsModal" 
       :details="selectedDetails"
       @close="showDetailsModal = false"
     />
-
-    <!-- Question Navigation -->
-    <div v-if="flatQuestions.length > 1" class="question-navigation-floating">
-      <button class="nav-btn-floating" @click="prevQuestion" :disabled="currentQuestionIndex <= 0">
-        <span class="nav-icon">←</span>
-        <span class="nav-label">Prev</span>
-      </button>
-      <div class="nav-current-floating">
-        <span class="nav-index">{{ currentQuestionIndex + 1 }}</span>
-        <span class="nav-total">of {{ flatQuestions.length }}</span>
-      </div>
-      <button class="nav-btn-floating" @click="nextQuestion" :disabled="currentQuestionIndex >= flatQuestions.length - 1">
-        <span class="nav-icon">→</span>
-        <span class="nav-label">Next</span>
-      </button>
-    </div>
-
-    <!-- Zen Mode Exit Button -->
-    <div v-if="isZenMode" class="zen-mode-exit-overlay">
-      <button class="btn btn-secondary btn-exit-zen" @click="emit('toggle-zen', false)">
-        ✕ Exit Zen Mode (Esc)
-      </button>
-    </div>
   </div>
 </template>
 
@@ -183,6 +212,7 @@ import ChatPanel from './ChatPanel.vue'
 import QuestionEditorModal from './QuestionEditorModal.vue'
 import DetailsModal from './modals/DetailsModal.vue'
 import PrintReport from './PrintReport.vue'
+import LeftSidebar from './LeftSidebar.vue'
 import wsService from '../services/websocket.js'
 import { exportResultsReport } from '../utils/exporters.js'
 import { downloadManager } from '../services/DownloadManager.js'
@@ -203,7 +233,7 @@ const props = defineProps({
   isZenMode: Boolean
 })
 
-const emit = defineEmits(['update:currentQuestionSet', 'view-history', 'trigger-print', 'toggle-zen'])
+const emit = defineEmits(['update:currentQuestionSet', 'view-history', 'trigger-print', 'toggle-zen', 'manage-agents'])
 
 watch(() => props.questionSets, (sets) => {
   console.log('[Arena] Question sets updated:', sets.length)
@@ -343,6 +373,10 @@ const currentQuestionIndex = computed(() => {
   return flatQuestions.value.findIndex(q => q.id === selectedQuestionId.value)
 })
 
+const hasResults = computed(() => {
+  return runResults.value && Object.keys(runResults.value).length > 0
+})
+
 // Granular progress: started tasks count for half (0.5x), completed count for full (1x)
 // This gives visual feedback that tasks are running before they complete
 const progressPercent = computed(() => {
@@ -467,8 +501,13 @@ const displayAgents = computed(() => {
 })
 
 // Methods
+function handleManageAgents() {
+  emit('manage-agents')
+}
+
 function selectQuestionSet(qs) {
     currentQuestionSet.value = qs
+    emit('update:currentQuestionSet', qs)
 }
 
 function getQuestionCount(set) {
@@ -1163,9 +1202,93 @@ defineExpose({
 <style scoped>
 .benchmark-arena {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100%;
   width: 100%;
+  overflow: hidden;
+}
+
+.questions-display-section {
+  width: 400px;
+  background: #ffffff;
+  border-right: 1px solid #e2e8f0;
+  padding: 1rem 1.5rem;
+  overflow-y: auto;
+  flex-shrink: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  z-index: 1;
+}
+
+.questions-display-section h3 {
+  margin: 0 0 1rem 0;
+  color: #1e293b;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.questions-display-section .questions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.questions-display-section .question-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  transition: background 0.2s ease;
+}
+
+.questions-display-section .question-item:hover {
+  background: rgba(99, 102, 241, 0.05);
+}
+
+.questions-display-section .question-number {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: #6366f1;
+  min-width: 2rem;
+}
+
+.questions-display-section .question-text {
+  flex: 1;
+  color: #1e293b;
+  line-height: 1.5;
+}
+
+.questions-display-section .question-category {
+  flex-shrink: 0;
+  padding: 0.25rem 0.5rem;
+  background: #6366f1;
+  color: white;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.questions-display-section .empty-state {
+  padding: 2rem;
+  text-align: center;
+  color: #64748b;
+}
+
+.questions-display-section .empty-state p {
+  margin: 0;
+}
+
+.benchmark-arena-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -1180,13 +1303,17 @@ defineExpose({
 }
 
 /* Scoped styles that were specifically for the runner/arena */
-/* Zen Mode Exit Overlay */
-.zen-mode-exit-overlay {
-  position: fixed;
-  top: 20px;
-  right: 20px;
-  z-index: 2000;
+/* Zen Mode Exit Button - Inline in arena */
+.zen-mode-exit-inline {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 100;
   pointer-events: auto;
+}
+
+.main-content-area {
+  position: relative;
 }
 
 .btn-exit-zen {
@@ -1306,6 +1433,157 @@ defineExpose({
 @keyframes slide-down {
   from { top: -50px; opacity: 0; }
   to { top: 20px; opacity: 1; }
+}
+
+.benchmark-arena {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Main Content Area - Side by side layout */
+.main-content-area {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  gap: 16px;
+  overflow: hidden;
+  padding: 16px;
+  position: relative;
+}
+
+.arena-label {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #666;
+  z-index: 10;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid #e0e0e0;
+  pointer-events: none;
+}
+
+/* Questions List View */
+.questions-list-view {
+  flex: 0 0 400px;
+  overflow-y: auto;
+  padding: 24px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e0e0e0;
+}
+
+.questions-list-header {
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.questions-list-header h2 {
+  margin: 0 0 8px 0;
+  font-size: 24px;
+  color: #333;
+}
+
+.questions-count {
+  margin: 0;
+  color: #666;
+  font-size: 14px;
+}
+
+.questions-list-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.question-item {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  gap: 16px;
+}
+
+.question-item:hover {
+  border-color: #007bff;
+  box-shadow: 0 2px 8px rgba(0, 123, 255, 0.1);
+}
+
+.question-item.selected {
+  border-color: #007bff;
+  background: #e7f3ff;
+  box-shadow: 0 2px 8px rgba(0, 123, 255, 0.15);
+}
+
+.question-number {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f0f0f0;
+  border-radius: 6px;
+  font-weight: 600;
+  color: #666;
+  font-size: 14px;
+}
+
+.question-item.selected .question-number {
+  background: #007bff;
+  color: white;
+}
+
+.question-content {
+  flex: 1;
+}
+
+.question-text {
+  font-size: 15px;
+  line-height: 1.5;
+  color: #333;
+  margin-bottom: 8px;
+}
+
+.question-category {
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+}
+
+.action-buttons-row {
+  position: fixed;
+  bottom: 0;
+  left: 700px;
+  right: 0;
+  padding: 12px 16px;
+  background: white;
+  border-top: 1px solid #e0e0e0;
+  display: flex;
+  gap: 8px;
+  z-index: 100;
+  box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.action-buttons-row .btn {
+  padding: 8px 16px;
+  font-size: 14px;
+}
+
+.chat-container {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0; /* Allow flex shrinking */
 }
 
 </style>

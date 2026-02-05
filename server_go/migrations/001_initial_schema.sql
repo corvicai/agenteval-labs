@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS agents (
     workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     provider_type VARCHAR(50) NOT NULL,
-    config JSONB NOT NULL DEFAULT '{}',
+    config TEXT NOT NULL DEFAULT '',
     enabled BOOLEAN DEFAULT true,
     position INTEGER DEFAULT 0,
     max_concurrency INTEGER DEFAULT 5,
@@ -138,7 +138,7 @@ CREATE TABLE IF NOT EXISTS question_set_agents (
     agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     enabled BOOLEAN DEFAULT true,
     position INT DEFAULT 0,
-    config JSONB,
+    config TEXT DEFAULT '',
     created_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (question_set_id, agent_id)
 );

@@ -68,8 +68,8 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: AgenteEval-frontend
-    # ports:
-    #   - "3010:8080"
+    ports:
+      - "3010:8080"
     environment:
       - PORT=8080
       - API_URL=http://go-api:8080

@@ -174,7 +174,18 @@
 .main-content.no-padding {
   padding: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
   /* Let child handle scrolling */
+}
+
+.main-content.no-padding > * {
+  flex: 1;
+  min-height: 0;
+}
+
+.main-content.no-padding > .questions-display-section {
+  flex: 0 0 auto;
 }
 
 .benchmarks-empty-state {
@@ -846,20 +857,9 @@
   margin-bottom: 1rem;
 }
 
-/* Zen Mode */
-.zen-mode-active .header,
-.zen-mode-active .app-nav,
-.zen-mode-active .controls,
-.zen-mode-active .impersonation-banner {
-  display: none !important;
-}
-
-.zen-mode-active .app-container {
-  height: 100vh;
-}
-
+/* Zen Mode - Display inline in arena, don't hide other elements */
 .zen-mode-active .main-content {
-  padding: 0;
+  /* Keep normal padding and layout */
 }
 
 /* App Initialization Loader */
@@ -887,4 +887,75 @@
   color: var(--text-secondary);
   font-weight: 500;
   font-size: 1rem;
+}
+
+/* Questions Display Section */
+.questions-display-section {
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--border-color);
+  padding: 1rem 1.5rem;
+  max-height: 300px;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.questions-display-section h3 {
+  margin: 0 0 1rem 0;
+  color: var(--text-primary);
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.questions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.questions-display-section .question-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  background: var(--app-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  transition: background 0.2s ease;
+}
+
+.questions-display-section .question-item:hover {
+  background: rgba(99, 102, 241, 0.05);
+}
+
+.questions-display-section .question-number {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--accent);
+  min-width: 2rem;
+}
+
+.questions-display-section .question-text {
+  flex: 1;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.questions-display-section .question-category {
+  flex-shrink: 0;
+  padding: 0.25rem 0.5rem;
+  background: var(--accent);
+  color: white;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.questions-display-section .empty-state {
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.questions-display-section .empty-state p {
+  margin: 0;
 }

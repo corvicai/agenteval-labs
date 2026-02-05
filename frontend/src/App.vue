@@ -58,7 +58,6 @@
           <div class="header-left">
         <CorvicLogo width="100px" height="28px" class="header-logo" @click="viewMode = 'benchmarks'" />
         <h1 @click="viewMode = 'benchmarks'">Benchmarking</h1>
-        <div v-if="isDev" class="dev-badge">🚧 DEV MODE</div>
       </div>
           <div class="controls">
             <div class="buttons">
@@ -90,18 +89,6 @@
             :class="{ active: viewMode === 'stats' }"
             @click="viewMode = 'stats'"
           >📊 Stats</button>
-          <button 
-            v-if="isManager" 
-            class="nav-btn" 
-            :class="{ active: viewMode === 'manager' }"
-            @click="viewMode = 'manager'"
-          >👔 Manager</button>
-          <button 
-            v-if="currentUser?.is_admin" 
-            class="nav-btn" 
-            :class="{ active: viewMode === 'admin' }"
-            @click="viewMode = 'admin'"
-          >⚙️ Admin</button>
           <button 
             class="nav-btn" 
             :class="{ active: viewMode === 'docs' }"
@@ -156,22 +143,24 @@
 
         <!-- Main Benchmarking Content -->
         <!-- History View -->
-        <main v-if="viewMode === 'benchmarks' && benchmarkMode === 'history'" class="main-content no-padding">
+        <!-- <main v-if="viewMode === 'benchmarks' && benchmarkMode === 'history'" class="main-content no-padding">
+        
           <BenchmarkDocumentView 
              :workspace-id="currentWorkspace?.id"
              :pre-filter="historyFilter"
              @back="benchmarkMode = 'runner'"
              @trigger-print="handleTriggerPrint"
           />
-        </main>
+        </main> -->
 
         <!-- Arena View -->
-        <main v-show="viewMode === 'benchmarks' && benchmarkMode === 'runner'" class="main-content no-padding">
+        <!-- Arena View - Always show when in benchmarks mode -->
+        <main v-if="viewMode === 'benchmarks'" class="main-content no-padding">
           <KeepAlive>
             <BenchmarkArena 
-                v-if="currentWorkspace"
-                :key="currentWorkspace.id"
-                :workspace-id="currentWorkspace.id"
+                v-if="viewMode === 'benchmarks'"
+                :key="currentWorkspace?.id || 'no-workspace'"
+                :workspace-id="currentWorkspace?.id"
                 :agents="agents || []"
                 :question-sets="questionSets || []"
                 :initial-question-set-id="currentQuestionSet?.id"
@@ -180,6 +169,7 @@
                 @trigger-print="handleTriggerPrint"
                 :is-zen-mode="isZenMode"
                 @toggle-zen="val => isZenMode = val"
+                @manage-agents="showConfig = true"
             />
           </KeepAlive>
           <!-- Workspace is automatically selected for each user -->
@@ -693,6 +683,34 @@ function switchQuestionSet(id) {
   if (set) {
     currentQuestionSet.value = set
   }
+}
+
+function getFlatQuestions(questionSet) {
+  if (!questionSet?.data) return []
+  
+  let data = questionSet.data
+  if (typeof data === 'string') {
+    try {
+      data = JSON.parse(data)
+    } catch (e) {
+      console.error('Failed to parse question set data:', e)
+      return []
+    }
+  }
+
+  const questions = []
+  const categories = data.categories || []
+  for (let catIdx = 0; catIdx < categories.length; catIdx++) {
+    const cat = categories[catIdx]
+    const catQuestions = cat.questions || []
+    for (let qIdx = 0; qIdx < catQuestions.length; qIdx++) {
+      const q = catQuestions[qIdx]
+      const questionText = q.question || q.text || ''
+      const qId = q.id != null && q.id !== '' ? String(q.id) : `${catIdx + 1}-${qIdx + 1}`
+      questions.push({ ...q, id: qId, category: cat.name, question: questionText })
+    }
+  }
+  return questions
 }
 
 function goToHistory(qs) {
