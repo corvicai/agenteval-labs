@@ -4,13 +4,29 @@ steps:
     script: |
       #!/usr/bin/env bash
       set -eu -o pipefail
+      cat infra/releng/release-tag.txt > .release-tag
+    id: 'get-version'
 
-      RELEASE_TAG=$(cat infra/releng/release-tag.txt)
+  - name: gcr.io/cloud-builders/docker
+    script: |
+      RELEASE_TAG=$(cat .release-tag)
+      for service in agenteval-api agenteval-runner agenteval-web; do
+        docker build -t ${_IMAGE_REPO_BASE}/${service}:${RELEASE_TAG} -t ${_IMAGE_REPO_BASE}/${service}:latest --file=infra/${service}/Dockerfile .
+        docker push ${_IMAGE_REPO_BASE}/${service}:${RELEASE_TAG}
+        docker push ${_IMAGE_REPO_BASE}/${service}:latest
+      done
+    id: 'build-images'
 
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    script: |
+      #!/usr/bin/env bash
+      set -eu -o pipefail
+      RELEASE_TAG=$(cat .release-tag)
       for service in agenteval-api agenteval-runner agenteval-web; do
         gcloud run deploy ${service}-prod --image ${_IMAGE_REPO_BASE}/${service}:${RELEASE_TAG} --region ${_DEPLOY_REGION}
       done
     timeout: 480s
+    id: 'deploy'
 options:
   automapSubstitutions: true
   substitutionOption: ALLOW_LOOSE
