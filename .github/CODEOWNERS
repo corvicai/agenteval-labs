@@ -1,0 +1,13 @@
+# Order is important, the last match wins
+
+# Some npm packages have sharp edges or are avenues to supply chain attacks.
+# Subject their changes to additional review.
+**/package.json @corvicai/infra
+**/bun.lock @corvicai/infra
+**/package-lock.json @corvicai/infra
+**/go.mod
+**/go.sum
+**/requirements.txt
+
+/.github  @corvicai/infra
+infra  @corvicai/infra

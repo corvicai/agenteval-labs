@@ -1,0 +1,15 @@
+steps:
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    script: |
+      #!/usr/bin/env bash
+      set -eu -o pipefail
+
+      for service in agenteval-api agenteval-runner agenteval-web; do
+        gcloud run deploy ${service}-dev --image ${_IMAGE_REPO_BASE}/${service}:${COMMIT_SHA} --region ${_DEPLOY_REGION}
+      done
+    timeout: 480s
+options:
+  automapSubstitutions: true
+  substitutionOption: ALLOW_LOOSE
+  logging: CLOUD_LOGGING_ONLY
+  requestedVerifyOption: VERIFIED
