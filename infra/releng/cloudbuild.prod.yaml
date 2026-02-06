@@ -1,13 +1,14 @@
 ---
 steps:
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: 'get-version'
     script: |
       #!/usr/bin/env bash
       set -eu -o pipefail
       cat infra/releng/release-tag.txt > .release-tag
-    id: 'get-version'
 
   - name: gcr.io/cloud-builders/docker
+    id: 'build-and-push'
     script: |
       RELEASE_TAG=$(cat .release-tag)
       for service in agenteval-api agenteval-runner agenteval-web; do
@@ -15,18 +16,43 @@ steps:
         docker push ${_IMAGE_REPO_BASE}/${service}:${RELEASE_TAG}
         docker push ${_IMAGE_REPO_BASE}/${service}:latest
       done
-    id: 'build-images'
 
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: 'deploy-backend'
     script: |
       #!/usr/bin/env bash
       set -eu -o pipefail
       RELEASE_TAG=$(cat .release-tag)
-      for service in agenteval-api agenteval-runner agenteval-web; do
-        gcloud run deploy ${service}-prod --image ${_IMAGE_REPO_BASE}/${service}:${RELEASE_TAG} --region ${_DEPLOY_REGION}
-      done
+      
+      # Deploy runner first
+      echo "Deploying runner..."
+      gcloud run deploy agenteval-runner-prod --image ${_IMAGE_REPO_BASE}/agenteval-runner:${RELEASE_TAG} --region ${_DEPLOY_REGION} --quiet
+
+      # Deploy api
+      echo "Deploying api..."
+      gcloud run deploy agenteval-api-prod --image ${_IMAGE_REPO_BASE}/agenteval-api:${RELEASE_TAG} --region ${_DEPLOY_REGION} --quiet
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: 'deploy-frontend'
+    script: |
+      #!/usr/bin/env bash
+      set -eu -o pipefail
+      RELEASE_TAG=$(cat .release-tag)
+      
+      # Fetch API URL
+      echo "Discovering API URL..."
+      API_URL=$(gcloud run services describe agenteval-api-prod --region ${_DEPLOY_REGION} --format='value(status.url)')
+      echo "Discovered API URL: ${API_URL}"
+
+      # Deploy web
+      echo "Deploying web..."
+      gcloud run deploy agenteval-web-prod \
+        --image ${_IMAGE_REPO_BASE}/agenteval-web:${RELEASE_TAG} \
+        --region ${_DEPLOY_REGION} \
+        --set-env-vars "API_URL=${API_URL}" \
+        --quiet
     timeout: 480s
-    id: 'deploy'
+
 options:
   automapSubstitutions: true
   substitutionOption: ALLOW_LOOSE

@@ -1,8 +1,9 @@
-resolver 127.0.0.11 valid=10s;  # Docker internal DNS
-
 server {
     listen ${PORT};
     server_name localhost docker _;
+
+    # Use standard resolvers (Google DNS) to ensure external URLs resolve in Cloud Run
+    resolver 8.8.8.8 8.8.4.4 valid=30s;
 
     # Gzip compression
     gzip on;
@@ -14,10 +15,10 @@ server {
 
     # API proxy
     location /api/ {
-        # Cloud Run services usually have a stable URL, but for local 
-        # we still want to support the docker name.
-        # We can use an environment variable for this too.
-        proxy_pass ${API_URL};
+        # Using a variable in proxy_pass forces nginx to resolve the URL at runtime
+        # instead of at startup, preventing a crash if the host is down.
+        set $api_upstream "${API_URL}";
+        proxy_pass $api_upstream;
         rewrite ^/api/(.*) /$1 break;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -28,7 +29,8 @@ server {
 
     # WebSocket proxy
     location /ws {
-        proxy_pass ${API_URL};
+        set $api_upstream "${API_URL}";
+        proxy_pass $api_upstream;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
