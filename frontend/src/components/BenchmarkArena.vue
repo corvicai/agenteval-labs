@@ -48,7 +48,6 @@
     />
 
     
-
     <!-- Main Content Area -->
     <div class="benchmark-arena-content">
     <!-- Action Buttons Row -->
@@ -127,6 +126,19 @@
                 <div class="question-text">{{ question.question || question.text }}</div>
                 <div v-if="question.category" class="question-category">{{ question.category }}</div>
               </div>
+              <div class="question-actions">
+              <span class="question-status" :class="getQuestionStatus(question.id)">
+                {{ getQuestionStatusText(question.id) }}
+              </span>
+              <button 
+                v-if="hasQuestionBeenRun(question.id)"
+                class="btn-retry" 
+                @click.stop="retryQuestionForAllAgents(question.id)"
+                title="Retry this question"
+              >
+                🔄 Retry
+              </button>
+            </div>
             </div>
           </div>
         </div>
@@ -503,6 +515,85 @@ const displayAgents = computed(() => {
 // Methods
 function handleManageAgents() {
   emit('manage-agents')
+}
+
+// Check if a question has been run (has results from any agent)
+function hasQuestionBeenRun(questionId) {
+  if (!runResults.value || !questionId) return false
+  const qIdStr = String(questionId)
+  
+  for (const agentId in runResults.value) {
+    const agentResults = runResults.value[agentId]
+    if (agentResults && agentResults[qIdStr]) {
+      const result = agentResults[qIdStr]
+      // Consider it run if it has an answer, error, or was completed
+      if (result.answer || result.error || result.timestamp) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+// Get status class for question
+function getQuestionStatus(questionId) {
+  if (!runResults.value || !questionId) return 'status-not-run'
+  const qIdStr = String(questionId)
+  
+  let hasError = false
+  let hasAnswer = false
+  let isLoading = false
+  
+  for (const agentId in runResults.value) {
+    const agentResults = runResults.value[agentId]
+    if (agentResults && agentResults[qIdStr]) {
+      const result = agentResults[qIdStr]
+      if (result.loading) isLoading = true
+      if (result.error) hasError = true
+      if (result.answer) hasAnswer = true
+    }
+  }
+  
+  if (isLoading) return 'status-loading'
+  if (hasError) return 'status-error'
+  if (hasAnswer) return 'status-completed'
+  return 'status-not-run'
+}
+
+// Get status text for question
+function getQuestionStatusText(questionId) {
+  const status = getQuestionStatus(questionId)
+  switch (status) {
+    case 'status-loading':
+      return '⏳ Running'
+    case 'status-error':
+      return '❌ Error'
+    case 'status-completed':
+      return '✅ Completed'
+    default:
+      return '⭕ Not Run'
+  }
+}
+
+// Retry a question for all agents
+async function retryQuestionForAllAgents(questionId) {
+  if (!currentRun.value || !questionId) {
+    alert('No active run. Please start a benchmark first.')
+    return
+  }
+  
+  const qIdStr = String(questionId)
+  const enabledAgents = mergedAgents.value.filter(a => a.enabled && a.provider_type !== 'evaluator')
+  
+  if (enabledAgents.length === 0) {
+    alert('No enabled agents found. Please enable at least one agent.')
+    return
+  }
+  
+  // Retry for each enabled agent
+  for (const agent of enabledAgents) {
+    await rerunQuestion(agent.id, questionId)
+  }
 }
 
 function selectQuestionSet(qs) {
@@ -1208,7 +1299,7 @@ defineExpose({
   overflow: hidden;
 }
 
-.questions-display-section {
+.questions-list-view {
   width: 400px;
   background: #ffffff;
   border-right: 1px solid #e2e8f0;
@@ -1221,14 +1312,14 @@ defineExpose({
   z-index: 1;
 }
 
-.questions-display-section h3 {
+.questions-list-view h3 {
   margin: 0 0 1rem 0;
   color: #1e293b;
   font-size: 1.1rem;
   font-weight: 600;
 }
 
-.questions-display-section .questions-list {
+.questions-list-view .questions-list {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -1236,7 +1327,7 @@ defineExpose({
   overflow-y: auto;
 }
 
-.questions-display-section .question-item {
+.questions-list-view .question-item {
   display: flex;
   align-items: flex-start;
   gap: 0.75rem;
@@ -1247,24 +1338,31 @@ defineExpose({
   transition: background 0.2s ease;
 }
 
-.questions-display-section .question-item:hover {
+.questions-list-view .question-item:hover {
   background: rgba(99, 102, 241, 0.05);
 }
 
-.questions-display-section .question-number {
+.questions-list-view .question-number {
   flex-shrink: 0;
   font-weight: 600;
   color: #6366f1;
   min-width: 2rem;
 }
 
-.questions-display-section .question-text {
+.questions-list-view .question-content-wrapper {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.questions-list-view .question-text {
   color: #1e293b;
   line-height: 1.5;
 }
 
-.questions-display-section .question-category {
+.questions-list-view .question-category {
   flex-shrink: 0;
   padding: 0.25rem 0.5rem;
   background: #6366f1;
@@ -1272,15 +1370,72 @@ defineExpose({
   border-radius: 4px;
   font-size: 0.75rem;
   font-weight: 500;
+  width: fit-content;
 }
 
-.questions-display-section .empty-state {
+.questions-list-view .question-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.questions-list-view .question-status {
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.questions-list-view .question-status.status-not-run {
+  background: #e2e8f0;
+  color: #64748b;
+}
+
+.questions-list-view .question-status.status-loading {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.questions-list-view .question-status.status-completed {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.questions-list-view .question-status.status-error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.questions-list-view .btn-retry {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  background: #6366f1;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  white-space: nowrap;
+}
+
+.questions-list-view .btn-retry:hover {
+  background: #4f46e5;
+}
+
+.questions-list-view .btn-retry:active {
+  background: #4338ca;
+}
+
+.questions-list-view .empty-state {
   padding: 2rem;
   text-align: center;
   color: #64748b;
 }
 
-.questions-display-section .empty-state p {
+.questions-list-view .empty-state p {
   margin: 0;
 }
 
@@ -1469,7 +1624,7 @@ defineExpose({
 
 /* Questions List View */
 .questions-list-view {
-  flex: 0 0 400px;
+  flex: auto;
   overflow-y: auto;
   padding: 24px;
   background: #f8f9fa;
@@ -1560,17 +1715,13 @@ defineExpose({
 }
 
 .action-buttons-row {
-  position: fixed;
-  bottom: 0;
-  left: 700px;
-  right: 0;
-  padding: 12px 16px;
+  position: inherit;
+  padding: 3.2px 16px;
   background: white;
   border-top: 1px solid #e0e0e0;
   display: flex;
   gap: 8px;
   z-index: 100;
-  box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.05);
 }
 
 .action-buttons-row .btn {
