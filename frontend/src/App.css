@@ -1,12 +1,3 @@
-.user-badge {
-  background: #f1f5f9;
-  padding: 0.4rem 0.75rem;
-  border-radius: 999px;
-  font-size: 0.85rem;
-  color: #475569;
-  font-weight: 500;
-}
-
 .new-workspace {
   border: 2px dashed #cbd5e1 !important;
   background: transparent !important;
@@ -30,9 +21,17 @@
 }
 
 .user-badge.admin {
-  background: linear-gradient(135deg, #dbeafe 0%, #e0e7ff 100%);
-  color: #1e40af;
-  border: 1px solid #93c5fd;
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%) !important;
+  color: #92400e !important;
+  border: 1.5px solid #fbbf24 !important;
+  box-shadow: 0 1px 3px rgba(245, 158, 11, 0.2) !important;
+}
+
+.user-badge.admin:hover {
+  background: linear-gradient(135deg, #fde68a 0%, #fcd34d 100%) !important;
+  border-color: #f59e0b !important;
+  color: #78350f !important;
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.25), 0 0 0 3px rgba(245, 158, 11, 0.15) !important;
 }
 
 .btn-admin {
@@ -106,6 +105,46 @@
   background: rgba(255, 255, 255, 0.85) !important;
   backdrop-filter: blur(12px) !important;
   border-bottom: 1px solid var(--border-color) !important;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+}
+
+.controls .buttons {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.controls .btn.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  color: white;
+  border: 1.5px solid #dc2626;
+  border-radius: 10px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 3px rgba(239, 68, 68, 0.2);
+  white-space: nowrap;
+}
+
+.controls .btn.btn-danger:hover:not(:disabled) {
+  background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+  border-color: #b91c1c;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3), 0 0 0 3px rgba(239, 68, 68, 0.1);
+  transform: translateY(-1px);
+}
+
+.controls .btn.btn-danger:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 2px 6px rgba(239, 68, 68, 0.25);
 }
 
 .header h1 {
@@ -658,23 +697,34 @@
 }
 
 .user-badge {
-  background: rgba(226, 232, 240, 0.4);
-  padding: 0.4rem 0.8rem;
-  border-radius: 8px;
-  font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+  padding: 0.5rem 1rem;
+  border-radius: 10px;
+  font-size: 0.875rem;
   font-weight: 600;
-  color: #475569;
-  border: 1px solid #e2e8f0;
+  color: #334155;
+  border: 1.5px solid #e2e8f0;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  white-space: nowrap;
+  user-select: none;
 }
 
 .user-badge:hover {
-  background: white;
+  background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
   border-color: #6366f1;
   color: #6366f1;
-  box-shadow: 0 0 10px rgba(99, 102, 241, 0.1);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.15), 0 0 0 3px rgba(99, 102, 241, 0.1);
   transform: translateY(-1px);
+}
+
+.user-badge:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 6px rgba(99, 102, 241, 0.2);
 }
 
 .org-item-card.is-active {

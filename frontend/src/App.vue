@@ -64,15 +64,13 @@
               <span class="user-badge" :class="{ admin: currentUser?.is_admin }" @click="openMyProfile">
                 {{ currentUser?.is_admin ? '👑' : '👤' }} {{ currentUser?.name }}
               </span>
-              <button class="btn btn-primary" @click="showConfig = !showConfig">
-                🤖 {{ showConfig ? 'Hide Agents' : 'Manage Agents' }}
+              <button class="btn btn-danger btn-logout-compact icon-only has-tooltip"
+                      title="Logout"
+                      aria-label="Logout"
+                      @click="handleLogout">
+                <span class="logout-icon">→</span>
               </button>
-              <button class="btn btn-primary" @click="showActionsModal = true" :disabled="!currentWorkspace">
-                ⚙️ Actions
-              </button>
-              <button class="btn btn-danger" @click="handleLogout">
-                🚪 Logout
-              </button>
+
             </div>
           </div>
         </header>
@@ -175,35 +173,7 @@
 
       </div>
 
-      <!-- Actions Modal -->
-      <div v-if="showActionsModal" class="actions-modal-overlay" @click.self="showActionsModal = false">
-        <div class="actions-modal">
-          <div class="actions-modal-header">
-            <h3>⚙️ Actions</h3>
-            <button class="btn-close" @click="showActionsModal = false">×</button>
-          </div>
-          <div class="actions-grid">
-            <button class="btn btn-primary" @click="showQuestionEditor = true; showActionsModal = false" :disabled="!currentQuestionSet">
-              ✏️ Edit Questions
-            </button>
-            <!-- Configure Agents button removed - use "Manage Agents" in header instead -->
-            <!-- Summary toggle removed as it lives in Arena now, or we can message it via refs if needed, but easier to just let Arena handle it internally -->
-            <button class="btn btn-export" @click="showImportModal = true; showActionsModal = false">
-              📥 Import Questions
-            </button>
-            <button class="btn btn-export" @click="exportQuestions" :disabled="!currentQuestionSet">
-              📤 Export Questions
-            </button>
-            <!-- Run Evaluators also likely belongs in Arena, but keeping global actions maybe? NO, it acts on current active run. -->
-            <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 0.5rem 0; width: 100%;">
-            <button class="btn btn-secondary" @click="openMyProfile(); showActionsModal = false">
-              👤 View my profile
-            </button>
-            <!-- Workspace selection removed - each user has their own workspace -->
-            <!-- Change Workspace button removed -->
-          </div>
-        </div>
-      </div>
+
       <!-- Question Editor Modal (Global access) -->
       <QuestionEditorModal 
         v-if="showQuestionEditor"
@@ -1025,3 +995,89 @@ onUnmounted(() => {
 </script>
 
  
+/* Compact, modern logout button */
+.btn-logout-compact {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+
+  padding: 6px 10px;
+  border-radius: 10px;
+
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
+
+  /* soften the danger look */
+  background: rgba(239, 68, 68, 0.10);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  color: rgb(185, 28, 28);
+
+  box-shadow: none;
+
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 100ms ease;
+}
+
+.btn-logout-compact:hover {
+  background: rgba(239, 68, 68, 0.16);
+  border-color: rgba(239, 68, 68, 0.40);
+  box-shadow: 0 4px 10px rgba(239, 68, 68, 0.15);
+  transform: translateY(-1px);
+}
+
+.btn-logout-compact:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 6px rgba(239, 68, 68, 0.12);
+}
+
+.btn-logout-compact:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25);
+}
+.btn-logout-compact.icon-only {
+  padding: 6px 8px;
+}
+
+.btn-logout-compact.icon-only .logout-icon {
+  font-size: 14px;
+}
+
+/* Tooltip container */
+.btn-logout-compact.has-tooltip {
+  position: relative;
+}
+
+/* Hidden label */
+.btn-logout-compact .tooltip-text {
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 8px);
+  transform: translateY(-50%);
+
+  padding: 6px 10px;
+  border-radius: 8px;
+
+  background: #111827;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+
+  opacity: 0;
+  pointer-events: none;
+  transform-origin: right center;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+/* Show on hover / focus */
+.btn-logout-compact:hover .tooltip-text,
+.btn-logout-compact:focus-visible .tooltip-text {
+  opacity: 1;
+  transform: translateY(-50%) translateX(-2px);
+}
+
+

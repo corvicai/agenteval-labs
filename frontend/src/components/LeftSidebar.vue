@@ -74,10 +74,12 @@
           </div>
           <div v-if="agents.length === 0" class="empty-state">
             <p>No agents configured</p>
-            <button class="btn btn-primary btn-sm" @click="$emit('manage-agents')">
-              Manage Agents
-            </button>
           </div>
+        </div>
+        <div class="manage-agents-row">
+          <button class="btn btn-primary btn-sm btn-full-width" @click="$emit('manage-agents')">
+            <span class="icon">⚙️</span> Manage Agents
+          </button>
         </div>
       </div>
     </div>
@@ -372,6 +374,14 @@ function onQuestionSetSaved(updated) {
 }
 
 .add-validation-set-row {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid #e0e0e0;
+  flex-shrink: 0;
+  background: #f8f9fa;
+}
+
+.manage-agents-row {
   margin-top: auto;
   padding-top: 12px;
   border-top: 1px solid #e0e0e0;

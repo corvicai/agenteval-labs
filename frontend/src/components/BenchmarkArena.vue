@@ -35,8 +35,6 @@
       :workspace-id="workspaceId"
       @create-question-set="createNewQuestionSet"
       @select-question-set="selectQuestionSet"
-      @view-history="(qs) => $emit('view-history', qs)"
-      @manage-agents="handleManageAgents"
       @question-set-updated="handleQuestionSetUpdated"
     />
 
@@ -48,11 +46,11 @@
       <button class="btn btn-primary" @click="startRunSetup" :disabled="isRunning || !currentQuestionSet">
         {{ isRunning ? '⏳ Running...' : '▶️ Run Benchmark' }}
       </button>
-      <button class="btn btn-secondary btn-history-arena" @click="$emit('view-history', currentQuestionSet || {})">
-        📚 History
-      </button>
       <button class="btn btn-secondary btn-pdf" @click="exportToPdf" :disabled="!currentRun">
         📄 PDF
+      </button>
+      <button class="btn btn-secondary" @click="reloadResults" title="Reload Results">
+        🔄 Reload Results
       </button>
       <button v-if="isRunning" class="btn btn-danger" @click="cancelBenchmark">
         ⛔ Cancel
@@ -105,18 +103,18 @@
                 <div v-if="question.category" class="question-category">{{ question.category }}</div>
               </div>
               <div class="question-actions">
-              <span class="question-status" :class="getQuestionStatus(question.id)">
-                {{ getQuestionStatusText(question.id) }}
-              </span>
-              <button 
-                v-if="hasQuestionBeenRun(question.id)"
-                class="btn-retry" 
-                @click.stop="retryQuestionForAllAgents(question.id)"
-                title="Retry this question"
-              >
-                🔄 Retry
-              </button>
-            </div>
+                <span class="question-status" :class="getQuestionStatus(question.id)">
+                  {{ getQuestionStatusText(question.id) }}
+                </span>
+                <button 
+                  v-if="hasQuestionBeenRun(question.id)"
+                  class="btn-retry" 
+                  @click.stop="retryQuestionForAllAgents(question.id)"
+                  title="Retry this question"
+                >
+                  🔄 Retry
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -136,7 +134,6 @@
                 :message-refs="{ value: {} }"
                 :on-scroll="() => {}"
                 :selected-question-id="selectedQuestionId"
-                :history-by-question="{}" 
                 :get-question-key="getQuestionKey"
                 :on-validation="(idx, val) => onValidation(agent.id, idx, val)"
                 :on-retry="(idx) => onRetry(agent.id, idx)"
@@ -167,7 +164,6 @@
               :message-refs="{ value: {} }"
               :on-scroll="() => {}"
               :selected-question-id="selectedQuestionId"
-              :history-by-question="{}" 
               :get-question-key="getQuestionKey"
               :on-validation="(idx, val) => onValidation(agent.id, idx, val)"
               :on-retry="(idx) => onRetry(agent.id, idx)"
@@ -221,7 +217,7 @@ const props = defineProps({
   initialQuestionSetId: String
 })
 
-const emit = defineEmits(['update:currentQuestionSet', 'view-history', 'trigger-print', 'manage-agents'])
+const emit = defineEmits(['update:currentQuestionSet', 'trigger-print'])
 
 watch(() => props.questionSets, (sets) => {
   console.log('[Arena] Question sets updated:', sets.length)
@@ -487,9 +483,6 @@ const displayAgents = computed(() => {
 })
 
 // Methods
-function handleManageAgents() {
-  emit('manage-agents')
-}
 
 // Check if a question has been run (has results from any agent)
 function hasQuestionBeenRun(questionId) {
@@ -593,7 +586,7 @@ function startRunSetup() {
   if (primaryAgents.length === 0) {
     console.warn('[Arena] Start blocked. Enabled count:', enabledAgents.value.length, 'Primary count:', primaryAgents.length)
     console.log('[Arena] Merged Agents dump:', mergedAgents.value)
-    alert('Please enable at least one primary agent to start. Use "Manage Agents" in the header to configure agents.')
+    alert('Please enable at least one primary agent to start.')
     return
   }
   showRunSetup.value = true
