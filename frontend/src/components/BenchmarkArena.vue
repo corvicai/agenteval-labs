@@ -35,6 +35,7 @@
       :workspace-id="workspaceId"
       @create-question-set="createNewQuestionSet"
       @select-question-set="selectQuestionSet"
+      @manage-agents="() => emit('manage-agents')"
       @question-set-updated="handleQuestionSetUpdated"
     />
 
@@ -101,6 +102,24 @@
               <div class="question-content">
                 <div class="question-text">{{ question.question || question.text }}</div>
                 <div v-if="question.category" class="question-category">{{ question.category }}</div>
+                <div v-if="getQuestionResponse(question.id)" class="question-response">
+                  <div class="response-label">Response:</div>
+                  <div class="response-text">
+                    <span v-if="!expandedResponses[question.id]">
+                      {{ getQuestionResponse(question.id, true) }}
+                    </span>
+                    <span v-else>
+                      {{ getQuestionResponse(question.id, false) }}
+                    </span>
+                    <button 
+                      v-if="isResponseLong(question.id)"
+                      class="btn-expand-response"
+                      @click.stop="toggleResponse(question.id)"
+                    >
+                      {{ expandedResponses[question.id] ? 'Show less' : 'Show more' }}
+                    </button>
+                  </div>
+                </div>
               </div>
               <div class="question-actions">
                 <span class="question-status" :class="getQuestionStatus(question.id)">
@@ -217,7 +236,7 @@ const props = defineProps({
   initialQuestionSetId: String
 })
 
-const emit = defineEmits(['update:currentQuestionSet', 'trigger-print'])
+const emit = defineEmits(['update:currentQuestionSet', 'trigger-print', 'manage-agents'])
 
 watch(() => props.questionSets, (sets) => {
   console.log('[Arena] Question sets updated:', sets.length)
@@ -245,6 +264,7 @@ const showSummary = ref(false)
 const showRunSetup = ref(false)
 const showDetailsModal = ref(false)
 const selectedDetails = ref(null)
+const expandedResponses = ref({})
 const isDev = import.meta.env.DEV
 const latestRunCache = new Map()
 const pendingResultsBuffer = ref([])
@@ -540,6 +560,49 @@ function getQuestionStatusText(questionId) {
     default:
       return '⭕ Not Run'
   }
+}
+
+// Get the response text for a question (from the first available agent)
+function getQuestionResponse(questionId, truncated = true) {
+  if (!runResults.value || !questionId) return null
+  const qIdStr = String(questionId)
+  
+  // Find the first agent that has a response for this question
+  for (const agentId in runResults.value) {
+    const agentResults = runResults.value[agentId]
+    const result = agentResults[qIdStr]
+    if (result && result.answer && !result.loading && !result.error) {
+      const answer = result.answer
+      // Return truncated response if truncated is true and answer is long
+      if (truncated && answer.length > 150) {
+        return answer.substring(0, 150) + '...'
+      }
+      return answer
+    }
+  }
+  
+  return null
+}
+
+// Check if response is long enough to need truncation
+function isResponseLong(questionId) {
+  if (!runResults.value || !questionId) return false
+  const qIdStr = String(questionId)
+  
+  for (const agentId in runResults.value) {
+    const agentResults = runResults.value[agentId]
+    const result = agentResults[qIdStr]
+    if (result && result.answer && !result.loading && !result.error) {
+      return result.answer.length > 150
+    }
+  }
+  
+  return false
+}
+
+// Toggle response expansion
+function toggleResponse(questionId) {
+  expandedResponses.value[questionId] = !expandedResponses.value[questionId]
 }
 
 // Retry a question for all agents
@@ -1325,6 +1388,51 @@ defineExpose({
   font-size: 0.75rem;
   font-weight: 500;
   width: fit-content;
+}
+
+.questions-list-view .question-response {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #e2e8f0;
+}
+
+.questions-list-view .response-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 0.5rem;
+}
+
+.questions-list-view .response-text {
+  font-size: 0.875rem;
+  color: #475569;
+  line-height: 1.5;
+  background: #f8fafc;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  border-left: 3px solid #6366f1;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.questions-list-view .btn-expand-response {
+  display: inline-block;
+  margin-top: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #6366f1;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+  transition: color 0.2s ease;
+}
+
+.questions-list-view .btn-expand-response:hover {
+  color: #4f46e5;
 }
 
 .questions-list-view .question-actions {
