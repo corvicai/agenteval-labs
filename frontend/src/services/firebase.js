@@ -14,12 +14,6 @@ const firebaseConfig = {
     appId: config.FIREBASE_APP_ID || "PLACEHOLDER"
 };
 
-console.log('[Firebase] Config loaded:', {
-    apiKey: firebaseConfig.apiKey ? 'Set (' + firebaseConfig.apiKey.substring(0, 5) + '...)' : 'Missing',
-    projectId: firebaseConfig.projectId,
-    authDomain: firebaseConfig.authDomain
-})
-
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);

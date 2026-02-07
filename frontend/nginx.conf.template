@@ -15,13 +15,27 @@ server {
 
     # API proxy
     location /api/ {
-        # Using a variable in proxy_pass forces nginx to resolve the URL at runtime
-        # instead of at startup, preventing a crash if the host is down.
-        set $api_upstream "${API_URL}";
-        proxy_pass $api_upstream;
-        rewrite ^/api/(.*) /$1 break;
+        # Using a variable in proxy_pass forces nginx to resolve the URL at runtime.
+        set $api_url "${API_URL}";
+        
+        # Capture the host for the Host header (Cloud Run requirement)
+        set $api_host "";
+        if ($api_url ~* "^https?://([^/]+)") {
+            set $api_host $1;
+        }
+
+        # Robust URI stripping: capture everything after /api/
+        # and pass it to the backend.
+        if ($request_uri ~* "^/api/(.*)") {
+            set $api_path $1;
+        }
+
+        proxy_pass $api_url/$api_path;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        
+        # CRITICAL for Cloud Run: Host header must match the target service URL
+        proxy_set_header Host $api_host;
+        
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
@@ -29,12 +43,21 @@ server {
 
     # WebSocket proxy
     location /ws {
-        set $api_upstream "${API_URL}";
-        proxy_pass $api_upstream;
+        set $api_url "${API_URL}";
+        
+        set $api_host "";
+        if ($api_url ~* "^https?://([^/]+)") {
+            set $api_host $1;
+        }
+
+        # For WebSockets, we pass the original $request_uri which includes /ws
+        # and any query parameters (like tokens)
+        proxy_pass $api_url$request_uri;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
+        
+        proxy_set_header Host $api_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_read_timeout 86400;
     }
