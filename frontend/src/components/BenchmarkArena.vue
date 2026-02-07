@@ -46,11 +46,9 @@
       <button class="btn btn-primary" @click="startRunSetup" :disabled="isRunning || !currentQuestionSet">
         {{ isRunning ? '⏳ Running...' : '▶️ Run Benchmark' }}
       </button>
-      <button class="btn btn-secondary btn-pdf" @click="exportToPdf" :disabled="!currentRun">
-        📄 PDF
-      </button>
-      <button class="btn btn-secondary" @click="reloadResults" title="Reload Results">
-        🔄 Reload Results
+      <button class="btn btn-secondary btn-pdf" @click="exportToPdf" :disabled="!currentRun || isExportingPdf">
+        <span v-if="isExportingPdf" class="pdf-loading-spinner"></span>
+        <span v-else>📄</span> PDF
       </button>
       <button v-if="isRunning" class="btn btn-danger" @click="cancelBenchmark">
         ⛔ Cancel
@@ -86,6 +84,42 @@
             <h2>{{ currentQuestionSet.name }}</h2>
             <p class="questions-count">{{ flatQuestions.length }} question{{ flatQuestions.length !== 1 ? 's' : '' }}</p>
           </div>
+          
+          <!-- Stats Section -->
+          <div v-if="currentRun && agentStats.length > 0" class="questions-stats-section">
+            <div 
+              v-for="agentStat in agentStats" 
+              :key="agentStat.id"
+              class="agent-stat-card"
+            >
+              <div class="agent-stat-header">
+                <h4>{{ agentStat.name }}</h4>
+                <div v-if="agentStat.provider === 'openai'" class="evaluator-badge-small">Evaluator</div>
+                <div v-else class="quality-score-badge">{{ agentStat.qualityScore }}%</div>
+              </div>
+              <div class="agent-stat-metrics">
+                <div class="metric">
+                  <span class="metric-value">{{ agentStat.stats.answered }} / {{ agentStat.stats.totalQuestions }}</span>
+                  <span class="metric-label">Answered</span>
+                </div>
+                <div class="metric">
+                  <span class="metric-value">{{ formatDuration(agentStat.stats.avgDuration) }}</span>
+                  <span class="metric-label">Avg Speed</span>
+                </div>
+                <div class="metric">
+                  <span class="metric-value">{{ agentStat.provider === 'openai' ? agentStat.stats.answered : (agentStat.stats.percentages.positive || 0) + '%' }}</span>
+                  <span class="metric-label">{{ agentStat.provider === 'openai' ? 'Evaluations' : 'Precision' }}</span>
+                </div>
+              </div>
+              <div v-if="agentStat.provider !== 'openai' && agentStat.stats.percentages" class="validations-bar-small">
+                <div class="v-segment-small pos" :style="{ width: agentStat.stats.percentages.positive + '%' }"></div>
+                <div class="v-segment-small alt" :style="{ width: agentStat.stats.percentages.alternative + '%' }"></div>
+                <div class="v-segment-small par" :style="{ width: agentStat.stats.percentages.partial + '%' }"></div>
+                <div class="v-segment-small neg" :style="{ width: agentStat.stats.percentages.negative + '%' }"></div>
+              </div>
+            </div>
+          </div>
+          
           <div class="questions-list-container">
             <div 
               v-for="(question, index) in flatQuestions" 
@@ -266,6 +300,7 @@ const isDev = import.meta.env.DEV
 const latestRunCache = new Map()
 const pendingResultsBuffer = ref([])
 const startRunError = ref(null)
+const isExportingPdf = ref(false)
 
 // Init logic for Question Set
 watch(() => props.questionSets, (sets) => {
@@ -486,6 +521,37 @@ const displayAgents = computed(() => {
     if (isEvaluator(a) && !isEvaluator(b)) return 1
     if (!isEvaluator(a) && isEvaluator(b)) return -1
     return (a.position || 0) - (b.position || 0)
+  })
+})
+
+// Computed property for agent stats (similar to PDF export)
+const agentStats = computed(() => {
+  if (!currentRun.value || displayAgents.value.length === 0) return []
+  
+  return displayAgents.value.map(agent => {
+    const results = getAgentResults(agent.id, true)
+    const stats = calculateStats(results)
+    
+    // Calculate quality score (same logic as PDF export)
+    const totalValidations = stats.validations.positive + 
+                           stats.validations.negative + 
+                           stats.validations.alternative + 
+                           stats.validations.partial
+    
+    const qualityScore = totalValidations > 0
+      ? ((stats.validations.positive * 1.0 +
+          stats.validations.alternative * 0.8 +
+          stats.validations.partial * 0.5) /
+         (totalValidations || 1) * 100).toFixed(1)
+      : '0.0'
+    
+    return {
+      id: agent.id,
+      name: agent.name || agent.config?.name || 'Agent',
+      provider: agent.provider_type,
+      stats,
+      qualityScore
+    }
   })
 })
 
@@ -1311,34 +1377,73 @@ onMounted(async () => {
     })
 })
 
-function exportToPdf() {
-  if (!currentRun.value) return
+// Helper function to check if any results are still loading
+function hasLoadingResults() {
+  if (!runResults.value || !currentRun.value) return false
   
-  // Build agents array from displayAgents with their results
-  // Always include all questions in PDF export, regardless of selection
-  const agentsArray = displayAgents.value.map(agent => ({
-    id: agent.id,
-    name: agent.name || agent.config?.name || 'Agent',
-    provider: agent.provider_type,
-    config: agent.config,
-    results: getAgentResults(agent.id, true) // true = include all questions
-  }))
-
-  const pData = exportResultsReport({
-    agentsRef: agentsArray,
-    calculateStats: calculateStats
-  })
-  
-  if (!pData) {
-    console.error('Export failed: No data returned')
-    return
+  for (const agentId in runResults.value) {
+    const agentResults = runResults.value[agentId]
+    for (const qId in agentResults) {
+      if (agentResults[qId].loading) {
+        return true
+      }
+    }
   }
+  return false
+}
+
+// Wait for all results to finish loading (with timeout)
+async function waitForResultsToLoad(maxWaitMs = 5000) {
+  const startTime = Date.now()
+  // Wait for isLoadingResults to be false
+  while (isLoadingResults.value && (Date.now() - startTime) < maxWaitMs) {
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  // Then wait for any individual results that are still loading
+  while (hasLoadingResults() && (Date.now() - startTime) < maxWaitMs) {
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+}
+
+async function exportToPdf() {
+  if (!currentRun.value || isExportingPdf.value) return
   
-  emit('trigger-print', {
-    workspaceName: currentQuestionSet.value?.name || 'Benchmark',
-    summary: pData.summary,
-    results: pData.results
-  })
+  isExportingPdf.value = true
+  
+  try {
+    // Ensure results are loaded before exporting
+    if (isLoadingResults.value || hasLoadingResults()) {
+      await waitForResultsToLoad()
+    }
+    
+    // Build agents array from displayAgents with their results
+    // Always include all questions in PDF export, regardless of selection
+    const agentsArray = displayAgents.value.map(agent => ({
+      id: agent.id,
+      name: agent.name || agent.config?.name || 'Agent',
+      provider: agent.provider_type,
+      config: agent.config,
+      results: getAgentResults(agent.id, true) // true = include all questions
+    }))
+
+    const pData = exportResultsReport({
+      agentsRef: agentsArray,
+      calculateStats: calculateStats
+    })
+    
+    if (!pData) {
+      console.error('Export failed: No data returned')
+      return
+    }
+    
+    emit('trigger-print', {
+      workspaceName: currentQuestionSet.value?.name || 'Benchmark',
+      summary: pData.summary,
+      results: pData.results
+    })
+  } finally {
+    isExportingPdf.value = false
+  }
 }
 
 // Removing local triggerBrowserPrint as it's handled by parent App.vue
@@ -1386,6 +1491,15 @@ function calculateStats(results) {
       partial: totalValidations > 0 ? Math.round((validations.partial || 0) / totalValidations * 100) : 0,
     }
   }
+}
+
+// Format duration for display (same as PDF)
+function formatDuration(value) {
+  const seconds = parseFloat(value)
+  if (Number.isFinite(seconds)) {
+    return seconds >= 60 ? `${(seconds / 60).toFixed(1)} min` : `${seconds.toFixed(1)} s`
+  }
+  return '0 s'
 }
 
 onUnmounted(() => {
@@ -1785,6 +1899,110 @@ defineExpose({
   font-size: 14px;
 }
 
+/* Stats Section */
+.questions-stats-section {
+  margin-bottom: 24px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.agent-stat-card {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.agent-stat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.agent-stat-header h4 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+}
+
+.evaluator-badge-small {
+  font-size: 11px;
+  padding: 4px 8px;
+  background: #fff3cd;
+  color: #856404;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.quality-score-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: #007bff;
+  background: #e7f3ff;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.agent-stat-metrics {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.metric-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: #333;
+  line-height: 1.2;
+}
+
+.metric-label {
+  font-size: 11px;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 4px;
+}
+
+.validations-bar-small {
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #f0f0f0;
+}
+
+.v-segment-small {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.v-segment-small.pos {
+  background: #10b981;
+}
+
+.v-segment-small.alt {
+  background: #3b82f6;
+}
+
+.v-segment-small.par {
+  background: #f59e0b;
+}
+
+.v-segment-small.neg {
+  background: #ef4444;
+}
+
 .questions-list-container {
   display: flex;
   flex-direction: column;
@@ -1862,6 +2080,27 @@ defineExpose({
 .action-buttons-row .btn {
   padding: 8px 16px;
   font-size: 14px;
+  position: relative;
+}
+
+.pdf-loading-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-right: 4px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.btn-pdf:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
 }
 
 .chat-container {
