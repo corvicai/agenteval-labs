@@ -35,12 +35,14 @@
           >
             <span class="qs-name">{{ qs.name }}</span>
             <span v-if="runningQuestionSetId === qs.id" class="running-indicator-dot"></span>
-            <span class="qs-meta">{{ getQuestionCount(qs) }} qs</span>
-            <button class="qs-action-btn" @click.stop="$emit('view-history', qs)" title="View History">📜</button>
+            <span class="qs-meta">{{ getQuestionCount(qs) }} questions</span>
           </li>
         </ul>
         <div class="add-validation-set-row">
-          <button class="btn btn-primary btn-sm btn-full-width" @click="$emit('create-question-set')">
+          <button class="btn btn-secondary btn-sm btn-full-width" @click="handleEditQuestions" :disabled="!currentQuestionSet">
+            ✏️ Edit Questions
+          </button>
+          <button class="btn btn-primary btn-sm btn-full-width" @click="handleCreateQuestionSet">
             <span class="icon">➕</span> Add Validation Set
           </button>
         </div>
@@ -79,11 +81,21 @@
         </div>
       </div>
     </div>
+
+    <!-- Question Editor Modal -->
+    <QuestionEditorModal 
+      v-if="showQuestionEditor"
+      :question-set="currentQuestionSet"
+      :workspace-id="workspaceId"
+      @close="onQuestionEditorClose"
+      @saved="onQuestionSetSaved"
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, computed } from 'vue'
+import QuestionEditorModal from './QuestionEditorModal.vue'
 
 const props = defineProps({
   questionSets: {
@@ -95,17 +107,21 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
-  runningQuestionSetId: String
+  runningQuestionSetId: String,
+  workspaceId: String
 })
 
 const emit = defineEmits([
   'create-question-set',
   'select-question-set',
   'view-history',
-  'manage-agents'
+  'manage-agents',
+  'question-set-updated'
 ])
 
 const activeTab = ref('questionSets')
+const showQuestionEditor = ref(false)
+const previousQuestionSet = ref(null)
 
 function getQuestionCount(set) {
   if (!set || !set.data) return 0
@@ -115,6 +131,34 @@ function getQuestionCount(set) {
   }
   if (!data.categories) return 0
   return data.categories.reduce((acc, cat) => acc + (cat.questions ? cat.questions.length : 0), 0)
+}
+
+function handleCreateQuestionSet() {
+  previousQuestionSet.value = props.currentQuestionSet
+  emit('create-question-set')
+  // Open editor immediately for new question set creation
+  showQuestionEditor.value = true
+}
+
+function handleEditQuestions() {
+  if (!props.currentQuestionSet) return
+  previousQuestionSet.value = props.currentQuestionSet
+  showQuestionEditor.value = true
+}
+
+function onQuestionEditorClose() {
+  showQuestionEditor.value = false
+  // If we were creating a new set and user closed without saving, restore previous
+  if (!props.currentQuestionSet && previousQuestionSet.value) {
+    emit('select-question-set', previousQuestionSet.value)
+  }
+  previousQuestionSet.value = null
+}
+
+function onQuestionSetSaved(updated) {
+  showQuestionEditor.value = false
+  previousQuestionSet.value = null
+  emit('question-set-updated', updated)
 }
 </script>
 
@@ -199,63 +243,112 @@ function getQuestionCount(set) {
   gap: 8px;
 }
 
+/* UL reset – no surrounding container box */
 .qs-list {
-  flex: 1;
-  overflow-y: auto;
-  margin-bottom: 16px;
-  min-height: 0;
   list-style: none;
+  margin: 0;
   padding: 0;
-  margin: 0 0 16px 0;
+  border: 0;
+  background: transparent;
 }
 
+/* spacing between pills */
+.qs-list > li + li {
+  margin-top: 14px;
+}
+
+/* empty state */
 .qs-list .empty-state {
-  text-align: center;
-  padding: 40px 20px;
-  color: #666;
+  padding: 16px 12px;
+  color: #8A94A6;
   font-size: 14px;
-  list-style: none;
 }
 
+/* main pill item */
 .qs-item {
-  padding: 10px 12px;
-  cursor: pointer;
-  transition: background-color 0.15s ease;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid #f0f0f0;
+  gap: 12px;
+
+  width: 100%;
+  padding: 18px 22px;
+  border-radius: 28px;
+
+  background: #F4F7FB;
+  border: 2px solid #D7DEE8;
+
+  cursor: pointer;
+  user-select: none;
+
+  box-shadow: 0 2px 10px rgba(16, 24, 40, 0.06);
+
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 120ms ease;
 }
 
 .qs-item:hover {
-  background-color: #f5f5f5;
+  transform: translateY(-1px);
+  border-color: #BFCBDA;
+  box-shadow: 0 6px 18px rgba(16, 24, 40, 0.10);
 }
 
+/* selected / active state */
 .qs-item.active {
-  background-color: #e7f3ff;
-  border-left: 3px solid #007bff;
-  padding-left: 9px; /* Adjust for border */
+  background: #EAF2FF;
+  border-color: #2F6BFF;
+
+  box-shadow:
+    0 0 0 6px rgba(47, 107, 255, 0.18),
+    0 10px 22px rgba(47, 107, 255, 0.10);
 }
 
+/* left title */
 .qs-name {
-  font-weight: 500;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: 0.1px;
+  color: #1B2430;
+
+  /* allow wrapping like the screenshot */
+  white-space: normal;
   flex: 1;
-  color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
+/* right meta text */
 .qs-meta {
-  font-size: 11px;
-  color: #666;
-  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(27, 36, 48, 0.50);
+  white-space: nowrap;
 }
 
+.qs-item.active .qs-meta {
+  color: #2F6BFF;        /* or #111827 if you want neutral */
+  opacity: 1;
+}
+
+/* running indicator dot */
 .running-indicator-dot {
   width: 8px;
   height: 8px;
-  background: #28a745;
   border-radius: 50%;
-  margin-left: 8px;
-  animation: pulse 1.5s infinite;
+  background: #2F6BFF;
+  box-shadow: 0 0 0 4px rgba(47, 107, 255, 0.25);
+}
+
+/* keyboard accessibility */
+.qs-item:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 6px rgba(47, 107, 255, 0.22),
+    0 10px 22px rgba(16, 24, 40, 0.10);
 }
 
 @keyframes pulse {

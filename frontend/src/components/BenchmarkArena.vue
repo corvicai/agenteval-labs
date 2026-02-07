@@ -26,24 +26,18 @@
        @cancel="showRunSetup = false"
     />
 
-    <QuestionEditorModal 
-        v-if="showQuestionEditor"
-        :question-set="currentQuestionSet"
-        :workspace-id="workspaceId"
-        @close="onQuestionEditorClose"
-        @saved="onQuestionSetSaved"
-      />
-
     <!-- Left Sidebar with Tabs -->
     <LeftSidebar
       :question-sets="questionSets"
       :current-question-set="currentQuestionSet"
       :agents="mergedAgents"
       :running-question-set-id="wsState.runningQuestionSetId"
+      :workspace-id="workspaceId"
       @create-question-set="createNewQuestionSet"
       @select-question-set="selectQuestionSet"
       @view-history="(qs) => $emit('view-history', qs)"
       @manage-agents="handleManageAgents"
+      @question-set-updated="handleQuestionSetUpdated"
     />
 
     
@@ -57,14 +51,8 @@
       <button class="btn btn-secondary btn-history-arena" @click="$emit('view-history', currentQuestionSet || {})">
         📚 History
       </button>
-      <button class="btn btn-secondary" @click="showQuestionEditor = true" :disabled="!currentQuestionSet">
-        ✏️ Edit Questions
-      </button>
       <button class="btn btn-secondary btn-pdf" @click="exportToPdf" :disabled="!currentRun">
         📄 PDF
-      </button>
-      <button class="btn btn-secondary" @click="reloadResults" title="Reload Results">
-        🔄
       </button>
       <button v-if="isRunning" class="btn btn-danger" @click="cancelBenchmark">
         ⛔ Cancel
@@ -211,7 +199,6 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import SummarySection from './SummarySection.vue'
 import RunSetupModal from './RunSetupModal.vue'
 import ChatPanel from './ChatPanel.vue'
-import QuestionEditorModal from './QuestionEditorModal.vue'
 import DetailsModal from './modals/DetailsModal.vue'
 import PrintReport from './PrintReport.vue'
 import LeftSidebar from './LeftSidebar.vue'
@@ -249,7 +236,6 @@ const { state: wsState } = wsStore
 
 // State
 const currentQuestionSet = ref(null)
-const previousQuestionSet = ref(null)
 const currentRun = ref(null)
 const runResults = ref({})
 const isRunning = ref(false)
@@ -261,7 +247,6 @@ const totalTasks = ref(0)
 const selectedQuestionId = ref('')
 const showSummary = ref(false)
 const showRunSetup = ref(false)
-const showQuestionEditor = ref(false)
 const showDetailsModal = ref(false)
 const selectedDetails = ref(null)
 const isDev = import.meta.env.DEV
@@ -615,23 +600,12 @@ function startRunSetup() {
 }
 
 function createNewQuestionSet() {
-  previousQuestionSet.value = currentQuestionSet.value
   currentQuestionSet.value = null 
-  showQuestionEditor.value = true
+  // Question editor is now handled in LeftSidebar
 }
 
-function onQuestionEditorClose() {
-  if (currentQuestionSet.value === null && previousQuestionSet.value) {
-    currentQuestionSet.value = previousQuestionSet.value
-  }
-  previousQuestionSet.value = null
-  showQuestionEditor.value = false
-}
-
-function onQuestionSetSaved(updated) {
+function handleQuestionSetUpdated(updated) {
   currentQuestionSet.value = updated
-  previousQuestionSet.value = null
-  showQuestionEditor.value = false
 }
 
 function prevQuestion() {
