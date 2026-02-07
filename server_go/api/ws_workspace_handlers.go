@@ -268,16 +268,6 @@ func (h *Hub) handleDeleteAgent(c *Connection, env models.Envelope) {
 		return
 	}
 
-	var runCount int64
-	if err := h.db.Model(&models.RunResult{}).Where("agent_id = ?", agentID).Count(&runCount).Error; err != nil {
-		c.SendErrorWithDetails(env.CorrelationID, "failed to check agent history", err.Error())
-		return
-	}
-	if runCount > 0 {
-		c.SendError(env.CorrelationID, "agent has run history; disable instead or delete its runs first")
-		return
-	}
-
 	tx := h.db.Begin()
 	if err := tx.Where("agent_id = ?", agentID).Delete(&models.QuestionSetAgent{}).Error; err != nil {
 		tx.Rollback()
