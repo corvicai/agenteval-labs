@@ -39,7 +39,6 @@
       @question-set-updated="handleQuestionSetUpdated"
     />
 
-    
     <!-- Main Content Area -->
     <div class="benchmark-arena-content">
     <!-- Action Buttons Row -->
@@ -81,9 +80,6 @@
 
       <!-- Main Content Area: Questions + Chat Panels side by side -->
       <div v-else-if="flatQuestions.length > 0" class="main-content-area">
-        <!-- Arena Label -->
-        
-        
         <!-- Questions List View -->
         <div class="questions-list-view">
           <div class="questions-list-header">
@@ -198,10 +194,9 @@
           </div>
         </div>
       </div>
-
+    </div>
     </div>
 
-    </div>
     <!-- Details Modal -->
     <DetailsModal 
       :is-open="showDetailsModal" 
@@ -241,11 +236,11 @@ const props = defineProps({
 const emit = defineEmits(['update:currentQuestionSet', 'trigger-print', 'manage-agents'])
 
 watch(() => props.questionSets, (sets) => {
-  console.log('[Arena] Question sets updated:', sets.length)
+  // Question sets updated
 }, { immediate: true })
 
 watch(() => props.agents, (agents) => {
-  console.log('[Arena] Agents updated:', agents.length)
+  // Agents updated
 }, { immediate: true })
 
 const wsStore = useWSStore()
@@ -282,7 +277,6 @@ watch(() => props.questionSets, (sets) => {
     // Sync current set with updated data from props
     const updated = sets.find(s => s.id === currentQuestionSet.value.id)
     if (updated) {
-      // console.log('[Arena] Syncing currentQuestionSet with updated props data')
       currentQuestionSet.value = updated
     }
   }
@@ -291,7 +285,6 @@ watch(() => props.questionSets, (sets) => {
 // Watch for parent-driven selection changes
 watch(() => props.initialQuestionSetId, (newId) => {
   if (newId && newId !== currentQuestionSet.value?.id) {
-    console.log('[Arena] Parent changed question set ID:', newId)
     const found = props.questionSets.find(s => s.id === newId)
     if (found) {
       currentQuestionSet.value = found
@@ -302,7 +295,6 @@ watch(() => props.initialQuestionSetId, (newId) => {
 // Watch for workspaceId changes to trigger fetch if it was skipped
 watch(() => props.workspaceId, (newId) => {
   if (newId && currentQuestionSet.value && !isRunning.value) {
-    console.log('[Arena] WorkspaceID arrived, fetching results for QS:', currentQuestionSet.value.id)
     fetchLatestResultsForQS(currentQuestionSet.value.id)
   }
 })
@@ -324,10 +316,6 @@ function initQuestionSet(sets) {
             return
         }
     }
-    // Fallback: First one (or last created)
-    // if (sets.length > 0) {
-    //     currentQuestionSet.value = sets[sets.length - 1]
-    // }
 }
 
 watch(currentQuestionSet, (newSet) => {
@@ -416,7 +404,6 @@ const mergedAgents = computed(() => {
 
   // If the question set has NO agents array at all, it's definitely uninitialized
   if (!qs.agents || !Array.isArray(qs.agents)) {
-    console.log(`[Arena] mergedAgents: No agents array for QS "${qs.name}", using defaults`)
     return props.agents
   }
 
@@ -424,7 +411,6 @@ const mergedAgents = computed(() => {
   // Is it empty because nothing was ever saved, or because the user saved "nothing enabled"?
   // Usually, saveSelection sends ALL agents. So an empty array means "never saved".
   if (qs.agents.length === 0) {
-    console.log(`[Arena] mergedAgents: Empty agents array for QS "${qs.name}", using defaults`)
     return props.agents
   }
 
@@ -454,7 +440,6 @@ const mergedAgents = computed(() => {
     return { ...a, enabled: a.enabled }
   })
 
-  // console.log(`[Arena] mergedAgents: result enabled count:`, merged.filter(a => a.enabled).length)
   return merged
 })
 
@@ -865,7 +850,6 @@ function setCachedRunForQS(qsId, data) {
 
 function reloadResults() {
   if (currentQuestionSet.value) {
-    console.log('[Arena] Manually reloading results...')
     fetchLatestResultsForQS(currentQuestionSet.value.id)
   }
 }
@@ -873,7 +857,6 @@ function reloadResults() {
 function ensureResultsLoaded() {
   setTimeout(() => {
     if (currentQuestionSet.value && !currentRun.value && !isLoadingResults.value && !isRunning.value) {
-       console.log('[Arena] Auto-healing: Results missing, triggering reload...')
        reloadResults()
     }
   }, 1000)
@@ -940,13 +923,13 @@ watch(() => wsState.recentRuns, () => {
   }
 }, { deep: true })
 
-function getAgentResults(agentId) {
+function getAgentResults(agentId, includeAllQuestions = false) {
   const results = runResults.value[agentId] || {}
   
-  // Filter questions if a specific one is selected
-  const targetQuestions = selectedQuestionId.value 
-    ? flatQuestions.value.filter(q => String(q.id) === String(selectedQuestionId.value))
-    : flatQuestions.value
+  // Filter questions if a specific one is selected (unless includeAllQuestions is true)
+  const targetQuestions = (includeAllQuestions || !selectedQuestionId.value)
+    ? flatQuestions.value
+    : flatQuestions.value.filter(q => String(q.id) === String(selectedQuestionId.value))
 
   const isAgentRunning = isRunning.value && 
                        activeRunQuestionSetId.value === currentQuestionSet.value?.id && 
@@ -1014,7 +997,6 @@ async function handleStartRun({ questionSetId, agentIds }) {
     
     // Process buffered results
     if (pendingResultsBuffer.value.length > 0) {
-      console.log(`[Arena] Processing ${pendingResultsBuffer.value.length} buffered results for run ${currentRun.value.id}`)
       pendingResultsBuffer.value.forEach(data => {
         if (data.run_id === currentRun.value.id) {
           processTaskCompleted(data)
@@ -1079,7 +1061,6 @@ async function handleRunSave(payload) {
       ...savedQuestionSet,
       agents: newAgents
     }
-    console.log('[Arena] handleRunSave: Updated currentQuestionSet.agents count:', currentQuestionSet.value.agents?.length)
   }
 }
 
@@ -1139,10 +1120,8 @@ async function rerunQuestion(agentId, questionId) {
       }
 
       if (targetMatch) {
-          console.log(`[Frontend] Resolved target result for evaluator retry: ${targetMatch.id} (Agent ${targetMatch.agent_id})`)
           resultIdToUse = targetMatch.id
       } else {
-          console.warn('[Frontend] Could not resolve target result for evaluator retry. Letting backend heuristic handle it.')
           resultIdToUse = '' // Reset to empty so backend heuristic kicks in
       }
   }
@@ -1336,12 +1315,13 @@ function exportToPdf() {
   if (!currentRun.value) return
   
   // Build agents array from displayAgents with their results
+  // Always include all questions in PDF export, regardless of selection
   const agentsArray = displayAgents.value.map(agent => ({
     id: agent.id,
     name: agent.name || agent.config?.name || 'Agent',
     provider: agent.provider_type,
     config: agent.config,
-    results: getAgentResults(agent.id)
+    results: getAgentResults(agent.id, true) // true = include all questions
   }))
 
   const pData = exportResultsReport({
@@ -1373,17 +1353,25 @@ function calculateStats(results) {
   let validations = { positive: 0, negative: 0, alternative: 0, partial: 0, notEvaluated: 0 }
   
   results.forEach(r => {
-    if (r.answer || r.error) answered++
+    const hasAnswer = r.answer
+    if (hasAnswer) answered++
     if (r.error) errors++
     if (r.duration) totalDuration += parseFloat(r.duration) || 0
     
-    if (r.humanValidation) {
-      const v = r.humanValidation.toLowerCase()
-      validations[v] = (validations[v] || 0) + 1
-    } else {
-      validations.notEvaluated++
+    // Only count validations for questions that have been answered
+    if (hasAnswer) {
+      if (r.humanValidation) {
+        const v = r.humanValidation.toLowerCase()
+        validations[v] = (validations[v] || 0) + 1
+      } else {
+        validations.notEvaluated++
+      }
     }
   })
+  
+  // Calculate percentages based on answered questions, not total questions
+  const answeredCount = answered || 1 // Avoid division by zero
+  const totalValidations = validations.positive + validations.negative + validations.alternative + validations.partial + validations.notEvaluated
   
   return {
     answered,
@@ -1392,10 +1380,10 @@ function calculateStats(results) {
     avgDuration: answered ? (totalDuration / answered).toFixed(2) : 0,
     validations,
     percentages: {
-      positive: total ? Math.round((validations.positive || 0) / total * 100) : 0,
-      negative: total ? Math.round((validations.negative || 0) / total * 100) : 0,
-      alternative: total ? Math.round((validations.alternative || 0) / total * 100) : 0,
-      partial: total ? Math.round((validations.partial || 0) / total * 100) : 0,
+      positive: totalValidations > 0 ? Math.round((validations.positive || 0) / totalValidations * 100) : 0,
+      negative: totalValidations > 0 ? Math.round((validations.negative || 0) / totalValidations * 100) : 0,
+      alternative: totalValidations > 0 ? Math.round((validations.alternative || 0) / totalValidations * 100) : 0,
+      partial: totalValidations > 0 ? Math.round((validations.partial || 0) / totalValidations * 100) : 0,
     }
   }
 }
