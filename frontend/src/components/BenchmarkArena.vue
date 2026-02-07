@@ -105,12 +105,14 @@
                 <div v-if="getQuestionResponse(question.id)" class="question-response">
                   <div class="response-label">Response:</div>
                   <div class="response-text">
-                    <span v-if="!expandedResponses[question.id]">
-                      {{ getQuestionResponse(question.id, true) }}
-                    </span>
-                    <span v-else>
-                      {{ getQuestionResponse(question.id, false) }}
-                    </span>
+                    <div 
+                      v-if="!expandedResponses[question.id]"
+                      v-html="formatResponseWithImages(getQuestionResponse(question.id, true))"
+                    ></div>
+                    <div 
+                      v-else
+                      v-html="formatResponseWithImages(getQuestionResponse(question.id, false))"
+                    ></div>
                     <button 
                       v-if="isResponseLong(question.id)"
                       class="btn-expand-response"
@@ -575,7 +577,47 @@ function getQuestionResponse(questionId, truncated = true) {
       const answer = result.answer
       // Return truncated response if truncated is true and answer is long
       if (truncated && answer.length > 150) {
-        return answer.substring(0, 150) + '...'
+        // Check if truncation would break a base64 image
+        const base64ImagePattern = /data:image\/[^;]+;base64,[A-Za-z0-9+/=\s]+/g
+        const truncatedText = answer.substring(0, 150)
+        
+        // Find the last complete base64 image before truncation point
+        let lastImageEnd = -1
+        let match
+        const pattern = new RegExp(base64ImagePattern)
+        while ((match = pattern.exec(answer)) !== null) {
+          if (match.index + match[0].length <= 150) {
+            lastImageEnd = match.index + match[0].length
+          } else {
+            break
+          }
+        }
+        
+        // If we found an image that extends beyond truncation, include it fully
+        if (lastImageEnd > 0 && lastImageEnd > 150) {
+          return answer.substring(0, lastImageEnd) + '...'
+        }
+        
+        // Otherwise, truncate at a safe point (avoid breaking base64 strings)
+        // Try to truncate at a word boundary or before a potential base64 start
+        let truncateAt = 150
+        if (truncatedText.includes('data:image')) {
+          // If there's a base64 image starting, find where it ends
+          const imageStart = truncatedText.lastIndexOf('data:image')
+          if (imageStart >= 0) {
+            // Don't truncate in the middle of a base64 string
+            // Find a safe truncation point after the image or before it
+            const afterImage = truncatedText.indexOf(' ', imageStart + 100)
+            if (afterImage > 0 && afterImage <= 150) {
+              truncateAt = afterImage
+            } else {
+              // If image is too long, just truncate before it
+              truncateAt = imageStart
+            }
+          }
+        }
+        
+        return answer.substring(0, truncateAt) + '...'
       }
       return answer
     }
@@ -603,6 +645,72 @@ function isResponseLong(questionId) {
 // Toggle response expansion
 function toggleResponse(questionId) {
   expandedResponses.value[questionId] = !expandedResponses.value[questionId]
+}
+
+// Format response text to display base64 images
+function formatResponseWithImages(text) {
+  if (!text) return ''
+  
+  // Escape HTML to prevent XSS, but preserve base64 image data URIs
+  const escapeHtml = (str) => {
+    const div = document.createElement('div')
+    div.textContent = str
+    return div.innerHTML
+  }
+  
+  // Pattern to match base64 image data URIs: data:image/[type];base64,[base64 string]
+  // This pattern matches the full data URI including the base64 encoded data
+  const base64ImagePattern = /(data:image\/(?:png|jpg|jpeg|gif|webp|svg\+xml|bmp);base64,[A-Za-z0-9+/=\s]+)/gi
+  
+  // Find all base64 images first
+  const images = []
+  let match
+  const pattern = new RegExp(base64ImagePattern)
+  while ((match = pattern.exec(text)) !== null) {
+    images.push({
+      index: match.index,
+      length: match[0].length,
+      data: match[0].trim() // Remove any whitespace
+    })
+  }
+  
+  // If no images found, just escape and return text with line breaks
+  if (images.length === 0) {
+    const escaped = escapeHtml(text)
+    return escaped.replace(/\n/g, '<br>')
+  }
+  
+  // Build result by processing text segments and images
+  let result = ''
+  let lastIndex = 0
+  
+  images.forEach((img, idx) => {
+    // Add text before this image
+    if (img.index > lastIndex) {
+      const textBefore = text.substring(lastIndex, img.index)
+      const escaped = escapeHtml(textBefore)
+      result += escaped.replace(/\n/g, '<br>')
+    }
+    
+    // Add the image
+    result += `<img src="${escapeHtml(img.data)}" class="response-image" alt="Response image" />`
+    
+    lastIndex = img.index + img.length
+    
+    // Add a line break after image if there's more content
+    if (idx < images.length - 1 || lastIndex < text.length) {
+      result += '<br>'
+    }
+  })
+  
+  // Add remaining text after last image
+  if (lastIndex < text.length) {
+    const textAfter = text.substring(lastIndex)
+    const escaped = escapeHtml(textAfter)
+    result += escaped.replace(/\n/g, '<br>')
+  }
+  
+  return result
 }
 
 // Retry a question for all agents
@@ -1413,8 +1521,16 @@ defineExpose({
   padding: 0.5rem 0.75rem;
   border-radius: 6px;
   border-left: 3px solid #6366f1;
-  white-space: pre-wrap;
   word-wrap: break-word;
+}
+
+.questions-list-view .response-image {
+  max-width: 100%;
+  height: auto;
+  margin: 0.5rem 0;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  display: block;
 }
 
 .questions-list-view .btn-expand-response {
