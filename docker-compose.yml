@@ -94,10 +94,6 @@ services:
     env_file: .env
     environment:
       - VITE_API_URL=http://go-api:8080
-      - VITE_HMR_CLIENT_PORT=3010
-      - VITE_HMR_HOST=localhost
-      - VITE_WS_HOST=localhost:3010
-      - VITE_WS_PORT=3010
 
     depends_on:
       - go-api

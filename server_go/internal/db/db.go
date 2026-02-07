@@ -14,8 +14,24 @@ import (
 func Connect() (*gorm.DB, error) {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		log.Println("[DB] DATABASE_URL not set, using default local DSN")
-		dsn = "host=localhost user=postgres password=postgres dbname=benchmarking port=5432 sslmode=disable TimeZone=UTC"
+		// Fallback to granular environment variables
+		host := os.Getenv("DB_HOST")
+		user := os.Getenv("DB_USER")
+		password := os.Getenv("DB_PASSWORD")
+		dbname := os.Getenv("DB_NAME")
+		port := os.Getenv("DB_PORT")
+
+		if host != "" && user != "" && dbname != "" {
+			if port == "" {
+				port = "5432"
+			}
+			log.Println("[DB] Constructing DSN from granular environment variables")
+			dsn = fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=UTC",
+				host, user, password, dbname, port)
+		} else {
+			log.Println("[DB] DATABASE_URL and granular DB vars not set, using default local DSN")
+			dsn = "host=localhost user=postgres password=postgres dbname=benchmarking port=5432 sslmode=disable TimeZone=UTC"
+		}
 	} else {
 		log.Println("[DB] Connecting using DATABASE_URL from environment")
 	}

@@ -1,0 +1,49 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    id: 'build-and-push'
+    script: |
+      for service in agenteval-api agenteval-runner agenteval-web; do
+        docker build -t ${_IMAGE_REPO_BASE}/${service}:${COMMIT_SHA} -t ${_IMAGE_REPO_BASE}/${service}:latest --file=infra/${service}/Dockerfile .
+        docker push ${_IMAGE_REPO_BASE}/${service}:${COMMIT_SHA}
+        docker push ${_IMAGE_REPO_BASE}/${service}:latest
+      done
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: 'deploy-backend'
+    script: |
+      #!/usr/bin/env bash
+      set -eu -o pipefail
+      
+      # Deploy runner first
+      echo "Deploying runner..."
+      gcloud run deploy agenteval-runner-dev --image ${_IMAGE_REPO_BASE}/agenteval-runner:${COMMIT_SHA} --region ${_DEPLOY_REGION} --quiet
+
+      # Deploy api
+      echo "Deploying api..."
+      gcloud run deploy agenteval-api-dev --image ${_IMAGE_REPO_BASE}/agenteval-api:${COMMIT_SHA} --region ${_DEPLOY_REGION} --quiet
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: 'deploy-frontend'
+    script: |
+      #!/usr/bin/env bash
+      set -eu -o pipefail
+      
+      # Fetch API URL
+      echo "Discovering API URL..."
+      API_URL=$(gcloud run services describe agenteval-api-dev --region ${_DEPLOY_REGION} --format='value(status.url)')
+      echo "Discovered API URL: ${API_URL}"
+
+      # Deploy web with the real API URL
+      echo "Deploying web..."
+      gcloud run deploy agenteval-web-dev \
+        --image ${_IMAGE_REPO_BASE}/agenteval-web:${COMMIT_SHA} \
+        --region ${_DEPLOY_REGION} \
+        --set-env-vars "API_URL=${API_URL}" \
+        --quiet
+    timeout: 480s
+
+options:
+  automapSubstitutions: true
+  substitutionOption: ALLOW_LOOSE
+  logging: CLOUD_LOGGING_ONLY
+  requestedVerifyOption: VERIFIED

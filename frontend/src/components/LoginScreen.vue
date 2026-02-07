@@ -193,13 +193,14 @@ import * as api from '../services/api.js'
 import { webauthnService } from '../services/webauthn.js'
 import { fetchSignInMethodsForEmail } from 'firebase/auth'
 import { auth, loginWithGoogle, loginWithGithub, getIdToken, deleteCurrentUser } from '../services/firebase.js'
+import { config } from '../config'
 
 const emit = defineEmits(['login'])
 
-const showLegacyAuth = ref(import.meta.env.VITE_ENABLE_LEGACY_AUTH === 'true')
+const showLegacyAuth = ref(config.ENABLE_LEGACY_AUTH === 'true')
 
 // Dev mode detection
-const isDev = import.meta.env.DEV && !import.meta.env.PROD
+const isDev = config.DEV && !config.PROD
 
 // Dev users for quick login
 const devUsers = [
