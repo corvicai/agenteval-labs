@@ -113,36 +113,6 @@
           Don't have an account? 
           <a href="#" @click.prevent="isRegister = true">Create one</a>
         </p>
-        <p class="admin-setup" v-if="!isRegister && showBootstrapLink">
-          <a href="#" @click.prevent="showBootstrapModal = true">🛡️ First-time admin setup</a>
-        </p>
-      </div>
-
-
-      <div v-if="showBootstrapModal" class="modal-overlay" @click.self="showBootstrapModal = false">
-        <div class="bootstrap-modal">
-          <h3>🛡️ Create First Admin</h3>
-          <p>This will create the first admin account. Only works if no admin exists yet.</p>
-          <form @submit.prevent="handleBootstrap" class="login-form">
-            <div v-if="bootstrapError" class="error-message">{{ bootstrapError }}</div>
-            <div class="form-group">
-              <label>Admin Name</label>
-              <input v-model="bootstrapName" type="text" placeholder="Admin name" required />
-            </div>
-            <div class="form-group">
-              <label>Admin Email</label>
-              <input v-model="bootstrapEmail" type="email" placeholder="admin@example.com" required />
-            </div>
-            <div class="form-group">
-              <label>Admin Password</label>
-              <input v-model="bootstrapPassword" type="password" placeholder="••••••••" required />
-            </div>
-            <div class="modal-actions">
-              <button type="button" class="btn btn-secondary" @click="showBootstrapModal = false">Cancel</button>
-              <button type="submit" class="btn btn-primary" :disabled="loading">Create Admin</button>
-            </div>
-          </form>
-        </div>
       </div>
 
       <div v-if="showTermsModal" class="modal-overlay" @click.self="showTermsModal = false">
@@ -254,17 +224,9 @@ const form = ref({
 const error = ref('')
 const socialError = ref(null)
 const loading = ref(false)
-const showBootstrapLink = ref(false)
 
 const requiresTerms = ref(false)
 const isWebAuthnSupported = ref(webauthnService.isSupported())
-
-// Bootstrap admin state
-const showBootstrapModal = ref(false)
-const bootstrapName = ref('')
-const bootstrapEmail = ref('')
-const bootstrapPassword = ref('')
-const bootstrapError = ref('')
 
 async function handleSocialLogin(provider) {
   error.value = ''
@@ -454,31 +416,6 @@ async function handleCancelAndCleanup() {
   }
 }
 
-async function handleBootstrap() {
-  bootstrapError.value = ''
-  loading.value = true
-
-  try {
-    const result = await api.bootstrapAdmin(
-      bootstrapName.value, 
-      bootstrapEmail.value, 
-      bootstrapPassword.value
-    )
-    if (result.user) {
-      showBootstrapModal.value = false
-      // Switch back to login with new credentials
-      isRegister.value = false
-      form.value.email = bootstrapEmail.value
-      form.value.password = bootstrapPassword.value
-    } else {
-      bootstrapError.value = result.message || 'Failed to create admin.'
-    }
-  } catch (e) {
-    bootstrapError.value = e.message
-  } finally {
-    loading.value = false
-  }
-}
 
 // Quick login for dev mode
 async function quickLogin(user) {
@@ -527,16 +464,6 @@ onMounted(async () => {
         // Connect WebSocket anonymously for pre-auth requests
         await wsService.connectAnonymous()
         
-        // Check admin exists via WebSocket
-        // Check admin exists call also moved to api for consistency? 
-        // Or keep ws for this check? The checkAdminExists endpoint in api.js is REST.
-        // Let's use REST for consistency with other auth flows in this file.
-        const adminResult = await api.checkAdminExists()
-        showBootstrapLink.value = !adminResult?.exists
-        if (!adminResult?.exists) {
-          showBootstrapModal.value = true
-        }
-        
         // Fetch managers for dev quick login
         if (isDev) {
           try {
@@ -550,7 +477,6 @@ onMounted(async () => {
         }
     } catch (e) {
         console.error('Failed to initialize login screen:', e)
-        // Check admin exists anyway, maybe it was just a transient WS error
         try {
            // We can't really fallback to REST easily if we want to be pure WS
            // but for this specific check, maybe it's okay? 
