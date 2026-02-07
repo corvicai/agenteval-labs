@@ -198,12 +198,12 @@ func OrganizationScopeMiddleware() echo.MiddlewareFunc {
 	}
 }
 
-// GenerateToken generates a JWT token
+// GenerateToken generates a JWT token (orgID is kept for backward compatibility but should be empty)
 func GenerateToken(userID, workspaceID, orgID, email, secret string, impersonatorID string) (string, error) {
 	claims := &Claims{
 		UserID:         userID,
 		WorkspaceID:    workspaceID,
-		OrgID:          orgID,
+		OrgID:          "", // Organizations removed - always empty
 		Email:          email,
 		ImpersonatorID: impersonatorID,
 	}

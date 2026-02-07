@@ -52,10 +52,10 @@ export async function request(url, options = {}) {
 }
 
 // Auth
-export async function register(name, email, password, organization_name, invite_code, role = 'user') {
+export async function register(name, email, password) {
     const result = await request('/auth/register', {
         method: 'POST',
-        body: JSON.stringify({ name, email, password, organization_name, invite_code, role })
+        body: JSON.stringify({ name, email, password })
     })
     // Token is now in HttpOnly cookie AND localStorage
     localStorage.setItem('user', JSON.stringify(result.user))
@@ -175,15 +175,23 @@ export function getStoredUser() {
     return user ? JSON.parse(user) : null
 }
 
+export function setStoredUser(user) {
+    if (user) {
+        localStorage.setItem('user', JSON.stringify(user))
+    } else {
+        localStorage.removeItem('user')
+    }
+}
+
 export function getStoredWorkspace() {
     const ws = localStorage.getItem('workspace')
     return ws ? JSON.parse(ws) : null
 }
 
-export async function bootstrapAdmin(name, email, password, organization_name) {
+export async function bootstrapAdmin(name, email, password) {
     const result = await request('/auth/bootstrap-admin', {
         method: 'POST',
-        body: JSON.stringify({ name, email, password, organization_name })
+        body: JSON.stringify({ name, email, password })
     })
     return result
 }

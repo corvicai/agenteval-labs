@@ -150,35 +150,7 @@
           </div>
         </section>
 
-        <section class="profile-card workspaces-card">
-          <h3>📁 Workspaces ({{ userData.workspaces?.length || 0 }})</h3>
-          <div v-if="userData.workspaces?.length" class="table-container">
-            <table>
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Name</th>
-                  <th>Organization</th>
-                  <th>Agents</th>
-                  <th>Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="ws in userData.workspaces" :key="ws.id">
-                  <td class="mono">{{ ws.id.slice(0, 8) }}...</td>
-                  <td>{{ ws.name }}</td>
-                  <td>
-                    <span class="org-chip" v-if="ws.organization">{{ ws.organization.name }}</span>
-                    <span v-else class="text-muted">-</span>
-                  </td>
-                  <td>{{ ws.agent_count || 0 }}</td>
-                  <td>{{ formatDate(ws.created_at) }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <p v-else class="empty-state">No workspaces found</p>
-        </section>
+        <!-- Workspaces section hidden - each user has their own workspace -->
         
         <!-- Password Change Section -->
         <section v-if="canChangePassword" class="profile-card password-card">
@@ -508,8 +480,9 @@ export default {
              p === this.passForm.confirm;
     },
     totalAgents() {
-      if (!this.userData?.workspaces) return 0
-      return this.userData.workspaces.reduce((sum, ws) => sum + (ws.agent_count || 0), 0)
+      // Workspaces hidden - each user has their own workspace
+      // This is only used in organization profile stats, not user profile
+      return 0
     },
     totalRuns() {
       // Not tracked per workspace generally, but if we had it

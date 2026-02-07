@@ -43,7 +43,6 @@ END $$;
 CREATE TABLE IF NOT EXISTS workspaces (
     id UUID PRIMARY KEY,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -62,7 +61,7 @@ CREATE TABLE IF NOT EXISTS agents (
     workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     provider_type VARCHAR(50) NOT NULL,
-    config JSONB NOT NULL DEFAULT '{}',
+    config TEXT NOT NULL DEFAULT '',
     enabled BOOLEAN DEFAULT true,
     position INTEGER DEFAULT 0,
     max_concurrency INTEGER DEFAULT 5,
@@ -139,7 +138,7 @@ CREATE TABLE IF NOT EXISTS question_set_agents (
     agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     enabled BOOLEAN DEFAULT true,
     position INT DEFAULT 0,
-    config JSONB,
+    config TEXT DEFAULT '',
     created_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (question_set_id, agent_id)
 );
@@ -221,7 +220,7 @@ CREATE TABLE IF NOT EXISTS passkeys (
 -- General Indices
 CREATE INDEX IF NOT EXISTS idx_users_org_id_deprecated ON users(id); -- note: users no longer have organization_id directly
 CREATE INDEX IF NOT EXISTS idx_workspaces_user_id ON workspaces(user_id);
-CREATE INDEX IF NOT EXISTS idx_workspaces_org_id ON workspaces(organization_id);
+-- Organization index removed - workspaces no longer have organization_id
 CREATE INDEX IF NOT EXISTS idx_clients_workspace_id ON clients(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_agents_workspace_id ON agents(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_question_sets_client_id ON question_sets(client_id);

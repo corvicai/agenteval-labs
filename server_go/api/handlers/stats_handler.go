@@ -335,15 +335,15 @@ func (h *StatsHandler) computeStats(scope string, scopeID *uuid.UUID, c echo.Con
 			ap.NegativeRate = float64(row.EvalDislikes+row.EvalWrongs) / float64(row.EvalTotal)
 		}
 
-		// Get owner and org name (User and Org of the workspace where the agent belongs)
+		// Get owner (User of the workspace where the agent belongs)
 		var workspace models.Workspace
-		if h.db.Preload("User").Preload("Organization").First(&workspace, "id = ?", agent.WorkspaceID).Error == nil {
+		if h.db.Preload("User").First(&workspace, "id = ?", agent.WorkspaceID).Error == nil {
 			if workspace.User.ID != uuid.Nil {
 				ap.Owner = workspace.User.Name
 			} else {
 				ap.Owner = "System"
 			}
-			ap.OrgName = workspace.Organization.Name
+			ap.OrgName = "" // Organizations removed
 		} else {
 			ap.Owner = "Unknown"
 			ap.OrgName = "Unknown"

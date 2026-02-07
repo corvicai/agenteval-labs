@@ -7,7 +7,7 @@
         <p class="login-subtitle">{{ isRegister ? 'Create your account' : 'Sign in to continue' }}</p>
       </div>
 
-      <div v-if="!showOrgSelector && !requiresInviteCode" class="login-auth-phase">
+      <div class="login-auth-phase">
         <div class="social-login-section animate-in">
           <div v-if="socialError" class="error-message">
             <div>{{ socialError.message }}</div>
@@ -35,26 +35,6 @@
           <div v-if="error" class="error-message">{{ error }}</div>
 
           <div v-if="isRegister" class="registration-flow">
-            <!-- Role Selection -->
-            <div class="role-toggle">
-              <button 
-                type="button" 
-                class="role-toggle-btn" 
-                :class="{ active: form.role === 'user' }"
-                @click="form.role = 'user'"
-              >
-                🏢 Joining Org
-              </button>
-              <button 
-                type="button" 
-                class="role-toggle-btn" 
-                :class="{ active: form.role === 'manager' }"
-                @click="form.role = 'manager'"
-              >
-                🚀 Creating New Org
-              </button>
-            </div>
-
             <div class="form-section">
               <div class="section-title">👤 User Details</div>
               <div class="form-group">
@@ -68,34 +48,6 @@
               <div class="form-group">
                 <label>Password</label>
                 <input v-model="form.password" name="password" autocomplete="new-password" type="password" placeholder="••••••••" required />
-              </div>
-            </div>
-
-            <div class="form-section">
-              <div class="section-title">{{ form.role === 'manager' ? '🏢 Organization' : '📩 Invitation' }}</div>
-              
-              <div v-if="form.role === 'manager'" class="form-group animate-in">
-                <label>Organization Name</label>
-                <input 
-                  v-model="form.organization_name" 
-                  name="organization_name"
-                  type="text" 
-                  placeholder="e.g. ACME Corp"
-                  required
-                />
-                <small class="form-help text-muted">A new organization will be created for you.</small>
-              </div>
-
-              <div v-else class="form-group animate-in">
-                <label>Invite Code</label>
-                <input 
-                  v-model="form.invite_code" 
-                  name="invite_code"
-                  type="text" 
-                  placeholder="Enter your invite code"
-                  required
-                />
-                <small class="form-help text-muted">You must have an invite code to join an organization.</small>
               </div>
             </div>
           </div>
@@ -151,70 +103,8 @@
         </form>
       </div>
 
-      <div v-else-if="requiresInviteCode" class="join-org-view animate-in">
-        <div class="join-org-header">
-          <div class="join-org-icon">📩</div>
-          <h3>Join an Organization</h3>
-          <p>You haven't joined an organization yet. Please enter an invite code to proceed.</p>
-        </div>
-        
-        <form @submit.prevent="handleJoinOrganization" class="login-form">
-          <div v-if="error" class="error-message">{{ error }}</div>
-          <div class="form-group">
-            <label>Invite Code</label>
-            <input 
-              v-model="form.invite_code" 
-              name="invite_code"
-              type="text" 
-              placeholder="e.g. INV-123456" 
-              required 
-            />
-            <small class="form-help text-muted">Ask your manager for an invite code.</small>
-          </div>
-          <button type="submit" class="btn btn-primary btn-submit" :disabled="loading">
-            <span v-if="loading" class="loading-spinner"></span>
-            Join Organization
-          </button>
-          <button type="button" class="btn btn-ghost mt-4" @click="handleCancelJoin">
-            ← Back to login
-          </button>
-          <button type="button" class="btn-cancel-delete" @click="handleCancelAndCleanup" :disabled="loading">
-            Delete my data and start over
-          </button>
-        </form>
-      </div>
 
-      <div v-else class="org-selector animate-in">
-        <div class="org-selector-header">
-          <div class="org-selector-icon">🏢</div>
-          <h3>Select Organization</h3>
-          <p>You belong to multiple organizations. Please select one to continue.</p>
-        </div>
-        <div class="org-list">
-          <button 
-            v-for="org in availableOrganizations" 
-            :key="org.id" 
-            class="org-btn"
-            @click="handleSelectOrganization(org.id)"
-            :disabled="loading"
-          >
-            <span class="org-icon">🏢</span>
-            <div class="org-info">
-              <span class="org-name">{{ org.name }}</span>
-              <span class="org-role">{{ org.role }}</span>
-            </div>
-            <span class="select-arrow">→</span>
-          </button>
-        </div>
-        <button class="btn btn-ghost mt-4" @click="handleCancelSelect">
-          ← Back to login
-        </button>
-        <button type="button" class="btn-cancel-delete" @click="handleCancelAndCleanup" :disabled="loading">
-          Delete my data and start over
-        </button>
-      </div>
-
-      <div v-if="!showOrgSelector && !requiresInviteCode" class="login-footer">
+      <div class="login-footer">
         <p v-if="isRegister">
           Already have an account? 
           <a href="#" @click.prevent="isRegister = false">Sign in</a>
@@ -223,40 +113,6 @@
           Don't have an account? 
           <a href="#" @click.prevent="isRegister = true">Create one</a>
         </p>
-        <p class="admin-setup" v-if="!isRegister && showBootstrapLink">
-          <a href="#" @click.prevent="showBootstrapModal = true">🛡️ First-time admin setup</a>
-        </p>
-      </div>
-
-
-      <div v-if="showBootstrapModal" class="modal-overlay" @click.self="showBootstrapModal = false">
-        <div class="bootstrap-modal">
-          <h3>🛡️ Create First Admin</h3>
-          <p>This will create the first admin account. Only works if no admin exists yet.</p>
-          <form @submit.prevent="handleBootstrap" class="login-form">
-            <div v-if="bootstrapError" class="error-message">{{ bootstrapError }}</div>
-            <div class="form-group">
-              <label>Admin Name</label>
-              <input v-model="bootstrapName" type="text" placeholder="Admin name" required />
-            </div>
-            <div class="form-group">
-              <label>Admin Email</label>
-              <input v-model="bootstrapEmail" type="email" placeholder="admin@example.com" required />
-            </div>
-            <div class="form-group">
-              <label>Admin Password</label>
-              <input v-model="bootstrapPassword" type="password" placeholder="••••••••" required />
-            </div>
-            <div class="form-group">
-              <label>Organization Name</label>
-              <input v-model="bootstrapOrganizationName" type="text" placeholder="e.g. ACME Corp" />
-            </div>
-            <div class="modal-actions">
-              <button type="button" class="btn btn-secondary" @click="showBootstrapModal = false">Cancel</button>
-              <button type="submit" class="btn btn-primary" :disabled="loading">Create Admin</button>
-            </div>
-          </form>
-        </div>
       </div>
 
       <div v-if="showTermsModal" class="modal-overlay" @click.self="showTermsModal = false">
@@ -364,29 +220,14 @@ const showTermsModal = ref(false)
 const form = ref({
   name: '',
   email: '',
-  password: '',
-  organization_name: '',
-  invite_code: '',
-  role: 'user'
+  password: ''
 });
 const error = ref('')
 const socialError = ref(null)
 const loading = ref(false)
-const showBootstrapLink = ref(false)
 
-const showOrgSelector = ref(false)
-const requiresInviteCode = ref(false)
 const requiresTerms = ref(false)
-const availableOrganizations = ref([])
 const isWebAuthnSupported = ref(webauthnService.isSupported())
-
-// Bootstrap admin state
-const showBootstrapModal = ref(false)
-const bootstrapName = ref('')
-const bootstrapEmail = ref('')
-const bootstrapPassword = ref('')
-const bootstrapError = ref('')
-const bootstrapOrganizationName = ref('') // Added this based on the template
 
 async function handleSocialLogin(provider) {
   error.value = ''
@@ -483,32 +324,11 @@ async function handleSubmit() {
 
   try {
     if (isRegister.value) {
-      const result = await api.register(form.value.name, form.value.email, form.value.password, form.value.organization_name, form.value.invite_code, form.value.role)
-      
-      if (result.requires_invite_code) {
-        requiresInviteCode.value = true
-        loading.value = false
-        return
-      }
-
+      const result = await api.register(form.value.name, form.value.email, form.value.password)
       emit('login')
     } else {
       const result = await api.login(form.value.email, form.value.password)
       
-      // Handle multi-org selection
-      if (result.requires_org_selection) {
-        availableOrganizations.value = result.available_orgs
-        showOrgSelector.value = true
-        loading.value = false
-        return
-      }
-
-      // Handle no-org state
-      if (result.requires_invite_code) {
-        requiresInviteCode.value = true
-        loading.value = false
-        return
-      }
       
       if (result.requires_terms) {
         requiresTerms.value = true
@@ -578,42 +398,6 @@ async function handlePasskeyLogin() {
   }
 }
 
-async function handleJoinOrganization() {
-  error.value = ''
-  loading.value = true
-  try {
-    await api.joinOrganization(form.value.invite_code)
-    emit('login')
-  } catch (e) {
-    error.value = e.message
-  } finally {
-    loading.value = false
-  }
-}
-
-async function handleSelectOrganization(orgId) {
-  error.value = ''
-  loading.value = true
-  try {
-    await api.selectOrganization(orgId)
-    emit('login')
-  } catch (e) {
-    error.value = e.message
-    showOrgSelector.value = false // Go back to login if error
-  } finally {
-    loading.value = false
-  }
-}
-
-function handleCancelJoin() {
-  requiresInviteCode.value = false
-  error.value = ''
-}
-
-function handleCancelSelect() {
-  showOrgSelector.value = false
-  error.value = ''
-}
 
 async function handleCancelAndCleanup() {
   if (confirm('Are you sure you want to cancel and delete your authentication data? This will permenantly remove your login from this system.')) {
@@ -633,32 +417,6 @@ async function handleCancelAndCleanup() {
   }
 }
 
-async function handleBootstrap() {
-  bootstrapError.value = ''
-  loading.value = true
-
-  try {
-    const result = await api.bootstrapAdmin(
-      bootstrapName.value, 
-      bootstrapEmail.value, 
-      bootstrapPassword.value, 
-      bootstrapOrganizationName.value
-    )
-    if (result.user) {
-      showBootstrapModal.value = false
-      // Switch back to login with new credentials
-      isRegister.value = false
-      form.value.email = bootstrapEmail.value
-      form.value.password = bootstrapPassword.value
-    } else {
-      bootstrapError.value = result.message || 'Failed to create admin.'
-    }
-  } catch (e) {
-    bootstrapError.value = e.message
-  } finally {
-    loading.value = false
-  }
-}
 
 // Quick login for dev mode
 async function quickLogin(user) {
@@ -707,16 +465,6 @@ onMounted(async () => {
         // Connect WebSocket anonymously for pre-auth requests
         await wsService.connectAnonymous()
         
-        // Check admin exists via WebSocket
-        // Check admin exists call also moved to api for consistency? 
-        // Or keep ws for this check? The checkAdminExists endpoint in api.js is REST.
-        // Let's use REST for consistency with other auth flows in this file.
-        const adminResult = await api.checkAdminExists()
-        showBootstrapLink.value = !adminResult?.exists
-        if (!adminResult?.exists) {
-          showBootstrapModal.value = true
-        }
-        
         // Fetch managers for dev quick login
         if (isDev) {
           try {
@@ -730,7 +478,6 @@ onMounted(async () => {
         }
     } catch (e) {
         console.error('Failed to initialize login screen:', e)
-        // Check admin exists anyway, maybe it was just a transient WS error
         try {
            // We can't really fallback to REST easily if we want to be pure WS
            // but for this specific check, maybe it's okay? 

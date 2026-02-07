@@ -168,13 +168,13 @@ func (s *StatsService) ComputeStats(scope string, scopeID *uuid.UUID) (*models.A
 		}
 
 		var workspace models.Workspace
-		if s.db.Preload("User").Preload("Organization").First(&workspace, "id = ?", agent.WorkspaceID).Error == nil {
+		if s.db.Preload("User").First(&workspace, "id = ?", agent.WorkspaceID).Error == nil {
 			if workspace.User.ID != uuid.Nil {
 				ap.Owner = workspace.User.Name
 			} else {
 				ap.Owner = "System"
 			}
-			ap.OrgName = workspace.Organization.Name
+			ap.OrgName = "" // Organizations removed
 		}
 		stats.Agents = append(stats.Agents, ap)
 	}

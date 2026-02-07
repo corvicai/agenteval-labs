@@ -193,12 +193,12 @@ func (h *Hub) handleWebAuthnLoginFinish(c *Connection, env models.Envelope) {
 	h.db.Model(&user).Update("last_login_at", &now)
 
 	var workspace models.Workspace
-	h.db.Preload("User").Preload("Organization").Where("user_id = ?", user.ID).First(&workspace)
+	h.db.Preload("User").Where("user_id = ?", user.ID).First(&workspace)
 
 	token, _ := middleware.GenerateToken(
 		user.ID.String(),
 		workspace.ID.String(),
-		workspace.OrganizationID.String(),
+		"", // No organization
 		user.Email,
 		h.jwtSecret,
 		"",

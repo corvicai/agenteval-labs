@@ -228,9 +228,9 @@ func (h *Hub) handleGetWorkspaceRuns(c *Connection, env models.Envelope) {
 	}
 
 	var runs []models.Run
-	// Verify workspace belongs to the user's organization to prevent unauthorized access
+	// Verify workspace belongs to the user to prevent unauthorized access
 	var ws models.Workspace
-	if err := h.db.First(&ws, "id = ? AND organization_id = ?", c.WorkspaceID, c.OrgID).Error; err != nil {
+	if err := h.db.First(&ws, "id = ? AND user_id = ?", c.WorkspaceID, c.UserID).Error; err != nil {
 		c.SendError(env.CorrelationID, "workspace not found or access denied")
 		return
 	}

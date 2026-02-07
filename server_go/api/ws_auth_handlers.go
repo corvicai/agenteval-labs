@@ -14,7 +14,7 @@ import (
 )
 
 func (h *Hub) handleCheckManagerStatus(c *Connection, env models.Envelope) {
-	if c.UserID == uuid.Nil || c.OrgID == uuid.Nil {
+	if c.UserID == uuid.Nil {
 		c.SendResponse(DataManagerStatus, env.CorrelationID, map[string]any{"is_manager": false})
 		return
 	}
@@ -25,31 +25,10 @@ func (h *Hub) handleCheckManagerStatus(c *Connection, env models.Envelope) {
 		return
 	}
 
-	// Admins are automatically managers
-	if user.IsAdmin {
-		var org models.Organization
-		h.db.First(&org, "id = ?", c.OrgID)
-		c.SendResponse(DataManagerStatus, env.CorrelationID, map[string]any{
-			"is_manager": true,
-			"org_name":   org.Name,
-		})
-		return
-	}
-
-	var userOrg models.UserOrganization
-	if err := h.db.First(&userOrg, "user_id = ? AND organization_id = ?", c.UserID, c.OrgID).Error; err != nil {
-		c.SendResponse(DataManagerStatus, env.CorrelationID, map[string]any{"is_manager": false})
-		return
-	}
-
-	isManager := userOrg.Role == "manager"
-
-	var org models.Organization
-	h.db.First(&org, "id = ?", c.OrgID)
-
+	// Manager concept removed - no organizations
+	// Admins can still be considered managers if needed, but no org context
 	c.SendResponse(DataManagerStatus, env.CorrelationID, map[string]any{
-		"is_manager": isManager,
-		"org_name":   org.Name,
+		"is_manager": user.IsAdmin,
 	})
 }
 
@@ -65,12 +44,9 @@ func (h *Hub) handleGetMe(c *Connection, env models.Envelope) {
 		return
 	}
 
-	var org models.Organization
-	h.db.First(&org, "id = ?", c.OrgID)
-
-	// Get user's workspaces
+	// Get user's workspaces (no organization filter)
 	var workspaces []models.Workspace
-	h.db.Preload("User").Preload("Organization").Where("user_id = ?", c.UserID).Find(&workspaces)
+	h.db.Where("user_id = ?", c.UserID).Find(&workspaces)
 
 	// Fix GORM recursion zeroing
 	safeUser := user
@@ -78,60 +54,18 @@ func (h *Hub) handleGetMe(c *Connection, env models.Envelope) {
 	safeUser.Organizations = nil
 	safeUser.UserOrgs = nil
 
-	// We only have the current org in scope (c.OrgID), but user might have workspaces in other orgs.
-	// However, fetching all orgs just to fix this might be excessive.
-	// But `Preload("Organization")` should have worked if not for recursion.
-	// Let's at least fix `User` and valid `Organization` if it matches current one.
-	// To be safe, let's fetch necessary organizations if needed or assume Preload worked enough to get IDs.
-
-	// Better approach: Since we preloaded Organization, let's assume it returned empty struct but with ID? No, empty struct means empty.
-	// We need to re-fetch orgs or use a map if we want to be perfect.
-	// For `handleGetMe` mostly the user cares about the workspace list.
-	// Let's just fix User for now as that's the main recursion point (User -> Workspaces -> User).
-	// Organization -> Workspaces -> Organization is also a cycle.
-
-	// Re-fetching orgs.
-	var userOrgs []models.UserOrganization
-	h.db.Preload("Organization").Where("user_id = ?", user.ID).Find(&userOrgs)
-	orgMap := make(map[uuid.UUID]models.Organization)
-	for _, uo := range userOrgs {
-		safeOrg := uo.Organization
-		safeOrg.Workspaces = nil
-		safeOrg.Users = nil
-		safeOrg.UserOrgs = nil
-		orgMap[uo.OrganizationID] = safeOrg
-	}
-
 	for i := range workspaces {
 		workspaces[i].User = safeUser
-		if o, ok := orgMap[workspaces[i].OrganizationID]; ok {
-			workspaces[i].Organization = o
-		}
-	}
-
-	// Collect all organizations for the user
-	allOrgs := make([]map[string]any, 0)
-	for _, uo := range userOrgs {
-		allOrgs = append(allOrgs, map[string]any{
-			"id":   uo.Organization.ID,
-			"name": uo.Organization.Name,
-			"role": uo.Role,
-		})
 	}
 
 	result := map[string]any{
 		"user": map[string]any{
-			"id":            user.ID.String(),
-			"name":          user.Name,
-			"email":         user.Email,
-			"is_admin":      user.IsAdmin,
-			"created_at":    user.CreatedAt,
-			"workspaces":    workspaces,
-			"organizations": allOrgs,
-		},
-		"organization": map[string]any{
-			"id":   org.ID,
-			"name": org.Name,
+			"id":         user.ID.String(),
+			"name":       user.Name,
+			"email":      user.Email,
+			"is_admin":   user.IsAdmin,
+			"created_at": user.CreatedAt,
+			"workspaces": workspaces,
 		},
 	}
 
@@ -203,107 +137,49 @@ func (h *Hub) handleWsLogin(c *Connection, env models.Envelope) {
 		return
 	}
 
-	// Get user's organizations
-	var userOrgs []models.UserOrganization
-	h.db.Preload("Organization").Find(&userOrgs, "user_id = ?", user.ID)
-
-	if len(userOrgs) == 0 {
-		c.SendError(env.CorrelationID, "user does not belong to any organization")
-		return
-	}
-
-	var selectedOrgID uuid.UUID
-
-	if req.OrganizationID != "" {
-		targetOrgID, err := uuid.Parse(req.OrganizationID)
-		if err != nil {
-			c.SendError(env.CorrelationID, "invalid organization_id")
-			return
-		}
-
-		found := false
-		for _, uo := range userOrgs {
-			if uo.OrganizationID == targetOrgID {
-				selectedOrgID = targetOrgID
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			c.SendError(env.CorrelationID, "user is not a member of this organization")
-			return
-		}
-	} else if len(userOrgs) == 1 {
-		selectedOrgID = userOrgs[0].OrganizationID
-	} else {
-		// Multiple organizations - return list for selection
-		var orgs []models.Organization
-		for _, uo := range userOrgs {
-			orgs = append(orgs, uo.Organization)
-		}
-
-		// Update connection with user info even before org is selected
-		c.UserID = user.ID
-		c.IsAuthenticated = true
-
-		recordLog(&user.ID, "success", "pending_org_selection", nil)
-		c.SendResponse(DataWsLoginResult, env.CorrelationID, map[string]any{
-			"requires_org_selection": true,
-			"organizations":          orgs,
-			"user": map[string]any{
-				"id":       user.ID.String(),
-				"name":     user.Name,
-				"email":    user.Email,
-				"is_admin": user.IsAdmin,
-			},
-		})
-		return
-	}
-
-	// Check org suspension
-	var org models.Organization
-	if err := h.db.First(&org, "id = ?", selectedOrgID).Error; err == nil {
-		if org.IsSuspended {
-			c.SendError(env.CorrelationID, "organization is suspended")
-			return
-		}
-	}
-
-	// Get workspace
+	// Get user's first workspace (no organization required)
 	var workspace models.Workspace
-	h.db.Preload("User").Preload("Organization").Where("user_id = ? AND organization_id = ?", user.ID, selectedOrgID).First(&workspace)
+	h.db.Preload("User").Where("user_id = ?", user.ID).First(&workspace)
 
-	// Fix potential GORM recursion zeroing
-	safeUser := user
-	safeUser.Workspaces = nil
-	safeUser.Organizations = nil
-	safeUser.UserOrgs = nil
-	workspace.User = safeUser
+	// If no workspace exists, create one
+	if workspace.ID == uuid.Nil {
+		workspace = models.Workspace{
+			ID:     uuid.New(),
+			UserID: user.ID,
+			Name:   "main",
+		}
+		if err := h.db.Create(&workspace).Error; err != nil {
+			c.SendError(env.CorrelationID, "failed to create workspace")
+			return
+		}
 
-	safeOrg := org
-	safeOrg.Workspaces = nil
-	safeOrg.Users = nil
-	safeOrg.UserOrgs = nil
-	workspace.Organization = safeOrg
+		// Create default client
+		client := models.Client{
+			ID:          uuid.New(),
+			WorkspaceID: workspace.ID,
+			Name:        "Default Client",
+		}
+		h.db.Create(&client) // Non-fatal
+	}
+
+	workspace.User = user
 
 	// Update connection with authenticated info
 	c.UserID = user.ID
-	c.OrgID = selectedOrgID
 	c.WorkspaceID = workspace.ID
 	c.IsAuthenticated = true
 
-	// Generate token for persistence
+	// Generate token for persistence (no organization)
 	token, _ := middleware.GenerateToken(
 		user.ID.String(),
 		workspace.ID.String(),
-		org.ID.String(),
+		"", // No organization
 		user.Email,
 		h.jwtSecret,
 		"",
 	)
 
-	recordLog(&user.ID, "success", "", &selectedOrgID)
+	recordLog(&user.ID, "success", "", nil)
 
 	c.SendResponse(DataWsLoginResult, env.CorrelationID, map[string]any{
 		"success": true,
@@ -313,10 +189,6 @@ func (h *Hub) handleWsLogin(c *Connection, env models.Envelope) {
 			"name":     user.Name,
 			"email":    user.Email,
 			"is_admin": user.IsAdmin,
-		},
-		"organization": map[string]any{
-			"id":   org.ID.String(),
-			"name": org.Name,
 		},
 		"workspace": workspace,
 	})
@@ -466,10 +338,9 @@ func (h *Hub) handleWsRegister(c *Connection, env models.Envelope) {
 
 	// Create Default Workspace
 	ws := models.Workspace{
-		ID:             uuid.New(),
-		UserID:         user.ID,
-		OrganizationID: orgID,
-		Name:           "main",
+		ID:     uuid.New(),
+		UserID: user.ID,
+		Name:   "main",
 	}
 	if err := tx.Create(&ws).Error; err != nil {
 		tx.Rollback()
@@ -546,10 +417,9 @@ func (h *Hub) handleWsBootstrapAdmin(c *Connection, env models.Envelope) {
 	tx.Create(&uo)
 
 	ws := models.Workspace{
-		ID:             uuid.New(),
-		UserID:         user.ID,
-		OrganizationID: org.ID,
-		Name:           "main",
+		ID:     uuid.New(),
+		UserID: user.ID,
+		Name:   "main",
 	}
 	tx.Create(&ws)
 
@@ -629,12 +499,11 @@ func (h *Hub) handleJoinOrganization(c *Connection, env models.Envelope) {
 		return
 	}
 
-	// Create default workspace for user in this org
+	// Create default workspace for user
 	workspace := models.Workspace{
-		ID:             uuid.New(),
-		UserID:         c.UserID,
-		OrganizationID: *invite.OrganizationID,
-		Name:           "main",
+		ID:     uuid.New(),
+		UserID: c.UserID,
+		Name:   "main",
 	}
 	if err := tx.Create(&workspace).Error; err != nil {
 		tx.Rollback()
@@ -846,11 +715,10 @@ func (h *Hub) handleCreateOrganization(c *Connection, env models.Envelope) {
 
 	// 3. Create Default Workspace
 	ws := models.Workspace{
-		ID:             uuid.New(),
-		UserID:         c.UserID,
-		OrganizationID: org.ID,
-		Name:           "main",
-		CreatedAt:      time.Now().UTC(),
+		ID:        uuid.New(),
+		UserID:    c.UserID,
+		Name:      "main",
+		CreatedAt: time.Now().UTC(),
 	}
 	if err := tx.Create(&ws).Error; err != nil {
 		tx.Rollback()

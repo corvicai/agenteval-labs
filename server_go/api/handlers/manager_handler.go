@@ -143,10 +143,9 @@ func (h *ManagerHandler) CreateOrgUser(c echo.Context) error {
 
 	// Create default workspace
 	workspace := models.Workspace{
-		ID:             uuid.New(),
-		UserID:         user.ID,
-		OrganizationID: *orgID,
-		Name:           "Default Workspace",
+		ID:     uuid.New(),
+		UserID: user.ID,
+		Name:   "Default Workspace",
 	}
 	h.db.Create(&workspace)
 

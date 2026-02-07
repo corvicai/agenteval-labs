@@ -103,6 +103,7 @@ textarea {
 .controls {
   display: flex;
   gap: 1rem;
+  align-items: center;
 }
 
 .controls .buttons {
@@ -383,6 +384,82 @@ textarea {
 
 .btn-danger:hover:not(:disabled) {
   background: #c82333;
+}
+
+/* Enhanced logout button styling in header */
+.controls .btn.btn-danger {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 0.5rem !important;
+  padding: 0.5rem 1rem !important;
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important;
+  color: white !important;
+  border: 1.5px solid #dc2626 !important;
+  border-radius: 10px !important;
+  font-size: 0.875rem !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  box-shadow: 0 1px 3px rgba(239, 68, 68, 0.2) !important;
+  white-space: nowrap !important;
+}
+
+.controls .btn.btn-danger:hover:not(:disabled) {
+  background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%) !important;
+  border-color: #b91c1c !important;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3), 0 0 0 3px rgba(239, 68, 68, 0.1) !important;
+  transform: translateY(-1px) !important;
+}
+
+.controls .btn.btn-danger:active:not(:disabled) {
+  transform: translateY(0) !important;
+  box-shadow: 0 2px 6px rgba(239, 68, 68, 0.25) !important;
+}
+
+/* Enhanced user badge styling in header */
+.controls .user-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 0.5rem !important;
+  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%) !important;
+  padding: 0.5rem 1rem !important;
+  border-radius: 10px !important;
+  font-size: 0.875rem !important;
+  font-weight: 600 !important;
+  color: #334155 !important;
+  border: 1.5px solid #e2e8f0 !important;
+  cursor: pointer !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05) !important;
+  white-space: nowrap !important;
+  user-select: none !important;
+}
+
+.controls .user-badge:hover {
+  background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%) !important;
+  border-color: #6366f1 !important;
+  color: #6366f1 !important;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.15), 0 0 0 3px rgba(99, 102, 241, 0.1) !important;
+  transform: translateY(-1px) !important;
+}
+
+.controls .user-badge:active {
+  transform: translateY(0) !important;
+  box-shadow: 0 2px 6px rgba(99, 102, 241, 0.2) !important;
+}
+
+.controls .user-badge.admin {
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%) !important;
+  color: #92400e !important;
+  border: 1.5px solid #fbbf24 !important;
+  box-shadow: 0 1px 3px rgba(245, 158, 11, 0.2) !important;
+}
+
+.controls .user-badge.admin:hover {
+  background: linear-gradient(135deg, #fde68a 0%, #fcd34d 100%) !important;
+  border-color: #f59e0b !important;
+  color: #78350f !important;
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.25), 0 0 0 3px rgba(245, 158, 11, 0.15) !important;
 }
 
 .workspace-trigger {

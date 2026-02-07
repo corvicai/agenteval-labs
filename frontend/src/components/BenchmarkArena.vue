@@ -26,73 +26,33 @@
        @cancel="showRunSetup = false"
     />
 
-    <QuestionEditorModal 
-        v-if="showQuestionEditor"
-        :question-set="currentQuestionSet"
-        :workspace-id="workspaceId"
-        @close="onQuestionEditorClose"
-        @saved="onQuestionSetSaved"
-      />
+    <!-- Left Sidebar with Tabs -->
+    <LeftSidebar
+      :question-sets="questionSets"
+      :current-question-set="currentQuestionSet"
+      :agents="mergedAgents"
+      :running-question-set-id="wsState.runningQuestionSetId"
+      :workspace-id="workspaceId"
+      @create-question-set="createNewQuestionSet"
+      @select-question-set="selectQuestionSet"
+      @manage-agents="() => emit('manage-agents')"
+      @question-set-updated="handleQuestionSetUpdated"
+    />
 
-    <!-- Questions Panel -->
-    <div v-if="!isZenMode" class="questions-panel">
-      <div class="questions-header-top">
-        <h3>📋 Question Sets</h3>
-        <div class="questions-header-actions">
-           <button class="btn btn-secondary btn-sm" @click="createNewQuestionSet">
-             <span class="icon">➕</span> New Set
-           </button>
-        </div>
-      </div>
-      
-      <div class="qs-list">
-        <div 
-          v-for="qs in questionSets" 
-          :key="qs.id" 
-          class="qs-item" 
-          :class="{ active: currentQuestionSet?.id === qs.id }"
-          @click="selectQuestionSet(qs)"
-        >
-          <span class="qs-name">{{ qs.name }}</span>
-          <span v-if="wsState.runningQuestionSetId === qs.id" class="running-indicator-dot"></span>
-          <span class="qs-meta">{{ getQuestionCount(qs) }} qs</span>
-          <div class="qs-actions">
-            <button class="btn-icon-small" @click.stop="$emit('view-history', qs)" title="View History">📜</button>
-          </div>
-        </div>
-      </div>
-      <div class="questions-select-row">
-        <select v-model="selectedQuestionId" class="questions-select">
-          <option value="">All Questions</option>
-          <option v-for="q in flatQuestions" :key="q.id" :value="q.id">
-            {{ q.question.slice(0, 60) }}{{ q.question.length > 60 ? '...' : '' }}
-          </option>
-        </select>
-        <button v-if="!agents.length" class="btn btn-warning" @click="$emit('configure-agents')">
-          🤖 Configure Agents
-        </button>
-        <button v-else class="btn btn-primary" @click="startRunSetup" :disabled="isRunning || !currentQuestionSet">
-          {{ isRunning ? '⏳ Running...' : '▶️ Run Benchmark' }}
-        </button>
-        <button class="btn btn-secondary btn-history-arena" @click="$emit('view-history', currentQuestionSet || {})">
-          📚 History
-        </button>
-        <button class="btn btn-secondary" @click="showQuestionEditor = true" :disabled="!currentQuestionSet">
-          ✏️ Edit Questions
-        </button>
-        <button class="btn btn-secondary btn-pdf" @click="exportToPdf" :disabled="!currentRun">
-          📄 PDF
-        </button>
-        <button class="btn btn-secondary" @click="$emit('toggle-zen', true)">
-          🧘 Zen
-        </button>
-        <button class="btn btn-secondary" @click="reloadResults" title="Reload Results">
-          🔄
-        </button>
-        <button v-if="isRunning" class="btn btn-danger" @click="cancelBenchmark">
-          ⛔ Cancel
-        </button>
-      </div>
+    <!-- Main Content Area -->
+    <div class="benchmark-arena-content">
+    <!-- Action Buttons Row -->
+    <div class="action-buttons-row">
+      <button class="btn btn-primary" @click="startRunSetup" :disabled="isRunning || !currentQuestionSet">
+        {{ isRunning ? '⏳ Running...' : '▶️ Run Benchmark' }}
+      </button>
+      <button class="btn btn-secondary btn-pdf" @click="exportToPdf" :disabled="!currentRun || isExportingPdf">
+        <span v-if="isExportingPdf" class="pdf-loading-spinner"></span>
+        <span v-else>📄</span> PDF
+      </button>
+      <button v-if="isRunning" class="btn btn-danger" @click="cancelBenchmark">
+        ⛔ Cancel
+      </button>
     </div>
 
     <!-- Progress Bar -->
@@ -116,7 +76,132 @@
          <p>Choose a question set from the left panel to start benchmarking.</p>
       </div>
 
-      <div v-else class="chat-container">
+      <!-- Main Content Area: Questions + Chat Panels side by side -->
+      <div v-else-if="flatQuestions.length > 0" class="main-content-area">
+        <!-- Questions List View -->
+        <div class="questions-list-view">
+          <div class="questions-list-header">
+            <h2>{{ currentQuestionSet.name }}</h2>
+            <p class="questions-count">{{ flatQuestions.length }} question{{ flatQuestions.length !== 1 ? 's' : '' }}</p>
+          </div>
+          
+          <!-- Stats Section -->
+          <div v-if="currentRun && agentStats.length > 0" class="questions-stats-section">
+            <div 
+              v-for="agentStat in agentStats" 
+              :key="agentStat.id"
+              class="agent-stat-card"
+            >
+              <div class="agent-stat-header">
+                <h4>{{ agentStat.name }}</h4>
+                <div v-if="agentStat.provider === 'openai'" class="evaluator-badge-small">Evaluator</div>
+                <div v-else class="quality-score-badge">{{ agentStat.qualityScore }}%</div>
+              </div>
+              <div class="agent-stat-metrics">
+                <div class="metric">
+                  <span class="metric-value">{{ agentStat.stats.answered }} / {{ agentStat.stats.totalQuestions }}</span>
+                  <span class="metric-label">Answered</span>
+                </div>
+                <div class="metric">
+                  <span class="metric-value">{{ formatDuration(agentStat.stats.avgDuration) }}</span>
+                  <span class="metric-label">Avg Speed</span>
+                </div>
+                <div class="metric">
+                  <span class="metric-value">{{ agentStat.provider === 'openai' ? agentStat.stats.answered : (agentStat.stats.percentages.positive || 0) + '%' }}</span>
+                  <span class="metric-label">{{ agentStat.provider === 'openai' ? 'Evaluations' : 'Precision' }}</span>
+                </div>
+              </div>
+              <div v-if="agentStat.provider !== 'openai' && agentStat.stats.percentages" class="validations-bar-small">
+                <div class="v-segment-small pos" :style="{ width: agentStat.stats.percentages.positive + '%' }"></div>
+                <div class="v-segment-small alt" :style="{ width: agentStat.stats.percentages.alternative + '%' }"></div>
+                <div class="v-segment-small par" :style="{ width: agentStat.stats.percentages.partial + '%' }"></div>
+                <div class="v-segment-small neg" :style="{ width: agentStat.stats.percentages.negative + '%' }"></div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="questions-list-container">
+            <div 
+              v-for="(question, index) in flatQuestions" 
+              :key="question.id || index"
+              class="question-item"
+              :class="{ 'selected': selectedQuestionId === question.id }"
+              @click="selectedQuestionId = question.id"
+            >
+              <div class="question-number">Q{{ index + 1 }}</div>
+              <div class="question-content">
+                <div class="question-text">{{ question.question || question.text }}</div>
+                <div v-if="question.category" class="question-category">{{ question.category }}</div>
+                <div v-if="getQuestionResponse(question.id)" class="question-response">
+                  <div class="response-label">Response:</div>
+                  <div class="response-text">
+                    <div 
+                      v-if="!expandedResponses[question.id]"
+                      v-html="formatResponseWithImages(getQuestionResponse(question.id, true))"
+                    ></div>
+                    <div 
+                      v-else
+                      v-html="formatResponseWithImages(getQuestionResponse(question.id, false))"
+                    ></div>
+                    <button 
+                      v-if="isResponseLong(question.id)"
+                      class="btn-expand-response"
+                      @click.stop="toggleResponse(question.id)"
+                    >
+                      {{ expandedResponses[question.id] ? 'Show less' : 'Show more' }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div class="question-actions">
+                <span class="question-status" :class="getQuestionStatus(question.id)">
+                  {{ getQuestionStatusText(question.id) }}
+                </span>
+                <button 
+                  v-if="hasQuestionBeenRun(question.id)"
+                  class="btn-retry" 
+                  @click.stop="retryQuestionForAllAgents(question.id)"
+                  title="Retry this question"
+                >
+                  🔄 Retry
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Chat Panels (when agents/results are available) -->
+        <div v-if="displayAgents.length > 0" class="chat-container">
+          <div class="chat-panels-bar">
+            <div v-for="agent in displayAgents" :key="agent.id" class="chat-panel-wrapper">
+              <ChatPanel 
+                :agent-name="agent.name"
+                :agent-id="agent.id"
+                :agent-url="agent.config?.url || agent.config?.prompt_id || ''"
+                :model="agent.config?.model || ''"
+                :provider="agent.provider_type"
+                :results="getAgentResults(agent.id)"
+                :messages-ref="{ value: null }"
+                :message-refs="{ value: {} }"
+                :on-scroll="() => {}"
+                :selected-question-id="selectedQuestionId"
+                :get-question-key="getQuestionKey"
+                :on-validation="(idx, val) => onValidation(agent.id, idx, val)"
+                :on-retry="(idx) => onRetry(agent.id, idx)"
+                :extract-answer-text="extractAnswerText"
+                :extract-answer-meta="extractAnswerMeta"
+                @rerun="rerunQuestion"
+                @rate="rateResult"
+                :dev-mode="isDev"
+                @show-details="(idx) => handleShowDetails(agent.id, idx)"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Fallback: Chat Panels only (when results are available but no questions) -->
+      <div v-else-if="hasResults && displayAgents.length > 0" class="chat-container">
         <div class="chat-panels-bar">
           <div v-for="agent in displayAgents" :key="agent.id" class="chat-panel-wrapper">
             <ChatPanel 
@@ -130,7 +215,6 @@
               :message-refs="{ value: {} }"
               :on-scroll="() => {}"
               :selected-question-id="selectedQuestionId"
-              :history-by-question="{}" 
               :get-question-key="getQuestionKey"
               :on-validation="(idx, val) => onValidation(agent.id, idx, val)"
               :on-retry="(idx) => onRetry(agent.id, idx)"
@@ -145,6 +229,7 @@
         </div>
       </div>
     </div>
+    </div>
 
     <!-- Details Modal -->
     <DetailsModal 
@@ -152,29 +237,6 @@
       :details="selectedDetails"
       @close="showDetailsModal = false"
     />
-
-    <!-- Question Navigation -->
-    <div v-if="flatQuestions.length > 1" class="question-navigation-floating">
-      <button class="nav-btn-floating" @click="prevQuestion" :disabled="currentQuestionIndex <= 0">
-        <span class="nav-icon">←</span>
-        <span class="nav-label">Prev</span>
-      </button>
-      <div class="nav-current-floating">
-        <span class="nav-index">{{ currentQuestionIndex + 1 }}</span>
-        <span class="nav-total">of {{ flatQuestions.length }}</span>
-      </div>
-      <button class="nav-btn-floating" @click="nextQuestion" :disabled="currentQuestionIndex >= flatQuestions.length - 1">
-        <span class="nav-icon">→</span>
-        <span class="nav-label">Next</span>
-      </button>
-    </div>
-
-    <!-- Zen Mode Exit Button -->
-    <div v-if="isZenMode" class="zen-mode-exit-overlay">
-      <button class="btn btn-secondary btn-exit-zen" @click="emit('toggle-zen', false)">
-        ✕ Exit Zen Mode (Esc)
-      </button>
-    </div>
   </div>
 </template>
 
@@ -183,9 +245,9 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import SummarySection from './SummarySection.vue'
 import RunSetupModal from './RunSetupModal.vue'
 import ChatPanel from './ChatPanel.vue'
-import QuestionEditorModal from './QuestionEditorModal.vue'
 import DetailsModal from './modals/DetailsModal.vue'
 import PrintReport from './PrintReport.vue'
+import LeftSidebar from './LeftSidebar.vue'
 import wsService from '../services/websocket.js'
 import { exportResultsReport } from '../utils/exporters.js'
 import { downloadManager } from '../services/DownloadManager.js'
@@ -202,18 +264,17 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
-  initialQuestionSetId: String,
-  isZenMode: Boolean
+  initialQuestionSetId: String
 })
 
-const emit = defineEmits(['update:currentQuestionSet', 'configure-agents', 'view-history', 'trigger-print', 'toggle-zen'])
+const emit = defineEmits(['update:currentQuestionSet', 'trigger-print', 'manage-agents'])
 
 watch(() => props.questionSets, (sets) => {
-  console.log('[Arena] Question sets updated:', sets.length)
+  // Question sets updated
 }, { immediate: true })
 
 watch(() => props.agents, (agents) => {
-  console.log('[Arena] Agents updated:', agents.length)
+  // Agents updated
 }, { immediate: true })
 
 const wsStore = useWSStore()
@@ -221,7 +282,6 @@ const { state: wsState } = wsStore
 
 // State
 const currentQuestionSet = ref(null)
-const previousQuestionSet = ref(null)
 const currentRun = ref(null)
 const runResults = ref({})
 const isRunning = ref(false)
@@ -233,13 +293,14 @@ const totalTasks = ref(0)
 const selectedQuestionId = ref('')
 const showSummary = ref(false)
 const showRunSetup = ref(false)
-const showQuestionEditor = ref(false)
 const showDetailsModal = ref(false)
 const selectedDetails = ref(null)
+const expandedResponses = ref({})
 const isDev = import.meta.env.DEV
 const latestRunCache = new Map()
 const pendingResultsBuffer = ref([])
 const startRunError = ref(null)
+const isExportingPdf = ref(false)
 
 // Init logic for Question Set
 watch(() => props.questionSets, (sets) => {
@@ -251,7 +312,6 @@ watch(() => props.questionSets, (sets) => {
     // Sync current set with updated data from props
     const updated = sets.find(s => s.id === currentQuestionSet.value.id)
     if (updated) {
-      // console.log('[Arena] Syncing currentQuestionSet with updated props data')
       currentQuestionSet.value = updated
     }
   }
@@ -260,7 +320,6 @@ watch(() => props.questionSets, (sets) => {
 // Watch for parent-driven selection changes
 watch(() => props.initialQuestionSetId, (newId) => {
   if (newId && newId !== currentQuestionSet.value?.id) {
-    console.log('[Arena] Parent changed question set ID:', newId)
     const found = props.questionSets.find(s => s.id === newId)
     if (found) {
       currentQuestionSet.value = found
@@ -271,7 +330,6 @@ watch(() => props.initialQuestionSetId, (newId) => {
 // Watch for workspaceId changes to trigger fetch if it was skipped
 watch(() => props.workspaceId, (newId) => {
   if (newId && currentQuestionSet.value && !isRunning.value) {
-    console.log('[Arena] WorkspaceID arrived, fetching results for QS:', currentQuestionSet.value.id)
     fetchLatestResultsForQS(currentQuestionSet.value.id)
   }
 })
@@ -293,10 +351,6 @@ function initQuestionSet(sets) {
             return
         }
     }
-    // Fallback: First one (or last created)
-    // if (sets.length > 0) {
-    //     currentQuestionSet.value = sets[sets.length - 1]
-    // }
 }
 
 watch(currentQuestionSet, (newSet) => {
@@ -346,6 +400,10 @@ const currentQuestionIndex = computed(() => {
   return flatQuestions.value.findIndex(q => q.id === selectedQuestionId.value)
 })
 
+const hasResults = computed(() => {
+  return runResults.value && Object.keys(runResults.value).length > 0
+})
+
 // Granular progress: started tasks count for half (0.5x), completed count for full (1x)
 // This gives visual feedback that tasks are running before they complete
 const progressPercent = computed(() => {
@@ -381,7 +439,6 @@ const mergedAgents = computed(() => {
 
   // If the question set has NO agents array at all, it's definitely uninitialized
   if (!qs.agents || !Array.isArray(qs.agents)) {
-    console.log(`[Arena] mergedAgents: No agents array for QS "${qs.name}", using defaults`)
     return props.agents
   }
 
@@ -389,7 +446,6 @@ const mergedAgents = computed(() => {
   // Is it empty because nothing was ever saved, or because the user saved "nothing enabled"?
   // Usually, saveSelection sends ALL agents. So an empty array means "never saved".
   if (qs.agents.length === 0) {
-    console.log(`[Arena] mergedAgents: Empty agents array for QS "${qs.name}", using defaults`)
     return props.agents
   }
 
@@ -419,7 +475,6 @@ const mergedAgents = computed(() => {
     return { ...a, enabled: a.enabled }
   })
 
-  // console.log(`[Arena] mergedAgents: result enabled count:`, merged.filter(a => a.enabled).length)
   return merged
 })
 
@@ -469,9 +524,270 @@ const displayAgents = computed(() => {
   })
 })
 
+// Computed property for agent stats (similar to PDF export)
+const agentStats = computed(() => {
+  if (!currentRun.value || displayAgents.value.length === 0) return []
+  
+  return displayAgents.value.map(agent => {
+    const results = getAgentResults(agent.id, true)
+    const stats = calculateStats(results)
+    
+    // Calculate quality score (same logic as PDF export)
+    const totalValidations = stats.validations.positive + 
+                           stats.validations.negative + 
+                           stats.validations.alternative + 
+                           stats.validations.partial
+    
+    const qualityScore = totalValidations > 0
+      ? ((stats.validations.positive * 1.0 +
+          stats.validations.alternative * 0.8 +
+          stats.validations.partial * 0.5) /
+         (totalValidations || 1) * 100).toFixed(1)
+      : '0.0'
+    
+    return {
+      id: agent.id,
+      name: agent.name || agent.config?.name || 'Agent',
+      provider: agent.provider_type,
+      stats,
+      qualityScore
+    }
+  })
+})
+
 // Methods
+
+// Check if a question has been run (has results from any agent)
+function hasQuestionBeenRun(questionId) {
+  if (!runResults.value || !questionId) return false
+  const qIdStr = String(questionId)
+  
+  for (const agentId in runResults.value) {
+    const agentResults = runResults.value[agentId]
+    if (agentResults && agentResults[qIdStr]) {
+      const result = agentResults[qIdStr]
+      // Consider it run if it has an answer, error, or was completed
+      if (result.answer || result.error || result.timestamp) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+// Get status class for question
+function getQuestionStatus(questionId) {
+  if (!runResults.value || !questionId) return 'status-not-run'
+  const qIdStr = String(questionId)
+  
+  let hasError = false
+  let hasAnswer = false
+  let isLoading = false
+  
+  for (const agentId in runResults.value) {
+    const agentResults = runResults.value[agentId]
+    if (agentResults && agentResults[qIdStr]) {
+      const result = agentResults[qIdStr]
+      if (result.loading) isLoading = true
+      if (result.error) hasError = true
+      if (result.answer) hasAnswer = true
+    }
+  }
+  
+  if (isLoading) return 'status-loading'
+  if (hasError) return 'status-error'
+  if (hasAnswer) return 'status-completed'
+  return 'status-not-run'
+}
+
+// Get status text for question
+function getQuestionStatusText(questionId) {
+  const status = getQuestionStatus(questionId)
+  switch (status) {
+    case 'status-loading':
+      return '⏳ Running'
+    case 'status-error':
+      return '❌ Error'
+    case 'status-completed':
+      return '✅ Completed'
+    default:
+      return '⭕ Not Run'
+  }
+}
+
+// Get the response text for a question (from the first available agent)
+function getQuestionResponse(questionId, truncated = true) {
+  if (!runResults.value || !questionId) return null
+  const qIdStr = String(questionId)
+  
+  // Find the first agent that has a response for this question
+  for (const agentId in runResults.value) {
+    const agentResults = runResults.value[agentId]
+    const result = agentResults[qIdStr]
+    if (result && result.answer && !result.loading && !result.error) {
+      const answer = result.answer
+      // Return truncated response if truncated is true and answer is long
+      if (truncated && answer.length > 150) {
+        // Check if truncation would break a base64 image
+        const base64ImagePattern = /data:image\/[^;]+;base64,[A-Za-z0-9+/=\s]+/g
+        const truncatedText = answer.substring(0, 150)
+        
+        // Find the last complete base64 image before truncation point
+        let lastImageEnd = -1
+        let match
+        const pattern = new RegExp(base64ImagePattern)
+        while ((match = pattern.exec(answer)) !== null) {
+          if (match.index + match[0].length <= 150) {
+            lastImageEnd = match.index + match[0].length
+          } else {
+            break
+          }
+        }
+        
+        // If we found an image that extends beyond truncation, include it fully
+        if (lastImageEnd > 0 && lastImageEnd > 150) {
+          return answer.substring(0, lastImageEnd) + '...'
+        }
+        
+        // Otherwise, truncate at a safe point (avoid breaking base64 strings)
+        // Try to truncate at a word boundary or before a potential base64 start
+        let truncateAt = 150
+        if (truncatedText.includes('data:image')) {
+          // If there's a base64 image starting, find where it ends
+          const imageStart = truncatedText.lastIndexOf('data:image')
+          if (imageStart >= 0) {
+            // Don't truncate in the middle of a base64 string
+            // Find a safe truncation point after the image or before it
+            const afterImage = truncatedText.indexOf(' ', imageStart + 100)
+            if (afterImage > 0 && afterImage <= 150) {
+              truncateAt = afterImage
+            } else {
+              // If image is too long, just truncate before it
+              truncateAt = imageStart
+            }
+          }
+        }
+        
+        return answer.substring(0, truncateAt) + '...'
+      }
+      return answer
+    }
+  }
+  
+  return null
+}
+
+// Check if response is long enough to need truncation
+function isResponseLong(questionId) {
+  if (!runResults.value || !questionId) return false
+  const qIdStr = String(questionId)
+  
+  for (const agentId in runResults.value) {
+    const agentResults = runResults.value[agentId]
+    const result = agentResults[qIdStr]
+    if (result && result.answer && !result.loading && !result.error) {
+      return result.answer.length > 150
+    }
+  }
+  
+  return false
+}
+
+// Toggle response expansion
+function toggleResponse(questionId) {
+  expandedResponses.value[questionId] = !expandedResponses.value[questionId]
+}
+
+// Format response text to display base64 images
+function formatResponseWithImages(text) {
+  if (!text) return ''
+  
+  // Escape HTML to prevent XSS, but preserve base64 image data URIs
+  const escapeHtml = (str) => {
+    const div = document.createElement('div')
+    div.textContent = str
+    return div.innerHTML
+  }
+  
+  // Pattern to match base64 image data URIs: data:image/[type];base64,[base64 string]
+  // This pattern matches the full data URI including the base64 encoded data
+  const base64ImagePattern = /(data:image\/(?:png|jpg|jpeg|gif|webp|svg\+xml|bmp);base64,[A-Za-z0-9+/=\s]+)/gi
+  
+  // Find all base64 images first
+  const images = []
+  let match
+  const pattern = new RegExp(base64ImagePattern)
+  while ((match = pattern.exec(text)) !== null) {
+    images.push({
+      index: match.index,
+      length: match[0].length,
+      data: match[0].trim() // Remove any whitespace
+    })
+  }
+  
+  // If no images found, just escape and return text with line breaks
+  if (images.length === 0) {
+    const escaped = escapeHtml(text)
+    return escaped.replace(/\n/g, '<br>')
+  }
+  
+  // Build result by processing text segments and images
+  let result = ''
+  let lastIndex = 0
+  
+  images.forEach((img, idx) => {
+    // Add text before this image
+    if (img.index > lastIndex) {
+      const textBefore = text.substring(lastIndex, img.index)
+      const escaped = escapeHtml(textBefore)
+      result += escaped.replace(/\n/g, '<br>')
+    }
+    
+    // Add the image
+    result += `<img src="${escapeHtml(img.data)}" class="response-image" alt="Response image" />`
+    
+    lastIndex = img.index + img.length
+    
+    // Add a line break after image if there's more content
+    if (idx < images.length - 1 || lastIndex < text.length) {
+      result += '<br>'
+    }
+  })
+  
+  // Add remaining text after last image
+  if (lastIndex < text.length) {
+    const textAfter = text.substring(lastIndex)
+    const escaped = escapeHtml(textAfter)
+    result += escaped.replace(/\n/g, '<br>')
+  }
+  
+  return result
+}
+
+// Retry a question for all agents
+async function retryQuestionForAllAgents(questionId) {
+  if (!currentRun.value || !questionId) {
+    alert('No active run. Please start a benchmark first.')
+    return
+  }
+  
+  const qIdStr = String(questionId)
+  const enabledAgents = mergedAgents.value.filter(a => a.enabled && a.provider_type !== 'evaluator')
+  
+  if (enabledAgents.length === 0) {
+    alert('No enabled agents found. Please enable at least one agent.')
+    return
+  }
+  
+  // Retry for each enabled agent
+  for (const agent of enabledAgents) {
+    await rerunQuestion(agent.id, questionId)
+  }
+}
+
 function selectQuestionSet(qs) {
     currentQuestionSet.value = qs
+    emit('update:currentQuestionSet', qs)
 }
 
 function getQuestionCount(set) {
@@ -493,37 +809,24 @@ function startRunSetup() {
     console.warn('[Arena] Start blocked. Enabled count:', enabledAgents.value.length, 'Primary count:', primaryAgents.length)
     console.log('[Arena] Merged Agents dump:', mergedAgents.value)
     alert('Please enable at least one primary agent to start.')
-    emit('configure-agents')
     return
   }
   showRunSetup.value = true
 }
 
 function createNewQuestionSet() {
-  previousQuestionSet.value = currentQuestionSet.value
   currentQuestionSet.value = null 
-  showQuestionEditor.value = true
+  // Question editor is now handled in LeftSidebar
 }
 
-function onQuestionEditorClose() {
-  if (currentQuestionSet.value === null && previousQuestionSet.value) {
-    currentQuestionSet.value = previousQuestionSet.value
-  }
-  previousQuestionSet.value = null
-  showQuestionEditor.value = false
-}
-
-function onQuestionSetSaved(updated) {
+function handleQuestionSetUpdated(updated) {
   currentQuestionSet.value = updated
-  previousQuestionSet.value = null
-  showQuestionEditor.value = false
 }
 
 function prevQuestion() {
   const idx = currentQuestionIndex.value
   if (idx > 0) {
     selectedQuestionId.value = flatQuestions.value[idx - 1].id
-    if (!props.isZenMode) emit('toggle-zen', true)
   }
 }
 
@@ -531,7 +834,6 @@ function nextQuestion() {
   const idx = currentQuestionIndex.value
   if (idx < flatQuestions.value.length - 1) {
     selectedQuestionId.value = flatQuestions.value[idx + 1].id
-    if (!props.isZenMode) emit('toggle-zen', true)
   }
 }
 
@@ -614,7 +916,6 @@ function setCachedRunForQS(qsId, data) {
 
 function reloadResults() {
   if (currentQuestionSet.value) {
-    console.log('[Arena] Manually reloading results...')
     fetchLatestResultsForQS(currentQuestionSet.value.id)
   }
 }
@@ -622,7 +923,6 @@ function reloadResults() {
 function ensureResultsLoaded() {
   setTimeout(() => {
     if (currentQuestionSet.value && !currentRun.value && !isLoadingResults.value && !isRunning.value) {
-       console.log('[Arena] Auto-healing: Results missing, triggering reload...')
        reloadResults()
     }
   }, 1000)
@@ -689,13 +989,13 @@ watch(() => wsState.recentRuns, () => {
   }
 }, { deep: true })
 
-function getAgentResults(agentId) {
+function getAgentResults(agentId, includeAllQuestions = false) {
   const results = runResults.value[agentId] || {}
   
-  // Filter questions if a specific one is selected
-  const targetQuestions = selectedQuestionId.value 
-    ? flatQuestions.value.filter(q => String(q.id) === String(selectedQuestionId.value))
-    : flatQuestions.value
+  // Filter questions if a specific one is selected (unless includeAllQuestions is true)
+  const targetQuestions = (includeAllQuestions || !selectedQuestionId.value)
+    ? flatQuestions.value
+    : flatQuestions.value.filter(q => String(q.id) === String(selectedQuestionId.value))
 
   const isAgentRunning = isRunning.value && 
                        activeRunQuestionSetId.value === currentQuestionSet.value?.id && 
@@ -763,7 +1063,6 @@ async function handleStartRun({ questionSetId, agentIds }) {
     
     // Process buffered results
     if (pendingResultsBuffer.value.length > 0) {
-      console.log(`[Arena] Processing ${pendingResultsBuffer.value.length} buffered results for run ${currentRun.value.id}`)
       pendingResultsBuffer.value.forEach(data => {
         if (data.run_id === currentRun.value.id) {
           processTaskCompleted(data)
@@ -828,7 +1127,6 @@ async function handleRunSave(payload) {
       ...savedQuestionSet,
       agents: newAgents
     }
-    console.log('[Arena] handleRunSave: Updated currentQuestionSet.agents count:', currentQuestionSet.value.agents?.length)
   }
 }
 
@@ -888,10 +1186,8 @@ async function rerunQuestion(agentId, questionId) {
       }
 
       if (targetMatch) {
-          console.log(`[Frontend] Resolved target result for evaluator retry: ${targetMatch.id} (Agent ${targetMatch.agent_id})`)
           resultIdToUse = targetMatch.id
       } else {
-          console.warn('[Frontend] Could not resolve target result for evaluator retry. Letting backend heuristic handle it.')
           resultIdToUse = '' // Reset to empty so backend heuristic kicks in
       }
   }
@@ -1081,33 +1377,73 @@ onMounted(async () => {
     })
 })
 
-function exportToPdf() {
-  if (!currentRun.value) return
+// Helper function to check if any results are still loading
+function hasLoadingResults() {
+  if (!runResults.value || !currentRun.value) return false
   
-  // Build agents array from displayAgents with their results
-  const agentsArray = displayAgents.value.map(agent => ({
-    id: agent.id,
-    name: agent.name || agent.config?.name || 'Agent',
-    provider: agent.provider_type,
-    config: agent.config,
-    results: getAgentResults(agent.id)
-  }))
-
-  const pData = exportResultsReport({
-    agentsRef: agentsArray,
-    calculateStats: calculateStats
-  })
-  
-  if (!pData) {
-    console.error('Export failed: No data returned')
-    return
+  for (const agentId in runResults.value) {
+    const agentResults = runResults.value[agentId]
+    for (const qId in agentResults) {
+      if (agentResults[qId].loading) {
+        return true
+      }
+    }
   }
+  return false
+}
+
+// Wait for all results to finish loading (with timeout)
+async function waitForResultsToLoad(maxWaitMs = 5000) {
+  const startTime = Date.now()
+  // Wait for isLoadingResults to be false
+  while (isLoadingResults.value && (Date.now() - startTime) < maxWaitMs) {
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  // Then wait for any individual results that are still loading
+  while (hasLoadingResults() && (Date.now() - startTime) < maxWaitMs) {
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+}
+
+async function exportToPdf() {
+  if (!currentRun.value || isExportingPdf.value) return
   
-  emit('trigger-print', {
-    workspaceName: currentQuestionSet.value?.name || 'Benchmark',
-    summary: pData.summary,
-    results: pData.results
-  })
+  isExportingPdf.value = true
+  
+  try {
+    // Ensure results are loaded before exporting
+    if (isLoadingResults.value || hasLoadingResults()) {
+      await waitForResultsToLoad()
+    }
+    
+    // Build agents array from displayAgents with their results
+    // Always include all questions in PDF export, regardless of selection
+    const agentsArray = displayAgents.value.map(agent => ({
+      id: agent.id,
+      name: agent.name || agent.config?.name || 'Agent',
+      provider: agent.provider_type,
+      config: agent.config,
+      results: getAgentResults(agent.id, true) // true = include all questions
+    }))
+
+    const pData = exportResultsReport({
+      agentsRef: agentsArray,
+      calculateStats: calculateStats
+    })
+    
+    if (!pData) {
+      console.error('Export failed: No data returned')
+      return
+    }
+    
+    emit('trigger-print', {
+      workspaceName: currentQuestionSet.value?.name || 'Benchmark',
+      summary: pData.summary,
+      results: pData.results
+    })
+  } finally {
+    isExportingPdf.value = false
+  }
 }
 
 // Removing local triggerBrowserPrint as it's handled by parent App.vue
@@ -1122,17 +1458,25 @@ function calculateStats(results) {
   let validations = { positive: 0, negative: 0, alternative: 0, partial: 0, notEvaluated: 0 }
   
   results.forEach(r => {
-    if (r.answer || r.error) answered++
+    const hasAnswer = r.answer
+    if (hasAnswer) answered++
     if (r.error) errors++
     if (r.duration) totalDuration += parseFloat(r.duration) || 0
     
-    if (r.humanValidation) {
-      const v = r.humanValidation.toLowerCase()
-      validations[v] = (validations[v] || 0) + 1
-    } else {
-      validations.notEvaluated++
+    // Only count validations for questions that have been answered
+    if (hasAnswer) {
+      if (r.humanValidation) {
+        const v = r.humanValidation.toLowerCase()
+        validations[v] = (validations[v] || 0) + 1
+      } else {
+        validations.notEvaluated++
+      }
     }
   })
+  
+  // Calculate percentages based on answered questions, not total questions
+  const answeredCount = answered || 1 // Avoid division by zero
+  const totalValidations = validations.positive + validations.negative + validations.alternative + validations.partial + validations.notEvaluated
   
   return {
     answered,
@@ -1141,12 +1485,21 @@ function calculateStats(results) {
     avgDuration: answered ? (totalDuration / answered).toFixed(2) : 0,
     validations,
     percentages: {
-      positive: total ? Math.round((validations.positive || 0) / total * 100) : 0,
-      negative: total ? Math.round((validations.negative || 0) / total * 100) : 0,
-      alternative: total ? Math.round((validations.alternative || 0) / total * 100) : 0,
-      partial: total ? Math.round((validations.partial || 0) / total * 100) : 0,
+      positive: totalValidations > 0 ? Math.round((validations.positive || 0) / totalValidations * 100) : 0,
+      negative: totalValidations > 0 ? Math.round((validations.negative || 0) / totalValidations * 100) : 0,
+      alternative: totalValidations > 0 ? Math.round((validations.alternative || 0) / totalValidations * 100) : 0,
+      partial: totalValidations > 0 ? Math.round((validations.partial || 0) / totalValidations * 100) : 0,
     }
   }
+}
+
+// Format duration for display (same as PDF)
+function formatDuration(value) {
+  const seconds = parseFloat(value)
+  if (Number.isFinite(seconds)) {
+    return seconds >= 60 ? `${(seconds / 60).toFixed(1)} min` : `${seconds.toFixed(1)} s`
+  }
+  return '0 s'
 }
 
 onUnmounted(() => {
@@ -1167,9 +1520,210 @@ defineExpose({
 <style scoped>
 .benchmark-arena {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100%;
   width: 100%;
+  overflow: hidden;
+}
+
+.questions-list-view {
+  width: 400px;
+  background: #ffffff;
+  border-right: 1px solid #e2e8f0;
+  padding: 1rem 1.5rem;
+  overflow-y: auto;
+  flex-shrink: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  z-index: 1;
+}
+
+.questions-list-view h3 {
+  margin: 0 0 1rem 0;
+  color: #1e293b;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.questions-list-view .questions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.questions-list-view .question-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  transition: background 0.2s ease;
+}
+
+.questions-list-view .question-item:hover {
+  background: rgba(99, 102, 241, 0.05);
+}
+
+.questions-list-view .question-number {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: #6366f1;
+  min-width: 2rem;
+}
+
+.questions-list-view .question-content-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.questions-list-view .question-text {
+  color: #1e293b;
+  line-height: 1.5;
+}
+
+.questions-list-view .question-category {
+  flex-shrink: 0;
+  padding: 0.25rem 0.5rem;
+  background: #6366f1;
+  color: white;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  width: fit-content;
+}
+
+.questions-list-view .question-response {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #e2e8f0;
+}
+
+.questions-list-view .response-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 0.5rem;
+}
+
+.questions-list-view .response-text {
+  font-size: 0.875rem;
+  color: #475569;
+  line-height: 1.5;
+  background: #f8fafc;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  border-left: 3px solid #6366f1;
+  word-wrap: break-word;
+}
+
+.questions-list-view .response-image {
+  max-width: 100%;
+  height: auto;
+  margin: 0.5rem 0;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  display: block;
+}
+
+.questions-list-view .btn-expand-response {
+  display: inline-block;
+  margin-top: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #6366f1;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+  transition: color 0.2s ease;
+}
+
+.questions-list-view .btn-expand-response:hover {
+  color: #4f46e5;
+}
+
+.questions-list-view .question-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.questions-list-view .question-status {
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.questions-list-view .question-status.status-not-run {
+  background: #e2e8f0;
+  color: #64748b;
+}
+
+.questions-list-view .question-status.status-loading {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.questions-list-view .question-status.status-completed {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.questions-list-view .question-status.status-error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.questions-list-view .btn-retry {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  background: #6366f1;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  white-space: nowrap;
+}
+
+.questions-list-view .btn-retry:hover {
+  background: #4f46e5;
+}
+
+.questions-list-view .btn-retry:active {
+  background: #4338ca;
+}
+
+.questions-list-view .empty-state {
+  padding: 2rem;
+  text-align: center;
+  color: #64748b;
+}
+
+.questions-list-view .empty-state p {
+  margin: 0;
+}
+
+.benchmark-arena-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -1184,35 +1738,8 @@ defineExpose({
 }
 
 /* Scoped styles that were specifically for the runner/arena */
-/* Zen Mode Exit Overlay */
-.zen-mode-exit-overlay {
-  position: fixed;
-  top: 20px;
-  right: 20px;
-  z-index: 2000;
-  pointer-events: auto;
-}
-
-.btn-exit-zen {
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(8px);
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  color: #475569;
-  font-weight: 600;
-  padding: 0.6rem 1.2rem;
-  border-radius: 999px;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  transition: all 0.2s;
-}
-
-.btn-exit-zen:hover {
-  background: white;
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
-  color: #1e293b;
+.main-content-area {
+  position: relative;
 }
 
 /* Running Indicator Dot */
@@ -1310,6 +1837,278 @@ defineExpose({
 @keyframes slide-down {
   from { top: -50px; opacity: 0; }
   to { top: 20px; opacity: 1; }
+}
+
+.benchmark-arena {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Main Content Area - Side by side layout */
+.main-content-area {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  gap: 16px;
+  overflow: hidden;
+  padding: 16px;
+  position: relative;
+}
+
+.arena-label {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #666;
+  z-index: 10;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid #e0e0e0;
+  pointer-events: none;
+}
+
+/* Questions List View */
+.questions-list-view {
+  flex: auto;
+  overflow-y: auto;
+  padding: 24px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e0e0e0;
+}
+
+.questions-list-header {
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.questions-list-header h2 {
+  margin: 0 0 8px 0;
+  font-size: 24px;
+  color: #333;
+}
+
+.questions-count {
+  margin: 0;
+  color: #666;
+  font-size: 14px;
+}
+
+/* Stats Section */
+.questions-stats-section {
+  margin-bottom: 24px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.agent-stat-card {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.agent-stat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.agent-stat-header h4 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+}
+
+.evaluator-badge-small {
+  font-size: 11px;
+  padding: 4px 8px;
+  background: #fff3cd;
+  color: #856404;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.quality-score-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: #007bff;
+  background: #e7f3ff;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.agent-stat-metrics {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.metric-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: #333;
+  line-height: 1.2;
+}
+
+.metric-label {
+  font-size: 11px;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 4px;
+}
+
+.validations-bar-small {
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #f0f0f0;
+}
+
+.v-segment-small {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.v-segment-small.pos {
+  background: #10b981;
+}
+
+.v-segment-small.alt {
+  background: #3b82f6;
+}
+
+.v-segment-small.par {
+  background: #f59e0b;
+}
+
+.v-segment-small.neg {
+  background: #ef4444;
+}
+
+.questions-list-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.question-item {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  gap: 16px;
+}
+
+.question-item:hover {
+  border-color: #007bff;
+  box-shadow: 0 2px 8px rgba(0, 123, 255, 0.1);
+}
+
+.question-item.selected {
+  border-color: #007bff;
+  background: #e7f3ff;
+  box-shadow: 0 2px 8px rgba(0, 123, 255, 0.15);
+}
+
+.question-number {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f0f0f0;
+  border-radius: 6px;
+  font-weight: 600;
+  color: #666;
+  font-size: 14px;
+}
+
+.question-item.selected .question-number {
+  background: #007bff;
+  color: white;
+}
+
+.question-content {
+  flex: 1;
+}
+
+.question-text {
+  font-size: 15px;
+  line-height: 1.5;
+  color: #333;
+  margin-bottom: 8px;
+}
+
+.question-category {
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+}
+
+.action-buttons-row {
+  position: inherit;
+  padding: 2px 16px;
+  background: white;
+  display: flex;
+  gap: 8px;
+  z-index: 100;
+  border-bottom: 1px solid #e0e0e0
+}
+
+.action-buttons-row .btn {
+  padding: 8px 16px;
+  font-size: 14px;
+  position: relative;
+}
+
+.pdf-loading-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-right: 4px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.btn-pdf:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.chat-container {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0; /* Allow flex shrinking */
 }
 
 </style>

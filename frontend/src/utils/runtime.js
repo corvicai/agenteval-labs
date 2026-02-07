@@ -24,7 +24,7 @@ export function getWebSocketHost() {
   const host = window.location.host || ''
   const isDev = config.DEV
 
-  // 1. Explicit override via environment variable
+  // 1. Explicit override via environment variable (highest priority)
   if (overrideHost) {
     if (overridePort && !overrideHost.includes(':')) {
       return `${overrideHost}:${overridePort}`
@@ -32,14 +32,17 @@ export function getWebSocketHost() {
     return overrideHost
   }
 
-  // 2. Localhost or dev mode: include port for local testing
-  // However, if we are on a public domain (not localhost) but in dev mode (npm run dev),
-  // we should check if the port is a standard one or the one we expect.
+  // 2. Force localhost for local development (when accessing via localhost or 127.0.0.1)
   if (isLocalhost(hostname)) {
-    return host
+    return host // Returns "localhost:3010" or "127.0.0.1:3010"
   }
 
-  // 3. Special case: If we are on a subdomain but the port is 3010 or 5173, 
+  // 3. In dev mode, always prefer localhost if available
+  if (isDev && (hostname.includes('localhost') || hostname === '127.0.0.1')) {
+    return port ? `localhost:${port}` : 'localhost'
+  }
+
+  // 4. Special case: If we are on a subdomain but the port is 3010 or 5173, 
   // it might be a tunnel or specific dev setup. 
   // BUT the user reported "pending" on 5173 when accessing a public URL.
   // If the port is standard (80/443), we definitely don't want to include it.
@@ -47,7 +50,7 @@ export function getWebSocketHost() {
     return hostname
   }
 
-  // 4. Fallback: use the current host (includes port)
+  // 5. Fallback: use the current host (includes port)
   return host
 }
 

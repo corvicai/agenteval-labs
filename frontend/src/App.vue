@@ -1,5 +1,5 @@
 <template>
-  <div class="app-root" :class="{ 'has-banner': isImpersonating, 'zen-mode-active': isZenMode }">
+  <div class="app-root" :class="{ 'has-banner': isImpersonating }">
     <!-- Impersonation Banner -->
     <div v-if="isImpersonating" class="impersonation-banner no-print">
       <div class="banner-content">
@@ -49,132 +49,7 @@
 
     <!-- Main App (when authenticated and ready) -->
     <template v-else>
-      <!-- Workspace Selector Modal -->
-      <div v-if="showWorkspaceModal" 
-           class="actions-modal-overlay workspace-overlay" 
-           @click.self="currentUser?.organization ? showWorkspaceModal = false : null">
-        <div class="actions-modal workspace-modal">
-          <div class="actions-modal-header">
-            <h3>🏢 Select Workspace</h3>
-            <button v-if="currentUser?.organization" class="btn-close" @click="showWorkspaceModal = false">×</button>
-          </div>
-          <p class="workspace-modal-subtitle">Choose a workspace to benchmark agents</p>
-          
-          <div v-if="workspacesLoading" class="workspace-state">
-            <span class="loading-spinner"></span> Loading workspaces...
-          </div>
-          <div v-else-if="workspacesError" class="workspace-error">{{ workspacesError }}</div>
-          <div v-else class="workspace-grid">
-            <div 
-              v-for="ws in (workspaces || [])" 
-              :key="ws.id"
-              class="workspace-card"
-              :class="{ active: currentWorkspace?.id === ws.id }"
-              @click="selectWorkspace(ws)"
-            >
-              <h4 class="workspace-name">{{ ws.name }}</h4>
-              <div class="workspace-meta">
-                <span>{{ ws.agent_count || 0 }} agents</span>
-              </div>
-              <button 
-                class="btn-clone-ws" 
-                @click.stop="startCloningWorkspace(ws)"
-                title="Clone this workspace"
-              >📋 Clone</button>
-            </div>
-            <div v-if="!isCreatingWorkspace && !isCloningWorkspace" 
-                 class="workspace-card new-workspace" 
-                 :class="{ disabled: !currentUser?.organization }"
-                 @click="startCreatingWorkspace"
-            >
-              <h4 class="workspace-name">+ New Workspace</h4>
-              <p v-if="!currentUser?.organization" class="workspace-meta">Select an organization first</p>
-            </div>
-            <div v-else-if="isCreatingWorkspace" class="workspace-card create-workspace-form">
-              <input 
-                v-model="newWorkspaceName" 
-                ref="newWsInput"
-                placeholder="Workspace Name" 
-                class="ws-name-input"
-                @keyup.enter="createWorkspaceInline"
-                @keyup.esc="isCreatingWorkspace = false"
-              />
-              <div class="ws-create-actions">
-                <button class="btn-create-ws" @click="createWorkspaceInline" :disabled="!newWorkspaceName.trim()">Create</button>
-                <button class="btn-cancel-ws" @click="isCreatingWorkspace = false">Cancel</button>
-              </div>
-            </div>
-            <div v-else-if="isCloningWorkspace" class="workspace-card clone-workspace-form">
-              <p class="clone-source-label">📋 Clone from: <strong>{{ cloneSourceWorkspace?.name }}</strong></p>
-              <input 
-                v-model="cloneNewName" 
-                ref="cloneWsInput"
-                placeholder="New Workspace Name" 
-                class="ws-name-input"
-                @keyup.enter="cloneWorkspaceInline"
-                @keyup.esc="cancelCloning"
-              />
-              <div class="ws-create-actions">
-                <button class="btn-create-ws" @click="cloneWorkspaceInline" :disabled="!cloneNewName.trim() || cloningLoading">
-                  {{ cloningLoading ? '⏳ Cloning...' : '📋 Clone' }}
-                </button>
-                <button class="btn-cancel-ws" @click="cancelCloning">Cancel</button>
-              </div>
-            </div>
-          </div>
-
-          <!-- Organization Selection -->
-          <div class="org-selection-section">
-            <div class="actions-modal-header border-top">
-              <h3>🏢 Organizations</h3>
-            </div>
-            
-            <div v-if="(userOrganizations?.length || 0) > 1" class="org-list-wrapper">
-              <p class="workspace-modal-subtitle">Switch your active organization context</p>
-              <div class="org-grid">
-                <div 
-                  v-for="org in (userOrganizations || [])" 
-                  :key="org.id"
-                  class="org-item-card"
-                  :class="{ active: currentUser?.organization?.id === org.id, 'is-active': currentUser?.organization?.id === org.id }"
-                  @click="switchToOrg(org)"
-                >
-                  <div class="org-item-icon">🏢</div>
-                  <div class="org-item-info">
-                    <span class="org-item-name">{{ org.name }}</span>
-                    <span class="org-item-role">{{ org.role }}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="join-org-container">
-              <div v-if="!isJoiningOrg" class="join-org-trigger" @click="isJoiningOrg = true">
-                <span class="join-icon">➕</span> Join new organization with invite code
-              </div>
-              <div v-else class="join-org-form">
-                <input 
-                  v-model="joinOrgInviteCode" 
-                  placeholder="Enter Invite Code" 
-                  class="join-org-input"
-                  @keyup.enter="handleJoinOrg"
-                />
-                <div class="join-org-actions">
-                  <button class="btn-join-org" @click="handleJoinOrg" :disabled="!joinOrgInviteCode.trim() || joinLoading">
-                    {{ joinLoading ? 'Joining...' : 'Join' }}
-                  </button>
-                  <button class="btn-cancel-join" @click="isJoiningOrg = false">Cancel</button>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <!-- Emergency Logout in Modal (if stuck) -->
-          <div v-if="!currentUser?.organization" class="modal-footer-logout">
-             <button class="btn-link logout-link" @click="handleLogout">🚪 Logout of account</button>
-          </div>
-        </div>
-      </div>
+      <!-- Workspace Selector Modal - Hidden: Each user has their own workspace -->
 
       <!-- Main App Container -->
       <div class="app-container">
@@ -183,30 +58,19 @@
           <div class="header-left">
         <CorvicLogo width="100px" height="28px" class="header-logo" @click="viewMode = 'benchmarks'" />
         <h1 @click="viewMode = 'benchmarks'">Benchmarking</h1>
-        <div v-if="currentWorkspace" class="workspace-chip" @click="showWorkspaceModal = true">
-          <span class="org-label">{{ currentOrgName }} / </span>
-          <span>{{ currentWorkspace.name }}</span>
-          <span class="chip-arrow">▾</span>
-        </div>
-        <div v-if="isDev" class="dev-badge">🚧 DEV MODE</div>
       </div>
           <div class="controls">
             <div class="buttons">
-              <span class="user-badge" :class="{ admin: currentUser?.is_admin }" @click="openMyProfile">
-                {{ currentUser?.is_admin ? '👑' : '👤' }} {{ currentUser?.name }}
+              <span class="user-badge" @click="openMyProfile">
+                👤 {{ currentUser?.name }}
               </span>
-              <button class="btn btn-secondary workspace-trigger" @click="showWorkspaceModal = true">
-                🏢 {{ currentWorkspace?.name || 'Select Workspace' }}
+              <button class="btn btn-danger btn-logout-compact icon-only has-tooltip"
+                      title="Logout"
+                      aria-label="Logout"
+                      @click="handleLogout">
+                <span class="logout-icon">→</span>
               </button>
-              <button class="btn btn-primary" @click="showConfig = !showConfig">
-                🤖 {{ showConfig ? 'Hide Agents' : 'Manage Agents' }}
-              </button>
-              <button class="btn btn-primary" @click="showActionsModal = true" :disabled="!currentWorkspace">
-                ⚙️ Actions
-              </button>
-              <button class="btn btn-danger" @click="handleLogout">
-                🚪 Logout
-              </button>
+
             </div>
           </div>
         </header>
@@ -224,18 +88,6 @@
             @click="viewMode = 'stats'"
           >📊 Stats</button>
           <button 
-            v-if="isManager" 
-            class="nav-btn" 
-            :class="{ active: viewMode === 'manager' }"
-            @click="viewMode = 'manager'"
-          >👔 Manager</button>
-          <button 
-            v-if="currentUser?.is_admin" 
-            class="nav-btn" 
-            :class="{ active: viewMode === 'admin' }"
-            @click="viewMode = 'admin'"
-          >⚙️ Admin</button>
-          <button 
             class="nav-btn" 
             :class="{ active: viewMode === 'docs' }"
             @click="viewMode = 'docs'"
@@ -246,38 +98,13 @@
     <main v-if="viewMode === 'stats' && currentWorkspace" class="main-content">
       <StatsView 
         :workspaceId="currentWorkspace.id" 
-        :isAdmin="currentUser?.is_admin"
       />
     </main>
 
-    <!-- Admin Panel (for admins only) -->
-    <main v-if="viewMode === 'admin' && currentUser?.is_admin" class="main-content no-padding">
-      <AdminPanel 
-        :current-user-id="currentUser?.id"
-        :initial-tab="adminTab"
-        @close="viewMode = 'benchmarks'"
-        @view-user-profile="handleViewUserProfile"
-        @view-org-profile="handleViewOrgProfile"
-        @tab-change="val => adminTab = val"
-      />
-    </main>
 
-    <!-- Admin Profile View -->
-    <main v-if="viewMode === 'admin-profile'" class="main-content">
-      <AdminProfileView 
-        :entity-type="profileEntityType"
-        :entity-id="profileEntityId"
-        @back="() => { currentUser?.is_admin ? viewMode = 'admin' : viewMode = 'benchmarks'; profileEntityType = null; profileEntityId = null; }"
-        @view-user="handleViewUserProfile"
-        @view-org="handleViewOrgProfile"
-        @updated="handleProfileUpdated"
-      />
-    </main>
-
-    <!-- Manager Panel (for org managers) -->
+    <!-- Manager Panel -->
     <main v-if="viewMode === 'manager' && isManager" class="main-content">
       <ManagerPanel 
-        :org-name="currentOrgName"
         :current-user-id="currentUser?.id"
         :workspace-id="currentWorkspace?.id"
       />
@@ -290,75 +117,39 @@
 
         <!-- Main Benchmarking Content -->
         <!-- History View -->
-        <main v-if="viewMode === 'benchmarks' && benchmarkMode === 'history'" class="main-content no-padding">
+        <!-- <main v-if="viewMode === 'benchmarks' && benchmarkMode === 'history'" class="main-content no-padding">
+        
           <BenchmarkDocumentView 
              :workspace-id="currentWorkspace?.id"
              :pre-filter="historyFilter"
              @back="benchmarkMode = 'runner'"
              @trigger-print="handleTriggerPrint"
           />
-        </main>
+        </main> -->
 
         <!-- Arena View -->
-        <main v-show="viewMode === 'benchmarks' && benchmarkMode === 'runner'" class="main-content no-padding">
+        <!-- Arena View - Always show when in benchmarks mode -->
+        <main v-if="viewMode === 'benchmarks'" class="main-content no-padding">
           <KeepAlive>
             <BenchmarkArena 
-                v-if="currentWorkspace"
-                :key="currentWorkspace.id"
-                :workspace-id="currentWorkspace.id"
+                v-if="viewMode === 'benchmarks'"
+                :key="currentWorkspace?.id || 'no-workspace'"
+                :workspace-id="currentWorkspace?.id"
                 :agents="agents || []"
                 :question-sets="questionSets || []"
                 :initial-question-set-id="currentQuestionSet?.id"
                 @update:currentQuestionSet="val => currentQuestionSet = val"
-                @configure-agents="showConfig = true"
                 @view-history="goToHistory"
                 @trigger-print="handleTriggerPrint"
-                :is-zen-mode="isZenMode"
-                @toggle-zen="val => isZenMode = val"
+                @manage-agents="showConfig = true"
             />
           </KeepAlive>
-          <div v-if="!currentWorkspace" class="benchmarks-empty-state">
-             <div class="empty-icon">🏢</div>
-             <h3>Select a Workspace</h3>
-             <p>You need to select a workspace to start benchmarking.</p>
-             <button class="btn btn-primary" @click="showWorkspaceModal = true">Select Workspace</button>
-          </div>
+          <!-- Workspace is automatically selected for each user -->
         </main>
 
       </div>
 
-      <!-- Actions Modal -->
-      <div v-if="showActionsModal" class="actions-modal-overlay" @click.self="showActionsModal = false">
-        <div class="actions-modal">
-          <div class="actions-modal-header">
-            <h3>⚙️ Actions</h3>
-            <button class="btn-close" @click="showActionsModal = false">×</button>
-          </div>
-          <div class="actions-grid">
-            <button class="btn btn-primary" @click="showQuestionEditor = true; showActionsModal = false" :disabled="!currentQuestionSet">
-              ✏️ Edit Questions
-            </button>
-            <button class="btn btn-primary" @click="showConfig = !showConfig; showActionsModal = false">
-              🤖 {{ showConfig ? 'Hide' : 'Configure' }} Agents
-            </button>
-            <!-- Summary toggle removed as it lives in Arena now, or we can message it via refs if needed, but easier to just let Arena handle it internally -->
-            <button class="btn btn-export" @click="showImportModal = true; showActionsModal = false">
-              📥 Import Questions
-            </button>
-            <button class="btn btn-export" @click="exportQuestions" :disabled="!currentQuestionSet">
-              📤 Export Questions
-            </button>
-            <!-- Run Evaluators also likely belongs in Arena, but keeping global actions maybe? NO, it acts on current active run. -->
-            <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 0.5rem 0; width: 100%;">
-            <button class="btn btn-secondary" @click="openMyProfile(); showActionsModal = false">
-              👤 View my profile
-            </button>
-            <button class="btn btn-secondary" @click="showWorkspaceModal = true; showActionsModal = false">
-              🏢 Change Workspace
-            </button>
-          </div>
-        </div>
-      </div>
+
       <!-- Question Editor Modal (Global access) -->
       <QuestionEditorModal 
         v-if="showQuestionEditor"
@@ -398,8 +189,6 @@ import OnboardingScreen from './components/OnboardingScreen.vue'
 import CorvicLogo from './components/CorvicLogo.vue'
 import BenchmarkArena from './components/BenchmarkArena.vue'
 import BenchmarkDocumentView from './components/BenchmarkDocumentView.vue'
-import AdminPanel from './components/AdminPanel.vue';
-import AdminProfileView from './components/AdminProfileView.vue';
 import ManagerPanel from './components/ManagerPanel.vue';
 import StatsView from './components/StatsView.vue';
 import QuestionEditorModal from './components/QuestionEditorModal.vue';
@@ -421,10 +210,7 @@ const { state: wsState, syncState, connect: wsConnect, disconnect: wsDisconnect 
 // Auth State
 const isAuthenticated = ref(api.isLoggedIn())
 const currentUser = ref(api.getStoredUser())
-const currentOrgName = computed(() => {
-  return currentUser.value?.organization?.name || currentUser.value?.organization_name || 'My Organization'
-})
-const viewMode = ref(localStorage.getItem('viewMode') || 'benchmarks'); // 'benchmarks', 'admin', 'stats', 'admin-profile', 'manager'
+const viewMode = ref(localStorage.getItem('viewMode') || 'benchmarks'); // 'benchmarks', 'stats', 'manager'
 const benchmarkMode = ref(localStorage.getItem('benchmarkMode') || 'runner') // 'history', 'runner'
 const isLoggingIn = ref(false) // Flag to prevent concurrent initialization during login
 
@@ -432,10 +218,6 @@ const isLoggingIn = ref(false) // Flag to prevent concurrent initialization duri
 const isManager = ref(false)
 const appReady = ref(false)
 
-// Admin Profile View State
-const profileEntityType = ref(localStorage.getItem('profileEntityType')) // 'user' or 'organization'
-const profileEntityId = ref(localStorage.getItem('profileEntityId'))
-const adminTab = ref(localStorage.getItem('adminTab') || 'users') // Remember which tab was active
 
 // Watch benchmarkMode to persist
 // Watch benchmarkMode to persist
@@ -447,19 +229,7 @@ watch(viewMode, (newVal) => {
   localStorage.setItem('viewMode', newVal)
 })
 
-watch(adminTab, (newVal) => {
-  localStorage.setItem('adminTab', newVal)
-})
 
-watch(profileEntityType, (newVal) => {
-  if (newVal) localStorage.setItem('profileEntityType', newVal)
-  else localStorage.removeItem('profileEntityType')
-})
-
-watch(profileEntityId, (newVal) => {
-  if (newVal) localStorage.setItem('profileEntityId', newVal)
-  else localStorage.removeItem('profileEntityId')
-})
 
 // State
 const showWorkspaceModal = ref(false)
@@ -468,7 +238,6 @@ const showImportModal = ref(false)
 const showConfig = ref(false)
 const showSummary = ref(false)
 const showQuestionEditor = ref(false)
-const isZenMode = ref(false)
 const previousQuestionSet = ref(null) // Used to restore when canceling new set creation
 const showRunSetup = ref(false)
 const showOnboarding = ref(false)
@@ -482,10 +251,6 @@ const refreshInterval = ref(null)
 const agents = computed(() => wsState.agents)
 const questionSets = computed(() => wsState.questionSets)
 const currentQuestionSet = ref(null)
-const userOrganizations = ref([])
-const isJoiningOrg = ref(false)
-const joinOrgInviteCode = ref('')
-const joinLoading = ref(false)
 const loadingResults = ref(false)
 
 
@@ -573,27 +338,8 @@ function applyMeResponse(me) {
   const incomingUser = me.user || {}
   const mergedUser = { ...existingUser, ...incomingUser }
 
-  const orgFromMe = me.organization
-  if (orgFromMe?.name && (!mergedUser.organization || mergedUser.organization?.id !== orgFromMe.id)) {
-    mergedUser.organization = orgFromMe
-  }
-
-  const orgList = Array.isArray(incomingUser.organizations) ? incomingUser.organizations : []
-  if (!mergedUser.organization && orgList.length === 1) {
-    mergedUser.organization = { id: orgList[0].id, name: orgList[0].name }
-  }
-
-  if (mergedUser.organization?.name) {
-    mergedUser.organization_name = mergedUser.organization.name
-  } else if (!mergedUser.organization_name && existingUser.organization_name) {
-    mergedUser.organization_name = existingUser.organization_name
-  }
-
   currentUser.value = mergedUser
-
-  if (Array.isArray(incomingUser.organizations)) {
-    userOrganizations.value = incomingUser.organizations
-  }
+  api.setStoredUser(mergedUser)
 }
 
 function handleArenaHistoryClick() {
@@ -602,18 +348,7 @@ function handleArenaHistoryClick() {
 }
 
 function openMyProfile() {
-  console.log('[App] Opening my profile...', currentUser.value)
-  if (!currentUser.value) return
-  profileEntityType.value = 'user'
-  profileEntityId.value = currentUser.value.id || currentUser.value.ID
-  viewMode.value = 'admin-profile'
-  console.log('[App] State set:', { profileEntityType: profileEntityType.value, profileEntityId: profileEntityId.value, viewMode: viewMode.value })
-}
-
-function handleProfileUpdated(updatedUser) {
-  if (currentUser.value && currentUser.value.id === updatedUser.id) {
-    currentUser.value = { ...currentUser.value, ...updatedUser }
-  }
+  // Profile view removed - admin functionality removed
 }
 
 const enabledAgents = computed(() => agents.value.filter(a => a.enabled))
@@ -676,14 +411,11 @@ async function onLogin() {
       await wsConnect(null)
     }
 
-    // 3. Load Workspaces
+    // 3. Load Workspaces (auto-selects user's workspace)
     await loadWorkspaces()
     
     if (currentWorkspace.value) {
       await loadQuestionSets()
-    } else {
-       // If no workspace, we should be connected anonymously (done by loadWorkspaces) -> No, we are authenticated user now.
-       showWorkspaceModal.value = true
     }
     
     // 4. Check status and fetch full profile (workspaces + orgs)
@@ -697,11 +429,7 @@ async function onLogin() {
       console.log('Could not fetch user profile:', e)
     }
 
-    // Check if onboarding is needed (Authenticated but no organizations)
-    if (isAuthenticated.value && (!userOrganizations.value || userOrganizations.value.length === 0)) {
-       console.log('[App] No organizations found, showing Onboarding Screen')
-       showOnboarding.value = true
-    }
+    // Onboarding check removed - users don't need organizations
 
   } catch (err) {
     console.error('[App] Login initialization failed:', err)
@@ -717,21 +445,6 @@ function onOnboardingCompleted() {
   window.location.reload()
 }
 
-// Admin Profile Navigation
-
-function handleViewUserProfile(userId) {
-  adminTab.value = 'users'
-  profileEntityType.value = 'user'
-  profileEntityId.value = userId
-  viewMode.value = 'admin-profile'
-}
-
-function handleViewOrgProfile(orgId) {
-  adminTab.value = 'organizations'
-  profileEntityType.value = 'organization'
-  profileEntityId.value = orgId
-  viewMode.value = 'admin-profile'
-}
 
 async function handleLogout() {
   await api.logout()
@@ -742,6 +455,8 @@ async function handleLogout() {
   // We just need to clear global state.
   isManager.value = false
   wsService.disconnect()
+  // Redirect to login page
+  viewMode.value = 'benchmarks'
 }
 
 // Methods
@@ -777,17 +492,24 @@ async function loadWorkspaces() {
       }
     }
 
+    // Auto-select user's workspace (each user has their own workspace)
     if (currentWorkspace.value) {
       const exists = workspaces.value.find(w => w.id === currentWorkspace.value.id)
       if (!exists) {
-        console.warn('Current workspace no longer exists, clearing.')
-        currentWorkspace.value = null
-        localStorage.removeItem('workspace')
-        showWorkspaceModal.value = true
+        console.warn('Current workspace no longer exists, selecting first available.')
+        // Select first workspace if current one doesn't exist
+        if (workspaces.value.length > 0) {
+          currentWorkspace.value = workspaces.value[0]
+          await selectWorkspace(workspaces.value[0])
+        } else {
+          currentWorkspace.value = null
+          localStorage.removeItem('workspace')
+        }
       }
     } else if ((workspaces.value?.length || 0) > 0) {
-      // Fallback: if no workspace selected but list is not empty, maybe show modal
-      showWorkspaceModal.value = true
+      // Auto-select first workspace if none selected
+      currentWorkspace.value = workspaces.value[0]
+      await selectWorkspace(workspaces.value[0])
     }
   } catch (e) {
     const message = String(e?.message || e || '')
@@ -800,60 +522,6 @@ async function loadWorkspaces() {
   }
 }
 
-async function switchToOrg(org) {
-  if (currentUser.value?.organization?.id === org.id) return
-  
-  try {
-    showWorkspaceModal.value = false
-    loadingResults.value = true // Show loading overlay
-    
-    // Call REST login with orgId to get new credentials
-    const result = await api.selectOrganization(org.id)
-    
-    // Re-initialize app state with new org
-    await onLogin()
-    
-    // Explicitly refresh page to ensure all components reset correctly
-    window.location.reload()
-  } catch (e) {
-    console.error('Failed to switch organization:', e)
-    alert('Failed to switch organization: ' + (e.message || 'Unknown error'))
-  } finally {
-    loadingResults.value = false
-  }
-}
-
-async function handleJoinOrg() {
-  if (!joinOrgInviteCode.value.trim()) return
-  
-  joinLoading.value = true
-  try {
-    const result = await wsService.joinOrganization(joinOrgInviteCode.value)
-    alert('Successfully joined organization!')
-    isJoiningOrg.value = false
-    joinOrgInviteCode.value = ''
-    
-    // Store new workspace if provided
-    if (result.workspace) {
-      localStorage.setItem('workspace', JSON.stringify(result.workspace))
-      currentWorkspace.value = result.workspace
-    }
-
-    // Refresh user profile and organizations
-    const me = await wsService.getMe()
-    currentUser.value = me.user
-    userOrganizations.value = me.user.organizations || []
-    
-    showWorkspaceModal.value = false
-    
-    // If successfully joined, it's often better to reload to ensure all stores sync up
-    window.location.reload()
-  } catch (e) {
-    alert('Failed to join organization: ' + e.message)
-  } finally {
-    joinLoading.value = false
-  }
-}
 
 async function selectWorkspace(ws) {
   try {
@@ -918,6 +586,34 @@ function switchQuestionSet(id) {
   }
 }
 
+function getFlatQuestions(questionSet) {
+  if (!questionSet?.data) return []
+  
+  let data = questionSet.data
+  if (typeof data === 'string') {
+    try {
+      data = JSON.parse(data)
+    } catch (e) {
+      console.error('Failed to parse question set data:', e)
+      return []
+    }
+  }
+
+  const questions = []
+  const categories = data.categories || []
+  for (let catIdx = 0; catIdx < categories.length; catIdx++) {
+    const cat = categories[catIdx]
+    const catQuestions = cat.questions || []
+    for (let qIdx = 0; qIdx < catQuestions.length; qIdx++) {
+      const q = catQuestions[qIdx]
+      const questionText = q.question || q.text || ''
+      const qId = q.id != null && q.id !== '' ? String(q.id) : `${catIdx + 1}-${qIdx + 1}`
+      questions.push({ ...q, id: qId, category: cat.name, question: questionText })
+    }
+  }
+  return questions
+}
+
 function goToHistory(qs) {
   // Set filter
   historyFilter.value = qs.name || ''
@@ -947,10 +643,6 @@ function onQuestionEditorClose() {
 }
 
 function startCreatingWorkspace() {
-  if (!currentUser.value?.organization) {
-    alert('Please select an organization before creating a workspace.')
-    return
-  }
   isCreatingWorkspace.value = true
   newWorkspaceName.value = ''
   // Focus input next tick
@@ -1152,9 +844,6 @@ const isImpersonating = computed(() => {
 })
 
 const handleKeydown = (e) => {
-  if (e.key === 'Escape' && isZenMode.value) {
-    isZenMode.value = false
-  }
 }
 
 onMounted(async () => {
@@ -1183,10 +872,8 @@ onMounted(async () => {
       if (currentWorkspace.value) {
         await loadQuestionSets()
         // Check for active run to restore
-
-      } else {
-        showWorkspaceModal.value = true
       }
+      // Workspace is auto-selected for each user, no need to show modal
       
       // Check if user is a manager (via WebSocket)
       try {
@@ -1242,3 +929,89 @@ onUnmounted(() => {
 </script>
 
  
+/* Compact, modern logout button */
+.btn-logout-compact {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+
+  padding: 6px 10px;
+  border-radius: 10px;
+
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
+
+  /* soften the danger look */
+  background: rgba(239, 68, 68, 0.10);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  color: rgb(185, 28, 28);
+
+  box-shadow: none;
+
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 100ms ease;
+}
+
+.btn-logout-compact:hover {
+  background: rgba(239, 68, 68, 0.16);
+  border-color: rgba(239, 68, 68, 0.40);
+  box-shadow: 0 4px 10px rgba(239, 68, 68, 0.15);
+  transform: translateY(-1px);
+}
+
+.btn-logout-compact:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 6px rgba(239, 68, 68, 0.12);
+}
+
+.btn-logout-compact:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25);
+}
+.btn-logout-compact.icon-only {
+  padding: 6px 8px;
+}
+
+.btn-logout-compact.icon-only .logout-icon {
+  font-size: 14px;
+}
+
+/* Tooltip container */
+.btn-logout-compact.has-tooltip {
+  position: relative;
+}
+
+/* Hidden label */
+.btn-logout-compact .tooltip-text {
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 8px);
+  transform: translateY(-50%);
+
+  padding: 6px 10px;
+  border-radius: 8px;
+
+  background: #111827;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+
+  opacity: 0;
+  pointer-events: none;
+  transform-origin: right center;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+/* Show on hover / focus */
+.btn-logout-compact:hover .tooltip-text,
+.btn-logout-compact:focus-visible .tooltip-text {
+  opacity: 1;
+  transform: translateY(-50%) translateX(-2px);
+}
+
+
