@@ -40,7 +40,6 @@
       :current-question-set="currentQuestionSet"
       :agents="mergedAgents"
       :running-question-set-id="wsState.runningQuestionSetId"
-      :is-zen-mode="isZenMode"
       @create-question-set="createNewQuestionSet"
       @select-question-set="selectQuestionSet"
       @view-history="(qs) => $emit('view-history', qs)"
@@ -51,7 +50,7 @@
     <!-- Main Content Area -->
     <div class="benchmark-arena-content">
     <!-- Action Buttons Row -->
-    <div v-if="!isZenMode" class="action-buttons-row">
+    <div class="action-buttons-row">
       <button class="btn btn-primary" @click="startRunSetup" :disabled="isRunning || !currentQuestionSet">
         {{ isRunning ? '⏳ Running...' : '▶️ Run Benchmark' }}
       </button>
@@ -63,9 +62,6 @@
       </button>
       <button class="btn btn-secondary btn-pdf" @click="exportToPdf" :disabled="!currentRun">
         📄 PDF
-      </button>
-      <button class="btn btn-secondary" @click="$emit('toggle-zen', true)">
-        🧘 Zen
       </button>
       <button class="btn btn-secondary" @click="reloadResults" title="Reload Results">
         🔄
@@ -100,12 +96,6 @@
       <div v-else-if="flatQuestions.length > 0" class="main-content-area">
         <!-- Arena Label -->
         
-        <!-- Zen Mode Exit Button - Inline -->
-        <div v-if="isZenMode" class="zen-mode-exit-inline">
-          <button class="btn btn-secondary btn-exit-zen" @click="emit('toggle-zen', false)">
-            ✕ Exit Zen Mode (Esc)
-          </button>
-        </div>
         
         <!-- Questions List View -->
         <div class="questions-list-view">
@@ -241,11 +231,10 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
-  initialQuestionSetId: String,
-  isZenMode: Boolean
+  initialQuestionSetId: String
 })
 
-const emit = defineEmits(['update:currentQuestionSet', 'view-history', 'trigger-print', 'toggle-zen', 'manage-agents'])
+const emit = defineEmits(['update:currentQuestionSet', 'view-history', 'trigger-print', 'manage-agents'])
 
 watch(() => props.questionSets, (sets) => {
   console.log('[Arena] Question sets updated:', sets.length)
@@ -649,7 +638,6 @@ function prevQuestion() {
   const idx = currentQuestionIndex.value
   if (idx > 0) {
     selectedQuestionId.value = flatQuestions.value[idx - 1].id
-    if (!props.isZenMode) emit('toggle-zen', true)
   }
 }
 
@@ -657,7 +645,6 @@ function nextQuestion() {
   const idx = currentQuestionIndex.value
   if (idx < flatQuestions.value.length - 1) {
     selectedQuestionId.value = flatQuestions.value[idx + 1].id
-    if (!props.isZenMode) emit('toggle-zen', true)
   }
 }
 
@@ -1458,39 +1445,8 @@ defineExpose({
 }
 
 /* Scoped styles that were specifically for the runner/arena */
-/* Zen Mode Exit Button - Inline in arena */
-.zen-mode-exit-inline {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  z-index: 100;
-  pointer-events: auto;
-}
-
 .main-content-area {
   position: relative;
-}
-
-.btn-exit-zen {
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(8px);
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  color: #475569;
-  font-weight: 600;
-  padding: 0.6rem 1.2rem;
-  border-radius: 999px;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  transition: all 0.2s;
-}
-
-.btn-exit-zen:hover {
-  background: white;
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
-  color: #1e293b;
 }
 
 /* Running Indicator Dot */
@@ -1716,12 +1672,12 @@ defineExpose({
 
 .action-buttons-row {
   position: inherit;
-  padding: 3.2px 16px;
+  padding: 2px 16px;
   background: white;
-  border-top: 1px solid #e0e0e0;
   display: flex;
   gap: 8px;
   z-index: 100;
+  border-bottom: 1px solid #e0e0e0
 }
 
 .action-buttons-row .btn {

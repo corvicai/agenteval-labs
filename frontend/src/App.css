@@ -857,10 +857,6 @@
   margin-bottom: 1rem;
 }
 
-/* Zen Mode - Display inline in arena, don't hide other elements */
-.zen-mode-active .main-content {
-  /* Keep normal padding and layout */
-}
 
 /* App Initialization Loader */
 .app-init-loader {

@@ -1,5 +1,5 @@
 <template>
-  <div class="app-root" :class="{ 'has-banner': isImpersonating, 'zen-mode-active': isZenMode }">
+  <div class="app-root" :class="{ 'has-banner': isImpersonating }">
     <!-- Impersonation Banner -->
     <div v-if="isImpersonating" class="impersonation-banner no-print">
       <div class="banner-content">
@@ -167,8 +167,6 @@
                 @update:currentQuestionSet="val => currentQuestionSet = val"
                 @view-history="goToHistory"
                 @trigger-print="handleTriggerPrint"
-                :is-zen-mode="isZenMode"
-                @toggle-zen="val => isZenMode = val"
                 @manage-agents="showConfig = true"
             />
           </KeepAlive>
@@ -312,7 +310,6 @@ const showImportModal = ref(false)
 const showConfig = ref(false)
 const showSummary = ref(false)
 const showQuestionEditor = ref(false)
-const isZenMode = ref(false)
 const previousQuestionSet = ref(null) // Used to restore when canceling new set creation
 const showRunSetup = ref(false)
 const showOnboarding = ref(false)
@@ -943,9 +940,6 @@ const isImpersonating = computed(() => {
 })
 
 const handleKeydown = (e) => {
-  if (e.key === 'Escape' && isZenMode.value) {
-    isZenMode.value = false
-  }
 }
 
 onMounted(async () => {

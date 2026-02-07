@@ -95,8 +95,7 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
-  runningQuestionSetId: String,
-  isZenMode: Boolean
+  runningQuestionSetId: String
 })
 
 const emit = defineEmits([
