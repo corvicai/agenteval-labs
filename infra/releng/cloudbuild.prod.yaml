@@ -12,7 +12,10 @@ steps:
     script: |
       RELEASE_TAG=$(cat .release-tag)
       for service in agenteval-api agenteval-runner agenteval-web; do
-        docker build -t ${_IMAGE_REPO_BASE}/${service}:${RELEASE_TAG} -t ${_IMAGE_REPO_BASE}/${service}:latest --file=infra/${service}/Dockerfile .
+        docker build -t ${_IMAGE_REPO_BASE}/${service}:${RELEASE_TAG} \
+          -t ${_IMAGE_REPO_BASE}/${service}:latest \
+          --build-arg VITE_GIT_COMMIT=$COMMIT_SHA \
+          --file=infra/${service}/Dockerfile .
         docker push ${_IMAGE_REPO_BASE}/${service}:${RELEASE_TAG}
         docker push ${_IMAGE_REPO_BASE}/${service}:latest
       done

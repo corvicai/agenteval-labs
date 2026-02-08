@@ -3,6 +3,7 @@ steps:
   - name: gcr.io/cloud-builders/docker
     script: |
       docker build -t $_IMAGE_REPO_BASE/$_SERVICE_NAME:$COMMIT_SHA \
+        --build-arg VITE_GIT_COMMIT=$COMMIT_SHA \
         --file=infra/$_SERVICE_NAME/Dockerfile .
       docker tag $_IMAGE_REPO_BASE/$_SERVICE_NAME:$COMMIT_SHA $_IMAGE_REPO_BASE/$_SERVICE_NAME:$_RELEASE_TAG
 images:
