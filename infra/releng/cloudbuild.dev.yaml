@@ -12,10 +12,11 @@ steps:
           fi
         done
 
-        if $((success >= 3)); then
+        if [ "$success" -ge 3 ]; then
           break
         fi
-        echo "Waiting for images to be built..."
+        echo "Waiting for images to be built (success: $success/3)..."
+        sleep 10
       done
     timeout: 300s
 
@@ -41,7 +42,7 @@ steps:
       echo "Deploying web..."
       gcloud run deploy agenteval-web-dev --image ${_IMAGE_REPO_BASE}/agenteval-web:${COMMIT_SHA} --region ${_DEPLOY_REGION} --quiet
 
-options:
+ options:
   automapSubstitutions: true
   substitutionOption: ALLOW_LOOSE
   logging: CLOUD_LOGGING_ONLY
