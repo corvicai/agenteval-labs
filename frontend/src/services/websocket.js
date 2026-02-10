@@ -34,30 +34,35 @@ class WebSocketService {
                 // Special GCP IAP endpoint for identity tokens
                 // Documentation: https://cloud.google.com/iap/docs/sessions-howto#websockets
                 const response = await fetch('/_gcp_iap/identityToken', {
-                    credentials: 'include'
+                    credentials: 'include',
+                    redirect: 'error' // IAP token should NOT be a redirect
                 })
+
                 if (!response.ok) {
                     if (response.status === 404) {
-                        // Not an IAP-protected environment
                         return null
                     }
-                    console.warn('[WS] Failed to fetch IAP token:', response.status)
+                    console.warn('[WS] Failed to fetch IAP token:', response.status, response.statusText)
                     return null
                 }
+
+                const contentType = response.headers && typeof response.headers.get === 'function'
+                    ? (response.headers.get('content-type') || '')
+                    : ''
                 const token = await response.text()
                 const trimmedToken = token.trim()
 
                 // Validate the token looks like a JWT (header.payload.signature)
                 // If it's HTML (starting with <! or <html), it's invalid.
-                if (trimmedToken.startsWith('<!') || trimmedToken.startsWith('<html') || trimmedToken.split('.').length !== 3) {
-                    console.warn('[WS] Retrieved IAP token is invalid (likely HTML redirection). Ignoring.')
+                if (contentType.includes('text/html') || trimmedToken.startsWith('<!') || trimmedToken.startsWith('<html') || trimmedToken.split('.').length !== 3) {
+                    console.warn('[WS] IAP Token fetch returned HTML/Invalid content. Type:', contentType, 'Start:', trimmedToken.substring(0, 30))
                     return null
                 }
 
                 console.log('[WS] IAP identity token retrieved and validated')
                 return trimmedToken
             } catch (e) {
-                console.warn('[WS] Error fetching IAP token (likely not IAP environment):', e)
+                console.warn('[WS] Error fetching IAP token:', e)
                 return null
             }
         })()

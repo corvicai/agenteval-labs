@@ -214,6 +214,9 @@ func main() {
 		if err != nil {
 			return err
 		}
+		if ws.Subprotocol() != "" {
+			log.Printf("[WS] Subprotocol selected: %s", ws.Subprotocol())
+		}
 
 		workspaceIDStr := c.QueryParam("workspace_id")
 		if workspaceIDStr != "" {

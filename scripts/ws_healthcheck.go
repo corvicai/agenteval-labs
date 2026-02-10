@@ -3,6 +3,7 @@ package scripts
 import (
 	"encoding/json"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
@@ -20,12 +21,23 @@ func ws_healthcheck() {
 	wsURL := os.Getenv("WS_URL")
 	email := os.Getenv("ADMIN_EMAIL")
 	pass := os.Getenv("ADMIN_PASS")
+	iapIDToken := os.Getenv("IAP_ID_TOKEN")
 
 	if wsURL == "" || email == "" || pass == "" {
 		log.Fatal("WS_URL, ADMIN_EMAIL, and ADMIN_PASS are required")
 	}
 
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	dialer := websocket.Dialer{}
+	headers := http.Header{}
+
+	if iapIDToken != "" {
+		headers.Set("Authorization", "Bearer "+iapIDToken)
+		// Keep parity with browser flow when IAP expects WS subprotocol token.
+		dialer.Subprotocols = []string{"iap-bearer-token", iapIDToken}
+		log.Println("IAP token provided; dialing WS with Authorization header and iap-bearer-token subprotocol")
+	}
+
+	conn, _, err := dialer.Dial(wsURL, headers)
 	if err != nil {
 		log.Fatalf("dial ws: %v", err)
 	}
