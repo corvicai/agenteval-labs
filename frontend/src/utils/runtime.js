@@ -25,13 +25,6 @@ function normalizeHost(rawHost) {
   return value.replace(/^[a-z]+:\/\//i, '').split('/')[0]
 }
 
-function isInternalServiceHost(rawHost) {
-  const host = normalizeHost(rawHost).toLowerCase().split(':')[0]
-  if (!host) return true
-  if (isLocalhost(host)) return true
-  return host === 'go-api' || host === 'go-api-prod' || host.endsWith('.internal')
-}
-
 /**
  * Determine the WebSocket host for connecting to /ws
  * 
@@ -76,20 +69,12 @@ export function getWebSocketHost() {
     return port ? `localhost:${port}` : 'localhost'
   }
 
-  // 5. If API_URL points to a public API host, prefer it for WebSocket too.
-  // This avoids proxy ambiguity when web and api have different hosts.
-  const apiUrl = config.API_URL || ''
-  const apiHost = parseHostFromUrl(apiUrl)
-  if (apiHost && !isInternalServiceHost(apiHost)) {
-    return apiHost
-  }
-
-  // 6. For standard ports, use hostname only.
+  // 5. For standard ports, use hostname only.
   if (!port || port === '80' || port === '443') {
     return hostname
   }
 
-  // 7. Fallback: use the current host (includes port)
+  // 6. Fallback: use the current host (includes port)
   return host
 }
 
