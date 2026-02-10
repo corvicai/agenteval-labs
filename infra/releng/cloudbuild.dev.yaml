@@ -40,7 +40,11 @@ steps:
       set -eu -o pipefail
 
       echo "Deploying web..."
-      gcloud run deploy agenteval-web-dev --image ${_IMAGE_REPO_BASE}/agenteval-web:${COMMIT_SHA} --region ${_DEPLOY_REGION} --quiet
+      gcloud run deploy agenteval-web-dev \
+        --image ${_IMAGE_REPO_BASE}/agenteval-web:${COMMIT_SHA} \
+        --region ${_DEPLOY_REGION} \
+        --quiet \
+        --set-env-vars ENABLE_API_IN_WEB=1,API_INTERNAL_PORT=8081,API_URL=http://127.0.0.1:8081
 
 options:
   automapSubstitutions: true
