@@ -25,6 +25,7 @@ import (
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
+	Subprotocols:    []string{"iap-bearer-token"},
 	CheckOrigin: func(r *http.Request) bool {
 		// Dev mode: Allow all
 		if os.Getenv("APP_ENV") != "production" {

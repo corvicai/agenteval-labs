@@ -14,8 +14,9 @@ class MockWebSocket {
     static CLOSING = 2
     static CLOSED = 3
 
-    constructor(url) {
+    constructor(url, protocols) {
         this.url = url
+        this.protocols = protocols
         this.readyState = MockWebSocket.CONNECTING
         setTimeout(() => {
             this.readyState = MockWebSocket.OPEN
@@ -32,6 +33,14 @@ class MockWebSocket {
 }
 
 global.WebSocket = MockWebSocket
+
+// Mock global fetch for IAP token
+global.fetch = vi.fn(() =>
+    Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve('mock-iap-token')
+    })
+)
 
 describe('WebSocketService', () => {
     beforeEach(() => {
@@ -93,5 +102,16 @@ describe('WebSocketService', () => {
         })
 
         expect(callback).toHaveBeenCalledWith({ data: 'hello' })
+    })
+
+    it('should pass IAP token in subprotocols if available', async () => {
+        // Force a non-localhost hostname for the test
+        delete window.location
+        window.location = { hostname: 'agenteval-dev.corviclabs.ai', protocol: 'https:' }
+
+        await wsService.connectAnonymous()
+
+        expect(global.fetch).toHaveBeenCalledWith('/_gcp_iap/identityToken', expect.any(Object))
+        expect(wsService.ws.protocols).toEqual(['iap-bearer-token', 'mock-iap-token'])
     })
 })
