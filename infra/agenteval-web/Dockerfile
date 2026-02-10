@@ -51,6 +51,9 @@ COPY server_go/. .
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
 
+# Cloud SQL Proxy binary (optional)
+FROM gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.18.2 AS cloudsql_proxy
+
 # Production stage
 FROM nginx:alpine
 
@@ -63,6 +66,9 @@ COPY --from=web_builder /app/dist /usr/share/nginx/html
 # Copy Go API binary and migrations (optional unified mode)
 COPY --from=api_builder /app/main /app/api
 COPY --from=api_builder /app/migrations /app/migrations
+
+# Copy Cloud SQL Proxy binary
+COPY --from=cloudsql_proxy /cloud-sql-proxy /usr/local/bin/cloud-sql-proxy
 
 # Copy nginx config template
 COPY frontend/nginx.conf.template /etc/nginx/templates/default.conf.template
