@@ -1,12 +1,22 @@
 steps:
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    script: bash infra/releng/tag-release-images-gcp.sh $(cat infra/releng/release-tag.txt) agenteval-runner agenteval-api agenteval-web
   - name: gcr.io/cloud-builders/docker
-    id: 'build-and-push'
     script: |
-      for service in agenteval-api agenteval-runner agenteval-web; do
-        docker build -t ${_IMAGE_REPO_BASE}/${service}:${COMMIT_SHA} -t ${_IMAGE_REPO_BASE}/${service}:latest --file=infra/${service}/Dockerfile .
-        docker push ${_IMAGE_REPO_BASE}/${service}:${COMMIT_SHA}
-        docker push ${_IMAGE_REPO_BASE}/${service}:latest
+      # Wait for image to be built by infra/*/cloudbuild.yaml pipelines
+      while true; do
+        success=0
+        for service in agenteval-runner agenteval-api agenteval-web; do
+          if docker pull ${_IMAGE_REPO_BASE}/${service}:${COMMIT_SHA}; then
+            success=$((success + 1))
+        done
+
+        if ((success >= 3)); then
+          break
+        fi
+        echo "Waiting for images to be built..."
       done
+    timeout: 300s
 
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     id: 'deploy-backend'
@@ -18,7 +28,6 @@ steps:
       echo "Deploying runner..."
       gcloud run deploy agenteval-runner-dev --image ${_IMAGE_REPO_BASE}/agenteval-runner:${COMMIT_SHA} --region ${_DEPLOY_REGION} --quiet
 
-      # Deploy api
       echo "Deploying api..."
       gcloud run deploy agenteval-api-dev --image ${_IMAGE_REPO_BASE}/agenteval-api:${COMMIT_SHA} --region ${_DEPLOY_REGION} --quiet
 
@@ -27,20 +36,9 @@ steps:
     script: |
       #!/usr/bin/env bash
       set -eu -o pipefail
-      
-      # Fetch API URL
-      echo "Discovering API URL..."
-      API_URL=$(gcloud run services describe agenteval-api-dev --region ${_DEPLOY_REGION} --format='value(status.url)')
-      echo "Discovered API URL: ${API_URL}"
 
-      # Deploy web with the real API URL
       echo "Deploying web..."
-      gcloud run deploy agenteval-web-dev \
-        --image ${_IMAGE_REPO_BASE}/agenteval-web:${COMMIT_SHA} \
-        --region ${_DEPLOY_REGION} \
-        --set-env-vars "API_URL=${API_URL}" \
-        --quiet
-    timeout: 480s
+      gcloud run deploy agenteval-web-dev --image ${_IMAGE_REPO_BASE}/agenteval-web:${COMMIT_SHA} --region ${_DEPLOY_REGION} --quiet
 
 options:
   automapSubstitutions: true
