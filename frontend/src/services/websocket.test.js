@@ -38,7 +38,7 @@ global.WebSocket = MockWebSocket
 global.fetch = vi.fn(() =>
     Promise.resolve({
         ok: true,
-        text: () => Promise.resolve('mock-iap-token')
+        text: () => Promise.resolve('header.payload.signature')
     })
 )
 
@@ -104,7 +104,7 @@ describe('WebSocketService', () => {
         expect(callback).toHaveBeenCalledWith({ data: 'hello' })
     })
 
-    it('should pass IAP token in subprotocols if available', async () => {
+    it('should pass IAP token in subprotocols if it is a valid JWT', async () => {
         // Force a non-localhost hostname for the test
         delete window.location
         window.location = { hostname: 'agenteval-dev.corviclabs.ai', protocol: 'https:' }
@@ -112,6 +112,6 @@ describe('WebSocketService', () => {
         await wsService.connectAnonymous()
 
         expect(global.fetch).toHaveBeenCalledWith('/_gcp_iap/identityToken', expect.any(Object))
-        expect(wsService.ws.protocols).toEqual(['iap-bearer-token', 'mock-iap-token'])
+        expect(wsService.ws.protocols).toEqual(['iap-bearer-token', 'header.payload.signature'])
     })
 })
