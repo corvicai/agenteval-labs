@@ -9,6 +9,7 @@ steps:
         for service in agenteval-runner agenteval-api agenteval-web; do
           if docker pull ${_IMAGE_REPO_BASE}/${service}:${COMMIT_SHA}; then
             success=$((success + 1))
+          fi
         done
 
         if ((success >= 3)); then
