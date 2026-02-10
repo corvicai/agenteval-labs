@@ -12,7 +12,7 @@ steps:
           fi
         done
 
-        if ((success >= 3)); then
+        if $((success >= 3)); then
           break
         fi
         echo "Waiting for images to be built..."
