@@ -12,6 +12,48 @@ class WebSocketService {
         this.connectionPromise = null
         this.shouldReconnect = true
         this.suppressNextReconnect = false
+        this._iapTokenPromise = null
+    }
+
+    async _fetchIAPToken() {
+        // Return cached promise if already fetching or fetched
+        if (this._iapTokenPromise) return this._iapTokenPromise
+
+        this._iapTokenPromise = (async () => {
+            const hostname = window.location.hostname
+
+            // Only attempt on the specific dev domain or any non-local domain
+            const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.endsWith('.local')
+            const isIAPDomain = hostname === 'agenteval-dev.corviclabs.ai' || hostname.includes('corviclabs.ai')
+
+            if (isLocal && !isIAPDomain) {
+                return null
+            }
+
+            try {
+                // Special GCP IAP endpoint for identity tokens
+                // Documentation: https://cloud.google.com/iap/docs/sessions-howto#websockets
+                const response = await fetch('/_gcp_iap/identityToken', {
+                    credentials: 'include'
+                })
+                if (!response.ok) {
+                    if (response.status === 404) {
+                        // Not an IAP-protected environment
+                        return null
+                    }
+                    console.warn('[WS] Failed to fetch IAP token:', response.status)
+                    return null
+                }
+                const token = await response.text()
+                console.log('[WS] IAP identity token retrieved')
+                return token.trim()
+            } catch (e) {
+                console.warn('[WS] Error fetching IAP token (likely not IAP environment):', e)
+                return null
+            }
+        })()
+
+        return this._iapTokenPromise
     }
 
     isConnected() {
@@ -102,56 +144,60 @@ class WebSocketService {
 
             console.log('[WS] Connecting to', wsUrl)
 
-            const ws = new WebSocket(wsUrl)
-            this.ws = ws
+            // Fetch IAP token if needed (Google Cloud recommendation)
+            this._fetchIAPToken().then(iapToken => {
+                const subprotocols = iapToken ? ['iap-bearer-token', iapToken] : undefined
+                const ws = new WebSocket(wsUrl, subprotocols)
+                this.ws = ws
 
-            ws.onopen = async () => {
-                if (this.ws !== ws) return
-                console.log('[WS] Connected')
-                this.reconnectAttempts = 0
+                ws.onopen = async () => {
+                    if (this.ws !== ws) return
+                    console.log('[WS] Connected')
+                    this.reconnectAttempts = 0
 
-                // If we have a firebase token, authenticate immediately
-                if (this.firebaseToken) {
-                    try {
-                        const result = await this.request('AUTH', { token: this.firebaseToken })
-                        console.log('[WS] Firebase Authentication successful')
-                        this._emit('authenticated', result)
-                    } catch (e) {
-                        console.error('[WS] Firebase Authentication failed:', e)
-                        this._emit('auth_failed', { error: e.message })
-                        // If auth fails, we might want to stay connected but limited, or close.
-                        // For now we just stay connected and let the UI handle the error.
+                    // If we have a firebase token, authenticate immediately
+                    if (this.firebaseToken) {
+                        try {
+                            const result = await this.request('AUTH', { token: this.firebaseToken })
+                            console.log('[WS] Firebase Authentication successful')
+                            this._emit('authenticated', result)
+                        } catch (e) {
+                            console.error('[WS] Firebase Authentication failed:', e)
+                            this._emit('auth_failed', { error: e.message })
+                            // If auth fails, we might want to stay connected but limited, or close.
+                            // For now we just stay connected and let the UI handle the error.
+                        }
                     }
+
+                    this._emit('connected', {})
+                    resolve()
                 }
 
-                this._emit('connected', {})
-                resolve()
-            }
-
-            ws.onerror = (e) => {
-                if (this.ws !== ws) return
-                console.error('[WS] Connection error:', e)
-                this._emit('error', { error: e })
-                reject(e)
-            }
-
-            ws.onmessage = (event) => {
-                if (this.ws !== ws) return
-                this._handleMessage(event)
-            }
-
-            ws.onclose = () => {
-                if (this.ws !== ws) return
-                console.log('[WS] Disconnected')
-                this._emit('disconnected', {})
-                this._rejectPendingRequests('WebSocket disconnected')
-                if (this.suppressNextReconnect) {
-                    this.suppressNextReconnect = false
-                    return
+                ws.onerror = (e) => {
+                    if (this.ws !== ws) return
+                    console.error('[WS] Connection error:', e)
+                    this._emit('error', { error: e })
+                    reject(e)
                 }
-                if (!this.shouldReconnect) return
-                this._attemptReconnect()
-            }
+
+                ws.onmessage = (event) => {
+                    if (this.ws !== ws) return
+                    this._handleMessage(event)
+                }
+
+                ws.onclose = () => {
+                    if (this.ws !== ws) return
+                    console.log('[WS] Disconnected')
+                    this._emit('disconnected', {})
+                    this._rejectPendingRequests('WebSocket disconnected')
+                    if (this.suppressNextReconnect) {
+                        this.suppressNextReconnect = false
+                        return
+                    }
+                    if (!this.shouldReconnect) return
+                    this._attemptReconnect()
+                }
+            }).catch(reject)
         })
 
         return this.connectionPromise
@@ -206,6 +252,7 @@ class WebSocketService {
             this.ws.close()
             this.ws = null
             this.connectionPromise = null
+            this._iapTokenPromise = null
         }
         this.workspaceId = null
         this.token = null
