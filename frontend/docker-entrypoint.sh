@@ -8,19 +8,17 @@ OUTPUT_FILE="/usr/share/nginx/html/env-config.js"
 
 echo "window._env_ = {" > $OUTPUT_FILE
 
-# Get environment variables starting with VITE_, FIREBASE_, or exactly API_URL/WS_URL/GIT_COMMIT
-env | grep -E '^(VITE_|FIREBASE_|API_URL=|WS_URL=|GIT_COMMIT=)' | while read -r line; do
+# Only expose a safe, explicit whitelist to the browser.
+# Keep API_URL/WS_URL server-side to avoid cross-origin misrouting.
+PUBLIC_ENV_REGEX='^(VITE_FIREBASE_|VITE_GIT_COMMIT=|VITE_ENABLE_LEGACY_AUTH=|FIREBASE_|GIT_COMMIT=)'
+env | grep -E "${PUBLIC_ENV_REGEX}" | while read -r line; do
   # Extract key and value
   key=$(echo $line | cut -d '=' -f 1)
   value=$(echo $line | cut -d '=' -f 2-)
   
   # Map legacy or infrastructure names to VITE_ names if needed
   mapped_key=$key
-  if [ "$key" = "API_URL" ]; then
-    mapped_key="VITE_API_URL"
-  elif [ "$key" = "WS_URL" ]; then
-    mapped_key="VITE_WS_URL"
-  elif [ "$key" = "GIT_COMMIT" ]; then
+  if [ "$key" = "GIT_COMMIT" ]; then
     mapped_key="VITE_GIT_COMMIT"
   elif echo "$key" | grep -v '^VITE_' | grep -q '^FIREBASE_'; then
     mapped_key="VITE_$key"
