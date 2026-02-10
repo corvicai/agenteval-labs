@@ -19,6 +19,4 @@ COPY server_python/server.py .
 EXPOSE 3003
 
 # Run the application
-# We use a shell to allow environment variable expansion if needed, 
-# but server.py should be updated to read PORT environment variable.
 CMD ["python", "server.py"]
