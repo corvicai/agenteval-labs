@@ -8,8 +8,8 @@ OUTPUT_FILE="/usr/share/nginx/html/env-config.js"
 
 echo "window._env_ = {" > $OUTPUT_FILE
 
-# Get environment variables starting with VITE_, FIREBASE_, or exactly API_URL
-env | grep -E '^(VITE_|FIREBASE_|API_URL=)' | while read -r line; do
+# Get environment variables starting with VITE_, FIREBASE_, or exactly API_URL/GIT_COMMIT
+env | grep -E '^(VITE_|FIREBASE_|API_URL=|GIT_COMMIT=)' | while read -r line; do
   # Extract key and value
   key=$(echo $line | cut -d '=' -f 1)
   value=$(echo $line | cut -d '=' -f 2-)
@@ -18,6 +18,8 @@ env | grep -E '^(VITE_|FIREBASE_|API_URL=)' | while read -r line; do
   mapped_key=$key
   if [ "$key" = "API_URL" ]; then
     mapped_key="VITE_API_URL"
+  elif [ "$key" = "GIT_COMMIT" ]; then
+    mapped_key="VITE_GIT_COMMIT"
   elif echo "$key" | grep -v '^VITE_' | grep -q '^FIREBASE_'; then
     mapped_key="VITE_$key"
   fi

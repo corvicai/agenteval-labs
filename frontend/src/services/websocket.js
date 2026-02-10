@@ -45,8 +45,17 @@ class WebSocketService {
                     return null
                 }
                 const token = await response.text()
-                console.log('[WS] IAP identity token retrieved')
-                return token.trim()
+                const trimmedToken = token.trim()
+
+                // Validate the token looks like a JWT (header.payload.signature)
+                // If it's HTML (starting with <! or <html), it's invalid.
+                if (trimmedToken.startsWith('<!') || trimmedToken.startsWith('<html') || trimmedToken.split('.').length !== 3) {
+                    console.warn('[WS] Retrieved IAP token is invalid (likely HTML redirection). Ignoring.')
+                    return null
+                }
+
+                console.log('[WS] IAP identity token retrieved and validated')
+                return trimmedToken
             } catch (e) {
                 console.warn('[WS] Error fetching IAP token (likely not IAP environment):', e)
                 return null

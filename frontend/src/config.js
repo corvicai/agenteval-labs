@@ -24,6 +24,7 @@ export const config = {
     ENABLE_LEGACY_AUTH: env.VITE_ENABLE_LEGACY_AUTH || import.meta.env.VITE_ENABLE_LEGACY_AUTH,
 
     // Meta
+    GIT_COMMIT: env.VITE_GIT_COMMIT || import.meta.env.VITE_GIT_COMMIT,
     DEV: import.meta.env.DEV,
     PROD: import.meta.env.PROD,
     MODE: import.meta.env.MODE,
