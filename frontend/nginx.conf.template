@@ -43,20 +43,30 @@ server {
 
     # WebSocket proxy
     location /ws {
-        set $api_url "${API_URL}";
+        # Prefer WS_URL if provided; fallback to API_URL.
+        set $ws_url "${WS_URL}";
+        if ($ws_url = "") {
+            set $ws_url "${API_URL}";
+        }
 
-        set $api_host "";
-        if ($api_url ~* "^https?://([^/]+)") {
-            set $api_host $1;
+        # If API_URL was configured with a trailing /api, strip it for WebSocket
+        # because backend endpoint is /ws (not /api/ws).
+        if ($ws_url ~* "^(.+)/api/?$") {
+            set $ws_url $1;
+        }
+
+        set $ws_host "";
+        if ($ws_url ~* "^https?://([^/]+)") {
+            set $ws_host $1;
         }
 
         # Keep request URI to preserve /ws and query params.
-        proxy_pass $api_url$request_uri;
+        proxy_pass $ws_url$request_uri;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Sec-WebSocket-Protocol $http_sec_websocket_protocol;
-        proxy_set_header Host $api_host;
+        proxy_set_header Host $ws_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
