@@ -2,7 +2,9 @@ package main
 
 import (
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -22,6 +24,40 @@ import (
 	"benchmarking-platform/orchestrator"
 )
 
+func hostOnly(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+
+	if idx := strings.Index(value, ","); idx >= 0 {
+		value = strings.TrimSpace(value[:idx])
+	}
+
+	if strings.Contains(value, "://") {
+		if parsed, err := url.Parse(value); err == nil && parsed.Host != "" {
+			value = parsed.Host
+		}
+	}
+
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		value = host
+	} else if strings.Count(value, ":") == 1 {
+		parts := strings.SplitN(value, ":", 2)
+		value = parts[0]
+	}
+
+	return strings.Trim(strings.ToLower(strings.TrimSpace(value)), "[]")
+}
+
+func originHost(origin string) string {
+	parsed, err := url.Parse(strings.TrimSpace(origin))
+	if err != nil {
+		return ""
+	}
+	return hostOnly(parsed.Host)
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
@@ -31,18 +67,42 @@ var upgrader = websocket.Upgrader{
 		if os.Getenv("APP_ENV") != "production" {
 			return true
 		}
-		// Prod mode: Strict checking
-		origin := r.Header.Get("Origin")
+
+		origin := strings.TrimSpace(r.Header.Get("Origin"))
+		// Allow non-browser clients (no Origin header) while still enforcing JWT/IAP auth later.
+		if origin == "" {
+			return true
+		}
+
+		originHostName := originHost(origin)
+		if originHostName == "" {
+			log.Printf("[WS] CheckOrigin rejected malformed origin=%q", origin)
+			return false
+		}
+
+		// Allow same-origin when Host is rewritten by reverse proxies.
+		forwardedHost := hostOnly(r.Header.Get("X-Forwarded-Host"))
+		requestHost := hostOnly(r.Host)
+		if originHostName == forwardedHost || originHostName == requestHost {
+			return true
+		}
+
+		// Fallback to explicit allowlist for cross-origin cases.
 		allowedStr := os.Getenv("ALLOWED_ORIGINS")
 		if allowedStr == "" {
 			return false // Secure by default
 		}
 		allowedOrigins := strings.Split(allowedStr, ",")
 		for _, allowed := range allowedOrigins {
-			if strings.TrimSpace(allowed) == origin {
+			allowed = strings.TrimSpace(allowed)
+			if allowed == "" {
+				continue
+			}
+			if strings.EqualFold(allowed, origin) || hostOnly(allowed) == originHostName {
 				return true
 			}
 		}
+		log.Printf("[WS] CheckOrigin rejected origin=%q host=%q x-forwarded-host=%q allowed=%q", origin, r.Host, r.Header.Get("X-Forwarded-Host"), allowedStr)
 		return false
 	},
 }

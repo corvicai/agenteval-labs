@@ -161,56 +161,74 @@ class WebSocketService {
             // Fetch IAP token if needed (Google Cloud recommendation)
             this._fetchIAPToken().then(iapToken => {
                 const subprotocols = iapToken ? ['iap-bearer-token', iapToken] : undefined
-                const ws = new WebSocket(wsUrl, subprotocols)
-                this.ws = ws
+                let retriedWithoutSubprotocol = false
 
-                ws.onopen = async () => {
-                    if (this.ws !== ws) return
-                    console.log('[WS] Connected')
-                    this.reconnectAttempts = 0
+                const openSocket = (protocolList) => {
+                    const ws = new WebSocket(wsUrl, protocolList)
+                    this.ws = ws
 
-                    // If we have a firebase token, authenticate immediately
-                    if (this.firebaseToken) {
-                        try {
-                            const result = await this.request('AUTH', { token: this.firebaseToken })
-                            console.log('[WS] Firebase Authentication successful')
-                            this._emit('authenticated', result)
-                        } catch (e) {
-                            console.error('[WS] Firebase Authentication failed:', e)
-                            this._emit('auth_failed', { error: e.message })
-                            // If auth fails, we might want to stay connected but limited, or close.
-                            // For now we just stay connected and let the UI handle the error.
+                    ws.onopen = async () => {
+                        if (this.ws !== ws) return
+                        console.log('[WS] Connected')
+                        this.reconnectAttempts = 0
+
+                        // If we have a firebase token, authenticate immediately
+                        if (this.firebaseToken) {
+                            try {
+                                const result = await this.request('AUTH', { token: this.firebaseToken })
+                                console.log('[WS] Firebase Authentication successful')
+                                this._emit('authenticated', result)
+                            } catch (e) {
+                                console.error('[WS] Firebase Authentication failed:', e)
+                                this._emit('auth_failed', { error: e.message })
+                                // If auth fails, we might want to stay connected but limited, or close.
+                                // For now we just stay connected and let the UI handle the error.
+                            }
                         }
+
+                        this._emit('connected', {})
+                        resolve()
                     }
 
-                    this._emit('connected', {})
-                    resolve()
-                }
+                    ws.onerror = (e) => {
+                        if (this.ws !== ws) return
 
-                ws.onerror = (e) => {
-                    if (this.ws !== ws) return
-                    console.error('[WS] Connection error:', e)
-                    this._emit('error', { error: e })
-                    reject(e)
-                }
+                        // Some edge proxies/IAP setups can reject unknown subprotocol negotiation.
+                        // Retry once without subprotocol before surfacing the failure.
+                        if (!retriedWithoutSubprotocol && protocolList && protocolList.length > 0) {
+                            retriedWithoutSubprotocol = true
+                            console.warn('[WS] IAP subprotocol handshake failed; retrying without subprotocol')
+                            this.ws = null
+                            try { ws.close() } catch (_) { }
+                            openSocket(undefined)
+                            return
+                        }
 
-                ws.onmessage = (event) => {
-                    if (this.ws !== ws) return
-                    this._handleMessage(event)
-                }
-
-                ws.onclose = () => {
-                    if (this.ws !== ws) return
-                    console.log('[WS] Disconnected')
-                    this._emit('disconnected', {})
-                    this._rejectPendingRequests('WebSocket disconnected')
-                    if (this.suppressNextReconnect) {
-                        this.suppressNextReconnect = false
-                        return
+                        console.error('[WS] Connection error:', e)
+                        this._emit('error', { error: e })
+                        reject(e)
                     }
-                    if (!this.shouldReconnect) return
-                    this._attemptReconnect()
+
+                    ws.onmessage = (event) => {
+                        if (this.ws !== ws) return
+                        this._handleMessage(event)
+                    }
+
+                    ws.onclose = () => {
+                        if (this.ws !== ws) return
+                        console.log('[WS] Disconnected')
+                        this._emit('disconnected', {})
+                        this._rejectPendingRequests('WebSocket disconnected')
+                        if (this.suppressNextReconnect) {
+                            this.suppressNextReconnect = false
+                            return
+                        }
+                        if (!this.shouldReconnect) return
+                        this._attemptReconnect()
+                    }
                 }
+
+                openSocket(subprotocols)
             }).catch(reject)
         })
 
