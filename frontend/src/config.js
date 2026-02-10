@@ -17,8 +17,10 @@ export const config = {
     FIREBASE_APP_ID: env.VITE_FIREBASE_APP_ID || import.meta.env.VITE_FIREBASE_APP_ID,
 
     // WebSocket / API Config
+    WS_URL: env.VITE_WS_URL || import.meta.env.VITE_WS_URL,
     WS_HOST: env.VITE_WS_HOST || import.meta.env.VITE_WS_HOST,
     WS_PORT: env.VITE_WS_PORT || import.meta.env.VITE_WS_PORT,
+    API_URL: env.VITE_API_URL || import.meta.env.VITE_API_URL,
 
     // Feature Flags / UI Config
     ENABLE_LEGACY_AUTH: env.VITE_ENABLE_LEGACY_AUTH || import.meta.env.VITE_ENABLE_LEGACY_AUTH,

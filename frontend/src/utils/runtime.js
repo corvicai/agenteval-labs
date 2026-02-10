@@ -8,6 +8,30 @@ export function isLocalhost(hostname) {
 
 import { config } from '../config'
 
+function parseHostFromUrl(rawUrl) {
+  const value = (rawUrl || '').trim()
+  if (!value) return ''
+
+  try {
+    return new URL(value).host || ''
+  } catch {
+    return ''
+  }
+}
+
+function normalizeHost(rawHost) {
+  const value = (rawHost || '').trim()
+  if (!value) return ''
+  return value.replace(/^[a-z]+:\/\//i, '').split('/')[0]
+}
+
+function isInternalServiceHost(rawHost) {
+  const host = normalizeHost(rawHost).toLowerCase().split(':')[0]
+  if (!host) return true
+  if (isLocalhost(host)) return true
+  return host === 'go-api' || host === 'go-api-prod' || host.endsWith('.internal')
+}
+
 /**
  * Determine the WebSocket host for connecting to /ws
  * 
@@ -24,7 +48,17 @@ export function getWebSocketHost() {
   const host = window.location.host || ''
   const isDev = config.DEV
 
-  // 1. Explicit override via environment variable (highest priority)
+  // 1. Explicit full URL override (highest priority)
+  const explicitWsUrl = config.WS_URL || ''
+  if (explicitWsUrl) {
+    const urlHost = parseHostFromUrl(explicitWsUrl)
+    if (urlHost) return urlHost
+
+    const literalHost = normalizeHost(explicitWsUrl)
+    if (literalHost) return literalHost
+  }
+
+  // 2. Explicit host override
   if (overrideHost) {
     if (overridePort && !overrideHost.includes(':')) {
       return `${overrideHost}:${overridePort}`
@@ -32,25 +66,30 @@ export function getWebSocketHost() {
     return overrideHost
   }
 
-  // 2. Force localhost for local development (when accessing via localhost or 127.0.0.1)
+  // 3. Force localhost for local development (when accessing via localhost or 127.0.0.1)
   if (isLocalhost(hostname)) {
     return host // Returns "localhost:3010" or "127.0.0.1:3010"
   }
 
-  // 3. In dev mode, always prefer localhost if available
+  // 4. In dev mode, always prefer localhost if available
   if (isDev && (hostname.includes('localhost') || hostname === '127.0.0.1')) {
     return port ? `localhost:${port}` : 'localhost'
   }
 
-  // 4. Special case: If we are on a subdomain but the port is 3010 or 5173, 
-  // it might be a tunnel or specific dev setup. 
-  // BUT the user reported "pending" on 5173 when accessing a public URL.
-  // If the port is standard (80/443), we definitely don't want to include it.
+  // 5. If API_URL points to a public API host, prefer it for WebSocket too.
+  // This avoids proxy ambiguity when web and api have different hosts.
+  const apiUrl = config.API_URL || ''
+  const apiHost = parseHostFromUrl(apiUrl)
+  if (apiHost && !isInternalServiceHost(apiHost)) {
+    return apiHost
+  }
+
+  // 6. For standard ports, use hostname only.
   if (!port || port === '80' || port === '443') {
     return hostname
   }
 
-  // 5. Fallback: use the current host (includes port)
+  // 7. Fallback: use the current host (includes port)
   return host
 }
 

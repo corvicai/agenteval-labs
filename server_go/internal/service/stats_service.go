@@ -33,9 +33,11 @@ func (s *StatsService) ComputeStats(scope string, scopeID *uuid.UUID) (*models.A
 	case "organization":
 		baseResultQuery = baseResultQuery.Joins("JOIN runs ON runs.id = run_results.run_id").
 			Joins("JOIN workspaces ON workspaces.id = runs.workspace_id").
-			Where("workspaces.organization_id = ?", *scopeID)
+			Joins("JOIN user_organizations ON user_organizations.user_id = workspaces.user_id").
+			Where("user_organizations.organization_id = ?", *scopeID)
 		baseRunQuery = baseRunQuery.Joins("JOIN workspaces ON workspaces.id = runs.workspace_id").
-			Where("workspaces.organization_id = ?", *scopeID)
+			Joins("JOIN user_organizations ON user_organizations.user_id = workspaces.user_id").
+			Where("user_organizations.organization_id = ?", *scopeID)
 	case "global":
 		// No filter
 	}
@@ -75,7 +77,8 @@ func (s *StatsService) ComputeStats(scope string, scopeID *uuid.UUID) (*models.A
 		baseEvalQuery = baseEvalQuery.Where("runs.workspace_id = ?", *scopeID)
 	case "organization":
 		baseEvalQuery = baseEvalQuery.Joins("JOIN workspaces ON workspaces.id = runs.workspace_id").
-			Where("workspaces.organization_id = ?", *scopeID)
+			Joins("JOIN user_organizations ON user_organizations.user_id = workspaces.user_id").
+			Where("user_organizations.organization_id = ?", *scopeID)
 	}
 
 	baseEvalQuery.Select(`
@@ -200,7 +203,8 @@ func (s *StatsService) ComputeStats(scope string, scopeID *uuid.UUID) (*models.A
 		historyQuery = historyQuery.Where("runs.workspace_id = ?", *scopeID)
 	case "organization":
 		historyQuery = historyQuery.Joins("JOIN workspaces ON workspaces.id = runs.workspace_id").
-			Where("workspaces.organization_id = ?", *scopeID)
+			Joins("JOIN user_organizations ON user_organizations.user_id = workspaces.user_id").
+			Where("user_organizations.organization_id = ?", *scopeID)
 	}
 
 	historyQuery.Where("evaluations.created_at > ?", time.Now().UTC().AddDate(0, 0, -30)).

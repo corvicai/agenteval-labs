@@ -244,6 +244,21 @@ func main() {
 
 	// ========== WebSocket ==========
 	e.GET("/ws", func(c echo.Context) error {
+		req := c.Request()
+		origin := req.Header.Get("Origin")
+		forwardedHost := req.Header.Get("X-Forwarded-Host")
+		forwardedProto := req.Header.Get("X-Forwarded-Proto")
+		subprotocolHeader := req.Header.Get("Sec-WebSocket-Protocol")
+		log.Printf(
+			"[WS] Upgrade attempt host=%q origin=%q x-forwarded-host=%q x-forwarded-proto=%q subprotocol-header=%q workspace_id=%q",
+			req.Host,
+			origin,
+			forwardedHost,
+			forwardedProto,
+			subprotocolHeader,
+			c.QueryParam("workspace_id"),
+		)
+
 		// Authenticate via token query param or cookie (for WS upgrade)
 		// Allow anonymous connections for pre-auth endpoints
 		tokenString := c.QueryParam("token")
@@ -272,10 +287,19 @@ func main() {
 
 		ws, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
 		if err != nil {
+			log.Printf(
+				"[WS] Upgrade failed host=%q origin=%q x-forwarded-host=%q err=%v",
+				req.Host,
+				origin,
+				forwardedHost,
+				err,
+			)
 			return err
 		}
 		if ws.Subprotocol() != "" {
 			log.Printf("[WS] Subprotocol selected: %s", ws.Subprotocol())
+		} else {
+			log.Printf("[WS] Subprotocol selected: <none>")
 		}
 
 		workspaceIDStr := c.QueryParam("workspace_id")

@@ -15,7 +15,6 @@ import (
 func TestCircularSerialization(t *testing.T) {
 	// 1. Setup Data with Circular Reference
 	uid := uuid.New()
-	oid := uuid.New()
 	wid := uuid.New()
 
 	user := models.User{
@@ -24,18 +23,11 @@ func TestCircularSerialization(t *testing.T) {
 		Email: "test@example.com",
 	}
 
-	org := models.Organization{
-		ID:   oid,
-		Name: "Test Org",
-	}
-
 	ws := models.Workspace{
-		ID:             wid,
-		UserID:         uid,
-		OrganizationID: oid,
-		Name:           "Test Workspace",
-		User:           user, // Embedding User
-		Organization:   org,  // Embedding Org
+		ID:     wid,
+		UserID: uid,
+		Name:   "Test Workspace",
+		User:   user, // Embedding User
 	}
 
 	// Create the cycle: User has the workspace
@@ -67,7 +59,4 @@ func TestCircularSerialization(t *testing.T) {
 	assert.Equal(t, uid.String(), userMap["id"], "Nested User ID should be preserved")
 	assert.Equal(t, "Test User", userMap["name"])
 
-	// Check Organization ID is present
-	orgMap := result["organization"].(map[string]interface{})
-	assert.Equal(t, oid.String(), orgMap["id"], "Nested Organization ID should be preserved")
 }

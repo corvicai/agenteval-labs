@@ -19,6 +19,7 @@ func TestStatsService_ComputeStats(t *testing.T) {
 	err = db.AutoMigrate(
 		&models.User{},
 		&models.Organization{},
+		&models.UserOrganization{},
 		&models.Workspace{},
 		&models.Agent{},
 		&models.Run{},
@@ -34,8 +35,11 @@ func TestStatsService_ComputeStats(t *testing.T) {
 	userID := uuid.New()
 	db.Create(&models.User{ID: userID, Name: "Test User", Email: "test@test.com"})
 
+	// Associate user with organization
+	db.Create(&models.UserOrganization{UserID: userID, OrganizationID: orgID, Role: "member"})
+
 	wsID := uuid.New()
-	db.Create(&models.Workspace{ID: wsID, UserID: userID, OrganizationID: orgID, Name: "Test WS"})
+	db.Create(&models.Workspace{ID: wsID, UserID: userID, Name: "Test WS"})
 
 	agentID := uuid.New()
 	db.Create(&models.Agent{ID: agentID, WorkspaceID: wsID, Name: "Test Agent", ProviderType: "mcp"})

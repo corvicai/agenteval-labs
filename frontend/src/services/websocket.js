@@ -15,6 +15,46 @@ class WebSocketService {
         this._iapTokenPromise = null
     }
 
+    async _probeWebSocketHttpEndpoint(wsUrl) {
+        const probeUrl = wsUrl.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:')
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 8000)
+
+        try {
+            const response = await fetch(probeUrl, {
+                method: 'GET',
+                credentials: 'include',
+                redirect: 'manual',
+                cache: 'no-store',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                signal: controller.signal
+            })
+
+            const contentType = response.headers?.get?.('content-type') || ''
+            const location = response.headers?.get?.('location') || ''
+            let bodyPreview = ''
+
+            if (contentType.includes('text/plain') || contentType.includes('text/html') || contentType.includes('application/json')) {
+                bodyPreview = (await response.text()).trim().slice(0, 120)
+            }
+
+            console.warn('[WS] HTTP probe result', {
+                url: probeUrl,
+                status: response.status,
+                statusText: response.statusText,
+                contentType,
+                location,
+                bodyPreview
+            })
+        } catch (e) {
+            console.warn('[WS] HTTP probe failed', { url: probeUrl, error: e?.message || e })
+        } finally {
+            clearTimeout(timeout)
+        }
+    }
+
     async _fetchIAPToken() {
         // Return cached promise if already fetching or fetched
         if (this._iapTokenPromise) return this._iapTokenPromise
@@ -204,7 +244,13 @@ class WebSocketService {
                             return
                         }
 
-                        console.error('[WS] Connection error:', e)
+                        console.error('[WS] Connection error:', {
+                            eventType: e?.type,
+                            readyState: ws.readyState,
+                            url: ws.url,
+                            protocols: protocolList || []
+                        })
+                        this._probeWebSocketHttpEndpoint(wsUrl)
                         this._emit('error', { error: e })
                         reject(e)
                     }
@@ -214,9 +260,13 @@ class WebSocketService {
                         this._handleMessage(event)
                     }
 
-                    ws.onclose = () => {
+                    ws.onclose = (closeEvent) => {
                         if (this.ws !== ws) return
-                        console.log('[WS] Disconnected')
+                        console.log('[WS] Disconnected', {
+                            code: closeEvent?.code,
+                            reason: closeEvent?.reason || '',
+                            wasClean: closeEvent?.wasClean
+                        })
                         this._emit('disconnected', {})
                         this._rejectPendingRequests('WebSocket disconnected')
                         if (this.suppressNextReconnect) {
