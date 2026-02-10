@@ -66,6 +66,7 @@ COPY --from=web_builder /app/dist /usr/share/nginx/html
 # Copy Go API binary and migrations (optional unified mode)
 COPY --from=api_builder /app/main /app/api
 COPY --from=api_builder /app/migrations /app/migrations
+RUN chmod +x /app/api
 
 # Copy Cloud SQL Proxy binary
 COPY --from=cloudsql_proxy /cloud-sql-proxy /usr/local/bin/cloud-sql-proxy

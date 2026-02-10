@@ -9,7 +9,7 @@ fi
 
 API_INTERNAL_PORT="${API_INTERNAL_PORT:-8081}"
 API_APP_ENV="${API_APP_ENV:-development}"
-echo "[entrypoint] Starting embedded API on :${API_INTERNAL_PORT}"
+echo "[entrypoint] Starting embedded API on :${API_INTERNAL_PORT} (APP_ENV=${API_APP_ENV})"
 
 # Optional Cloud SQL Proxy (for unified API in web container)
 CONNECTION_NAME="${CLOUD_SQL_CONNECTION_NAME:-${CSQL_PROXY_INSTANCE_CONNECTION_NAME:-}}"
@@ -34,3 +34,9 @@ if [ ! -x /app/api ]; then
 fi
 
 APP_ENV="${API_APP_ENV}" PORT="${API_INTERNAL_PORT}" /app/api &
+API_PID=$!
+sleep 1
+if ! kill -0 "${API_PID}" 2>/dev/null; then
+  echo "[entrypoint] ERROR: Embedded API exited early. Check logs above for fatal errors."
+  wait "${API_PID}" || true
+fi
