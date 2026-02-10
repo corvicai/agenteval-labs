@@ -8,14 +8,22 @@ OUTPUT_FILE="/usr/share/nginx/html/env-config.js"
 
 echo "window._env_ = {" > $OUTPUT_FILE
 
-# Get all environment variables starting with VITE_
-env | grep '^VITE_' | while read -r line; do
+# Get environment variables starting with VITE_, FIREBASE_, or exactly API_URL
+env | grep -E '^(VITE_|FIREBASE_|API_URL=)' | while read -r line; do
   # Extract key and value
   key=$(echo $line | cut -d '=' -f 1)
   value=$(echo $line | cut -d '=' -f 2-)
   
+  # Map legacy or infrastructure names to VITE_ names if needed
+  mapped_key=$key
+  if [ "$key" = "API_URL" ]; then
+    mapped_key="VITE_API_URL"
+  elif echo "$key" | grep -v '^VITE_' | grep -q '^FIREBASE_'; then
+    mapped_key="VITE_$key"
+  fi
+
   # Write to file
-  echo "  $key: \"$value\"," >> $OUTPUT_FILE
+  echo "  $mapped_key: \"$value\"," >> $OUTPUT_FILE
 done
 
 echo "};" >> $OUTPUT_FILE
