@@ -42,7 +42,7 @@ steps:
       echo "Deploying web..."
       gcloud run deploy agenteval-web-dev --image ${_IMAGE_REPO_BASE}/agenteval-web:${COMMIT_SHA} --region ${_DEPLOY_REGION} --quiet
 
- options:
+options:
   automapSubstitutions: true
   substitutionOption: ALLOW_LOOSE
   logging: CLOUD_LOGGING_ONLY
