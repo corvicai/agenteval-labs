@@ -31,29 +31,6 @@ COPY frontend/. .
 # Build the application
 RUN npm run build
 
-# Build stage (Go API)
-FROM golang:1.24-alpine AS api_builder
-
-WORKDIR /app
-
-# Install build dependencies
-RUN apk add --no-cache gcc musl-dev
-
-# Copy go mod files first for caching
-COPY server_go/go.mod server_go/go.sum ./
-
-# Download dependencies
-RUN go mod tidy
-
-# Copy source code AFTER dependencies are cached
-COPY server_go/. .
-
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
-
-# Cloud SQL Proxy binary (optional)
-FROM gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.18.2 AS cloudsql_proxy
-
 # Production stage
 FROM nginx:alpine
 
@@ -63,14 +40,6 @@ RUN apk add --no-cache gettext ca-certificates
 # Copy built files
 COPY --from=web_builder /app/dist /usr/share/nginx/html
 
-# Copy Go API binary and migrations (optional unified mode)
-COPY --from=api_builder /app/main /app/api
-COPY --from=api_builder /app/migrations /app/migrations
-RUN chmod +x /app/api
-
-# Copy Cloud SQL Proxy binary
-COPY --from=cloudsql_proxy /cloud-sql-proxy /usr/local/bin/cloud-sql-proxy
-
 # Copy nginx config template
 COPY frontend/nginx.conf.template /etc/nginx/templates/default.conf.template
 
@@ -78,14 +47,8 @@ COPY frontend/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY frontend/docker-entrypoint.sh /docker-entrypoint.d/99-env-config.sh
 RUN chmod +x /docker-entrypoint.d/99-env-config.sh
 
-# Optional: start embedded API inside the web container (dev unify mode)
-COPY infra/agenteval-web/start-api.sh /docker-entrypoint.d/90-start-api.sh
-RUN chmod +x /docker-entrypoint.d/90-start-api.sh
-
 # Default environment variables
 ENV PORT=8080
-ENV API_URL=http://go-api:8080
-ENV API_INTERNAL_PORT=8081
 
 EXPOSE 8080
 

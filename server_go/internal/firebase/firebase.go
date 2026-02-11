@@ -40,7 +40,16 @@ func InitFirebase() (*Client, error) {
 	// Fallback to Application Default Credentials (ADC)
 	if app == nil {
 		log.Printf("[FIREBASE] Initializing with Application Default Credentials (ADC)")
-		app, err = firebase.NewApp(ctx, nil)
+
+		var cfg *firebase.Config
+		firebaseProjectID := os.Getenv("FIREBASE_PROJECT_ID")
+		if firebaseProjectID != "" {
+			cfg = &firebase.Config {
+				ProjectID: firebaseProjectID,
+			}
+		}
+
+		app, err = firebase.NewApp(ctx, cfg)
 	}
 
 	if err != nil {

@@ -25,6 +25,11 @@ func Connect() (*gorm.DB, error) {
 			if port == "" {
 				port = "5432"
 			}
+			if password == "" {
+				// Not providing any password will confuse the gorm connection
+				// string parser
+				password = "''"
+			}
 			log.Println("[DB] Constructing DSN from granular environment variables")
 			dsn = fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=UTC",
 				host, user, password, dbname, port)
