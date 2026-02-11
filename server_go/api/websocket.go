@@ -36,6 +36,7 @@ const (
 
 	// Event types
 	EvtMaintenanceStarted = "EVT_MAINTENANCE_STARTED"
+	EvtTaskProgress       = "EVT_TASK_PROGRESS"
 
 	// Request types (Expecting a DATA response)
 	ReqGetManagerStats   = "REQ_GET_MANAGER_STATS"

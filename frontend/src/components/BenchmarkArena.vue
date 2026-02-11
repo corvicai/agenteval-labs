@@ -299,6 +299,7 @@ const { state: wsState } = wsStore
 const currentQuestionSet = ref(null)
 const currentRun = ref(null)
 const runResults = ref({})
+const taskProgress = ref({})
 const isRunning = ref(false)
 const activeRunQuestionSetId = ref(null)
 const isLoadingResults = ref(false)
@@ -946,6 +947,7 @@ function ensureResultsLoaded() {
 
 function applyRunLiteData(data) {
   runResults.value = {}
+  taskProgress.value = {}
   currentRun.value = null
   totalTasks.value = 0
   completedTasks.value = 0
@@ -1032,6 +1034,7 @@ function getAgentResults(agentId, includeAllQuestions = false) {
       id: res ? res.id : null,
       error: res ? res.error : null,
       metadata: res ? res.metadata : null,
+      progress: taskProgress.value[agentId]?.[qIdStr] || null,
       evaluations: res ? (res.evaluations || []) : [],
       humanValidation: res ? (ratingMap[res.humanValidation] || res.humanValidation) : null
     }
@@ -1073,6 +1076,7 @@ async function handleStartRun({ questionSetId, agentIds }) {
   completedTasks.value = 0
   totalTasks.value = selectedAgentsCount * flatQuestions.value.length
   runResults.value = {}
+  taskProgress.value = {}
   
   try {
     const result = await wsService.startRun(questionSetId, agentIds)
@@ -1099,6 +1103,7 @@ async function handleStartRun({ questionSetId, agentIds }) {
     
     isRunning.value = false
     pendingResultsBuffer.value = []
+    taskProgress.value = {}
   }
 
 }
@@ -1121,6 +1126,12 @@ function processTaskCompleted(data) {
             metadata: data.metadata || null
         }
     }
+    if (taskProgress.value[data.agent_id]) {
+      delete taskProgress.value[data.agent_id][data.question_id]
+      if (Object.keys(taskProgress.value[data.agent_id]).length === 0) {
+        delete taskProgress.value[data.agent_id]
+      }
+    }
 
     // Check if run completed for this question set
     if (isRunning.value && completedTasks.value === totalTasks.value) {
@@ -1128,6 +1139,7 @@ function processTaskCompleted(data) {
        if (activeRunQuestionSetId.value === currentQuestionSet.value?.id) {
          wsStore.setRunningQuestionSetId(null)
        }
+       taskProgress.value = {}
     }
 }
 
@@ -1155,6 +1167,8 @@ async function cancelBenchmark() {
     await wsService.cancelRun(currentRun.value.id)
     isRunning.value = false
     currentRun.value.status = 'cancelled'
+    wsStore.setRunningQuestionSetId(null)
+    taskProgress.value = {}
   } catch (e) {
     console.error('Failed to cancel run:', e)
   }
@@ -1345,6 +1359,19 @@ onMounted(async () => {
         }
     })
 
+    wsService.on('EVT_TASK_PROGRESS', (data) => {
+        if (!currentRun.value) return
+        if (data.run_id !== currentRun.value.id) return
+        const agentId = data.agent_id
+        const qIdStr = String(data.question_id)
+        if (!taskProgress.value[agentId]) taskProgress.value[agentId] = {}
+        taskProgress.value[agentId][qIdStr] = {
+            message: data.message || 'Runner still processing...',
+            elapsed_ms: data.elapsed_ms || null,
+            timestamp: new Date().toISOString()
+        }
+    })
+
     wsService.on('EVT_TASK_COMPLETED', (data) => {
         if (!currentRun.value) {
             if (isRunning.value) {
@@ -1396,6 +1423,7 @@ onMounted(async () => {
     wsService.on('EVT_RUN_FINISHED', () => {
         isRunning.value = false
         localStorage.removeItem('activeRunId')
+        taskProgress.value = {}
     })
 })
 

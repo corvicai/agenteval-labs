@@ -215,6 +215,29 @@ func (e *Engine) executeTask(task *Task) {
 	}
 
 	startTime := time.Now().UTC()
+	progressStop := make(chan struct{})
+	if e.eventCallback != nil && workspaceID != uuid.Nil {
+		go func(runID uuid.UUID, agentID uuid.UUID, questionID string) {
+			ticker := time.NewTicker(10 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-progressStop:
+					return
+				case <-ticker.C:
+					elapsed := time.Since(startTime)
+					e.eventCallback(workspaceID, "EVT_TASK_PROGRESS", runID.String(), map[string]any{
+						"run_id":      runID.String(),
+						"agent_id":    agentID.String(),
+						"question_id": questionID,
+						"elapsed_ms":  int(elapsed.Milliseconds()),
+						"message":     fmt.Sprintf("Runner still processing (%ds)", int(elapsed.Seconds())),
+					})
+				}
+			}
+		}(task.RunID, task.AgentID, task.QuestionID)
+	}
+	defer close(progressStop)
 
 	providerType := task.ProviderType
 	if providerType == "evaluator" {
