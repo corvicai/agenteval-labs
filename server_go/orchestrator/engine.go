@@ -273,6 +273,24 @@ func (e *Engine) executeTask(task *Task) {
 		executionResult = ExecutionResponse{Success: false, Error: err.Error()}
 	}
 
+	if !executionResult.Success {
+		metaSummary := ""
+		if len(executionResult.Metadata) > 0 {
+			if payload, err := json.Marshal(executionResult.Metadata); err == nil {
+				metaSummary = string(payload)
+			} else {
+				metaSummary = fmt.Sprintf("metadata_marshal_error=%v", err)
+			}
+		}
+		if metaSummary != "" {
+			log.Printf("[ENGINE] Task failed: Run %s, Agent %s, Question %s, Error=%s, Metadata=%s",
+				task.RunID, task.AgentID, task.QuestionID, executionResult.Error, truncate(metaSummary, 2000))
+		} else {
+			log.Printf("[ENGINE] Task failed: Run %s, Agent %s, Question %s, Error=%s",
+				task.RunID, task.AgentID, task.QuestionID, executionResult.Error)
+		}
+	}
+
 	durationMs := int(time.Since(startTime).Milliseconds())
 
 	// Store result in DB
