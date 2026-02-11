@@ -178,6 +178,32 @@ func main() {
 		jwtSecret = "dev-secret-change-in-production"
 	}
 
+	// Encryption key initialization for encrypted JSON fields (agents config, etc.).
+	// Keep production strict, but provide a stable dev fallback for PR/preview deployments.
+	encryptionKey := os.Getenv("ENCRYPTION_KEY")
+	if encryptionKey == "" {
+		if os.Getenv("APP_ENV") == "production" {
+			log.Fatal("[SECURITY] FATAL: ENCRYPTION_KEY environment variable must be set in production")
+		}
+		encryptionKey = "dev-temp-encryption-key-00000001"
+		if err := os.Setenv("ENCRYPTION_KEY", encryptionKey); err != nil {
+			log.Fatalf("[SECURITY] FATAL: Failed to set fallback ENCRYPTION_KEY: %v", err)
+		}
+		log.Println("[SECURITY] WARN: ENCRYPTION_KEY not set, using development fallback key")
+	} else {
+		keyLen := len(encryptionKey)
+		if keyLen != 16 && keyLen != 24 && keyLen != 32 {
+			if os.Getenv("APP_ENV") == "production" {
+				log.Fatalf("[SECURITY] FATAL: invalid ENCRYPTION_KEY length: %d bytes (must be 16, 24, or 32)", keyLen)
+			}
+			log.Printf("[SECURITY] WARN: invalid ENCRYPTION_KEY length (%d), using development fallback key", keyLen)
+			encryptionKey = "dev-temp-encryption-key-00000001"
+			if err := os.Setenv("ENCRYPTION_KEY", encryptionKey); err != nil {
+				log.Fatalf("[SECURITY] FATAL: Failed to set fallback ENCRYPTION_KEY: %v", err)
+			}
+		}
+	}
+
 	engine := orchestrator.NewEngine(database, pythonURL, workerCount)
 
 	// Initialize Firebase Admin SDK

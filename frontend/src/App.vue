@@ -179,6 +179,11 @@
       />
     </template>
     <MaintenanceOverlay :active="wsState.isMaintenance" />
+    <AfkReconnectOverlay
+      :active="afkOverlayVisible"
+      :reconnecting="isReconnectingFromAfk"
+      @reconnect="reconnectFromAfk"
+    />
   </div>
 </template>
 
@@ -194,6 +199,7 @@ import StatsView from './components/StatsView.vue';
 import QuestionEditorModal from './components/QuestionEditorModal.vue';
 import ImportQuestionsModal from './components/ImportQuestionsModal.vue';
 import MaintenanceOverlay from './components/MaintenanceOverlay.vue'
+import AfkReconnectOverlay from './components/AfkReconnectOverlay.vue'
 import AgentManagerModal from './components/AgentManagerModal.vue'
 import DocsView from './components/DocsView.vue'
 import PrintReport from './components/PrintReport.vue'
@@ -203,6 +209,7 @@ import { useWSStore } from './stores/wsStore'
 import { downloadManager } from './services/DownloadManager.js'
 import { contentCache } from './services/ContentCache.js'
 import { generateQuestionSetName } from './utils/nameGenerator.js'
+import { config } from './config'
 import './App.css'
 
 const { state: wsState, syncState, connect: wsConnect, disconnect: wsDisconnect } = useWSStore()
@@ -247,6 +254,17 @@ const workspacesLoading = ref(false)
 const workspacesError = ref('')
 const currentWorkspace = ref(api.getStoredWorkspace())
 const refreshInterval = ref(null)
+const afkOverlayVisible = ref(false)
+const isReconnectingFromAfk = ref(false)
+
+const DEFAULT_AFK_TIMEOUT_MS = 180000
+const parsedAfkTimeout = Number.parseInt(config.AFK_TIMEOUT_MS || '', 10)
+const afkTimeoutMs = Number.isFinite(parsedAfkTimeout) && parsedAfkTimeout > 0
+  ? parsedAfkTimeout
+  : DEFAULT_AFK_TIMEOUT_MS
+const afkActivityEvents = ['pointerdown', 'mousemove', 'touchstart', 'scroll']
+let afkTimer = null
+let lastAfkResetAt = 0
 
 const agents = computed(() => wsState.agents)
 const questionSets = computed(() => wsState.questionSets)
@@ -431,10 +449,11 @@ async function onLogin() {
 
     // Onboarding check removed - users don't need organizations
 
-  } catch (err) {
-    console.error('[App] Login initialization failed:', err)
+    } catch (err) {
+      console.error('[App] Login initialization failed:', err)
     } finally {
       appReady.value = true
+      scheduleAfkTimer()
       isLoggingIn.value = false
     }
 }
@@ -451,6 +470,9 @@ async function handleLogout() {
   isAuthenticated.value = false
   currentUser.value = null
   currentWorkspace.value = null
+  afkOverlayVisible.value = false
+  isReconnectingFromAfk.value = false
+  clearAfkTimer()
   // runResults, currentRun, tasks, selectedQuestionId are now in BenchmarkArena and will be unmounted.
   // We just need to clear global state.
   isManager.value = false
@@ -843,11 +865,68 @@ const isImpersonating = computed(() => {
   return !!user?.impersonator_id
 })
 
-const handleKeydown = (e) => {
+const handleKeydown = () => {
+  handleUserActivity()
+}
+
+function clearAfkTimer() {
+  if (!afkTimer) return
+  clearTimeout(afkTimer)
+  afkTimer = null
+}
+
+function canTrackAfk() {
+  return isAuthenticated.value && appReady.value && !wsState.isMaintenance
+}
+
+async function activateAfkMode() {
+  if (!canTrackAfk() || afkOverlayVisible.value) return
+  afkOverlayVisible.value = true
+  isReconnectingFromAfk.value = false
+  wsDisconnect()
+}
+
+function scheduleAfkTimer() {
+  clearAfkTimer()
+  if (!canTrackAfk() || afkOverlayVisible.value) return
+  afkTimer = setTimeout(() => {
+    activateAfkMode()
+  }, afkTimeoutMs)
+}
+
+function handleUserActivity() {
+  if (!canTrackAfk() || afkOverlayVisible.value) return
+  const now = Date.now()
+  if (now - lastAfkResetAt < 1000) return
+  lastAfkResetAt = now
+  scheduleAfkTimer()
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState !== 'visible') return
+  if (afkOverlayVisible.value) return
+  scheduleAfkTimer()
+}
+
+async function reconnectFromAfk() {
+  if (isReconnectingFromAfk.value) return
+  isReconnectingFromAfk.value = true
+  try {
+    await wsConnect(currentWorkspace.value?.id || null)
+    await syncState()
+    afkOverlayVisible.value = false
+    scheduleAfkTimer()
+  } catch (e) {
+    console.error('[App] AFK reconnect failed:', e)
+  } finally {
+    isReconnectingFromAfk.value = false
+  }
 }
 
 onMounted(async () => {
   window.addEventListener('keydown', handleKeydown)
+  afkActivityEvents.forEach((eventName) => window.addEventListener(eventName, handleUserActivity))
+  document.addEventListener('visibilitychange', handleVisibilityChange)
   // If we think we are authenticated, verify with the backend
   if (isAuthenticated.value) {
     try {
@@ -888,10 +967,12 @@ onMounted(async () => {
         handleLogout()
       } finally {
         appReady.value = true
+        scheduleAfkTimer()
       }
     } else {
        // Not authenticated, but we should be ready to show login
        appReady.value = true
+       clearAfkTimer()
     }
   
   // Custom handlers for UI-specific reactivity in App.vue
@@ -920,6 +1001,9 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
+  afkActivityEvents.forEach((eventName) => window.removeEventListener(eventName, handleUserActivity))
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  clearAfkTimer()
   wsDisconnect()
   if (refreshInterval.value) {
     clearInterval(refreshInterval.value)
@@ -1013,5 +1097,3 @@ onUnmounted(() => {
   opacity: 1;
   transform: translateY(-50%) translateX(-2px);
 }
-
-

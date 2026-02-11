@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 
 	"benchmarking-platform/internal/middleware"
@@ -229,6 +230,14 @@ func (h *Hub) handleCreateAgent(c *Connection, env models.Envelope) {
 	}
 
 	if err := h.db.Create(&agent).Error; err != nil {
+		log.Printf(
+			"[WS][CREATE_AGENT] db create failed user_id=%s workspace_id=%s agent_name=%q provider_type=%q err=%v",
+			c.UserID,
+			wsID,
+			payload.Name,
+			payload.ProviderType,
+			err,
+		)
 		c.SendErrorWithDetails(env.CorrelationID, "failed to create agent", err.Error())
 		return
 	}

@@ -313,6 +313,28 @@ func runCommand(name string, args ...string) error {
 	return cmd.Run()
 }
 
+func ensureDockerNetwork(name string) error {
+	inspect := exec.Command("docker", "network", "inspect", name)
+	if err := inspect.Run(); err == nil {
+		log.Printf("  ✓ Docker network %q already exists", name)
+		return nil
+	}
+
+	create := exec.Command("docker", "network", "create", name)
+	output, err := create.CombinedOutput()
+	if err != nil {
+		out := strings.TrimSpace(string(output))
+		if strings.Contains(out, "already exists") {
+			log.Printf("  ✓ Docker network %q already exists", name)
+			return nil
+		}
+		return fmt.Errorf("docker network create %s failed: %v (%s)", name, err, out)
+	}
+
+	log.Printf("  ✓ Docker network %q created", name)
+	return nil
+}
+
 func findProjectRoot() string {
 	// Try to find docker-compose.yml by walking up directories
 	dir, _ := os.Getwd()
@@ -358,7 +380,9 @@ func main() {
 	if projDir != "" {
 		os.Chdir(projDir)
 		// Ensure public network exists
-		runCommand("docker", "network", "create", "benchmarking-public")
+		if err := ensureDockerNetwork("benchmarking-public"); err != nil {
+			log.Printf("  ⚠ Failed to ensure docker network: %v", err)
+		}
 	}
 
 	// If config path is relative and missing, try resolving from project root.

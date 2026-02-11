@@ -24,6 +24,7 @@ export const config = {
 
     // Feature Flags / UI Config
     ENABLE_LEGACY_AUTH: env.VITE_ENABLE_LEGACY_AUTH || import.meta.env.VITE_ENABLE_LEGACY_AUTH,
+    AFK_TIMEOUT_MS: env.VITE_AFK_TIMEOUT_MS || import.meta.env.VITE_AFK_TIMEOUT_MS,
 
     // Meta
     GIT_COMMIT: env.VITE_GIT_COMMIT || import.meta.env.VITE_GIT_COMMIT,

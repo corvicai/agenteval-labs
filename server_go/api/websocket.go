@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -523,16 +524,38 @@ func (c *Connection) SendError(correlationID string, errMsg string) {
 	c.SendErrorWithDetails(correlationID, errMsg, nil)
 }
 
+func wsDebugEnabled() bool {
+	if value := os.Getenv("WS_DEBUG_ERRORS"); value != "" {
+		enabled, err := strconv.ParseBool(value)
+		if err == nil {
+			return enabled
+		}
+	}
+	return os.Getenv("APP_ENV") == "development" || os.Getenv("APP_ENV") == ""
+}
+
 func (c *Connection) SendErrorWithDetails(correlationID string, errMsg string, details any) {
 	payload := map[string]any{
 		"error": errMsg,
 	}
 
-	if os.Getenv("APP_ENV") == "development" || os.Getenv("APP_ENV") == "" {
+	if wsDebugEnabled() {
 		if details != nil {
 			payload["details"] = details
 		}
 	}
+
+	// Always emit server-side context so Cloud Run logs show root causes even when
+	// payload details are suppressed for clients.
+	log.Printf(
+		"[WS][ERROR] correlation_id=%s conn_id=%s user_id=%s workspace_id=%s message=%q details=%v",
+		correlationID,
+		c.ID,
+		c.UserID,
+		c.WorkspaceID,
+		errMsg,
+		details,
+	)
 
 	c.SendResponse(EvtError, correlationID, payload)
 }

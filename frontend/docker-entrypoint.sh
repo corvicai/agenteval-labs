@@ -10,7 +10,7 @@ echo "window._env_ = {" > $OUTPUT_FILE
 
 # Only expose a safe, explicit whitelist to the browser.
 # Keep API_URL/WS_URL server-side to avoid cross-origin misrouting.
-PUBLIC_ENV_REGEX='^(VITE_FIREBASE_|VITE_GIT_COMMIT=|VITE_ENABLE_LEGACY_AUTH=|FIREBASE_|GIT_COMMIT=)'
+PUBLIC_ENV_REGEX='^(VITE_FIREBASE_|VITE_GIT_COMMIT=|VITE_ENABLE_LEGACY_AUTH=|VITE_AFK_TIMEOUT_MS=|FIREBASE_|GIT_COMMIT=)'
 env | grep -E "${PUBLIC_ENV_REGEX}" | while read -r line; do
   # Extract key and value
   key=$(echo $line | cut -d '=' -f 1)
