@@ -6,13 +6,27 @@ steps:
       #!/usr/bin/env bash
       set -eu -o pipefail
       RELEASE_TAG=$(cat infra/releng/release-tag.txt)
+
+      PROD_ENCRYPTION_ARG=""
+      if [ -n "${_ENCRYPTION_KEY_PROD:-}" ]; then
+        if [ "${#_ENCRYPTION_KEY_PROD}" -ne 32 ]; then
+          echo "ERROR: _ENCRYPTION_KEY_PROD must be 32 chars (got ${#_ENCRYPTION_KEY_PROD})."
+          exit 1
+        fi
+        PROD_ENCRYPTION_ARG="--update-env-vars ENCRYPTION_KEY=${_ENCRYPTION_KEY_PROD}"
+      else
+        echo "INFO: _ENCRYPTION_KEY_PROD not provided; deploying without changing ENCRYPTION_KEY."
+      fi
       
       # Deploy runner first
       echo "Deploying runner..."
       gcloud run deploy agenteval-runner-prod --image ${_IMAGE_REPO_BASE}/agenteval-runner:release-${RELEASE_TAG} --region ${_DEPLOY_REGION} --quiet
 
       echo "Deploying api..."
-      gcloud run deploy agenteval-api-prod --image ${_IMAGE_REPO_BASE}/agenteval-api:release-${RELEASE_TAG} --region ${_DEPLOY_REGION} --quiet
+      gcloud run deploy agenteval-api-prod ${PROD_ENCRYPTION_ARG} \
+        --image ${_IMAGE_REPO_BASE}/agenteval-api:release-${RELEASE_TAG} \
+        --region ${_DEPLOY_REGION} \
+        --quiet
 
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     id: 'deploy-frontend'

@@ -25,6 +25,12 @@ steps:
     script: |
       #!/usr/bin/env bash
       set -eu -o pipefail
+
+      DEV_ENCRYPTION_KEY="${_ENCRYPTION_KEY_DEV:-dev-temp-encryption-key-00000001}"
+      if [ "${#DEV_ENCRYPTION_KEY}" -ne 32 ]; then
+        echo "ERROR: _ENCRYPTION_KEY_DEV must be 32 chars (got ${#DEV_ENCRYPTION_KEY})."
+        exit 1
+      fi
       
       # Deploy runner first
       echo "Deploying runner..."
@@ -35,20 +41,25 @@ steps:
         --image ${_IMAGE_REPO_BASE}/agenteval-api:${COMMIT_SHA} \
         --region ${_DEPLOY_REGION} \
         --quiet \
-        --update-env-vars APP_ENV=development,WS_DEBUG_ERRORS=true
+        --update-env-vars APP_ENV=development,WS_DEBUG_ERRORS=true,ENCRYPTION_KEY=${DEV_ENCRYPTION_KEY}
 
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     id: 'deploy-frontend'
     script: |
       #!/usr/bin/env bash
       set -eu -o pipefail
+      DEV_ENCRYPTION_KEY="${_ENCRYPTION_KEY_DEV:-dev-temp-encryption-key-00000001}"
+      if [ "${#DEV_ENCRYPTION_KEY}" -ne 32 ]; then
+        echo "ERROR: _ENCRYPTION_KEY_DEV must be 32 chars (got ${#DEV_ENCRYPTION_KEY})."
+        exit 1
+      fi
 
       echo "Deploying web..."
       gcloud run deploy agenteval-web-dev \
         --image ${_IMAGE_REPO_BASE}/agenteval-web:${COMMIT_SHA} \
         --region ${_DEPLOY_REGION} \
         --quiet \
-        --update-env-vars ENABLE_API_IN_WEB=1,API_INTERNAL_PORT=8081,API_URL=http://127.0.0.1:8081,API_APP_ENV=development,WS_DEBUG_ERRORS=true \
+        --update-env-vars ENABLE_API_IN_WEB=1,API_INTERNAL_PORT=8081,API_URL=http://127.0.0.1:8081,API_APP_ENV=development,WS_DEBUG_ERRORS=true,ENCRYPTION_KEY=${DEV_ENCRYPTION_KEY} \
         --remove-env-vars VITE_WS_URL,VITE_WS_HOST,VITE_WS_PORT,WS_URL,VITE_API_URL
 
 options:
