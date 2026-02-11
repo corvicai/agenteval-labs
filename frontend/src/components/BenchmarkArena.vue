@@ -1333,15 +1333,37 @@ function clearRunProgress(runId) {
 }
 
 function resolveRunAgentIds(data) {
-  const qsAgents = data?.question_set?.agents || []
-  const enabledAgents = qsAgents.filter(a => a.enabled !== false).map(a => a.id)
-  if (enabledAgents.length > 0) {
-    return enabledAgents
+  const ids = new Set()
+
+  const runAgentIds = data?.run?.agent_ids || data?.run?.agentIds
+  if (Array.isArray(runAgentIds)) {
+    runAgentIds.forEach(id => {
+      if (id) ids.add(id)
+    })
   }
-  if (data?.agents) {
-    return Object.keys(data.agents)
+
+  if (Array.isArray(data?.results)) {
+    data.results.forEach(res => {
+      if (res?.agent_id) ids.add(res.agent_id)
+    })
   }
-  return []
+
+  const qsAgents = data?.question_set?.agents
+  if (Array.isArray(qsAgents)) {
+    qsAgents.forEach(agent => {
+      const id = agent?.agent_id || agent?.id
+      const enabled = agent?.enabled
+      if (id && enabled !== false) ids.add(id)
+    })
+  }
+
+  if (data?.agents && typeof data.agents === 'object' && !Array.isArray(data.agents)) {
+    Object.keys(data.agents).forEach(id => {
+      if (id) ids.add(id)
+    })
+  }
+
+  return Array.from(ids).filter(Boolean)
 }
 
 function extractQuestionIdsFromQuestionSet(questionSet) {
