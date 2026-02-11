@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -27,7 +28,7 @@ func newHTTPRunner(baseURL string) *httpRunner {
 		baseURL: baseURL,
 		httpClient: &http.Client{
 			Transport: transport,
-			Timeout:   10 * time.Minute,
+			Timeout:   runnerTaskTimeout,
 		},
 	}
 }
@@ -61,10 +62,13 @@ func (r *httpRunner) Health() error {
 	return nil
 }
 
-func (r *httpRunner) Execute(req ExecutionRequest) (ExecutionResponse, error) {
+func (r *httpRunner) Execute(ctx context.Context, req ExecutionRequest) (ExecutionResponse, error) {
 	if r.baseURL == "" {
 		return ExecutionResponse{Success: false, Error: "python runner url not configured"}, nil
 	}
+
+	ctx, cancel := ensureRunnerContext(ctx)
+	defer cancel()
 
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -72,7 +76,7 @@ func (r *httpRunner) Execute(req ExecutionRequest) (ExecutionResponse, error) {
 	}
 
 	url := fmt.Sprintf("%s/execute", r.baseURL)
-	reqHttp, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
+	reqHttp, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(body))
 	if err != nil {
 		return ExecutionResponse{Success: false, Error: err.Error()}, nil
 	}

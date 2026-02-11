@@ -1,12 +1,13 @@
 package orchestrator
 
 import (
+	"context"
 	"os"
 	"strings"
 )
 
 type Runner interface {
-	Execute(req ExecutionRequest) (ExecutionResponse, error)
+	Execute(ctx context.Context, req ExecutionRequest) (ExecutionResponse, error)
 	Health() error
 }
 

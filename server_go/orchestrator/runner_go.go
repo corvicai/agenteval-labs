@@ -29,18 +29,21 @@ func (r *goRunner) Health() error {
 	return nil
 }
 
-func (r *goRunner) Execute(req ExecutionRequest) (ExecutionResponse, error) {
+func (r *goRunner) Execute(ctx context.Context, req ExecutionRequest) (ExecutionResponse, error) {
+	ctx, cancel := ensureRunnerContext(ctx)
+	defer cancel()
+
 	switch strings.ToLower(strings.TrimSpace(req.ProviderType)) {
 	case "mcp":
-		return r.executeMCP(req), nil
+		return r.executeMCP(ctx, req), nil
 	case "openai":
-		return r.executeOpenAI(req), nil
+		return r.executeOpenAI(ctx, req), nil
 	default:
 		return ExecutionResponse{Success: false, Error: fmt.Sprintf("unknown provider type: %s", req.ProviderType)}, nil
 	}
 }
 
-func (r *goRunner) executeMCP(req ExecutionRequest) ExecutionResponse {
+func (r *goRunner) executeMCP(ctx context.Context, req ExecutionRequest) ExecutionResponse {
 	start := time.Now()
 	endpoint := firstNonEmptyString(req.Config, "endpoint")
 	token := firstNonEmptyString(req.Config, "token")
@@ -74,52 +77,62 @@ func (r *goRunner) executeMCP(req ExecutionRequest) ExecutionResponse {
 		}
 	}
 
+	if ctx.Err() != nil {
+		return ExecutionResponse{Success: false, Error: ctx.Err().Error(), Metadata: errorMeta(start, ctx.Err(), nil)}
+	}
+
 	maxRetries := 3
 	for retry := 0; retry <= maxRetries; retry++ {
-		result, metadata, err := r.callMCP(endpoint, token, questionText, retry)
+		if ctx.Err() != nil {
+			return ExecutionResponse{Success: false, Error: ctx.Err().Error(), Metadata: errorMeta(start, ctx.Err(), nil)}
+		}
+
+		result, metadata, err := r.callMCP(ctx, endpoint, token, questionText, retry)
 		if err == nil {
 			result.Metadata = metadata
 			result.Metadata["duration_ms"] = int(time.Since(start).Milliseconds())
 			return result
 		}
 
+		if ctx.Err() != nil {
+			return ExecutionResponse{Success: false, Error: ctx.Err().Error(), Metadata: errorMeta(start, ctx.Err(), nil)}
+		}
+
 		if isRateLimitError(err) && retry < maxRetries {
 			waitTime := time.Duration(1<<uint(retry+1)) * time.Second
 			log.Printf("[GO RUNNER] MCP rate limited. Retry %d/%d in %s", retry+1, maxRetries, waitTime)
-			time.Sleep(waitTime)
+			select {
+			case <-ctx.Done():
+				return ExecutionResponse{Success: false, Error: ctx.Err().Error(), Metadata: errorMeta(start, ctx.Err(), nil)}
+			case <-time.After(waitTime):
+			}
 			continue
 		}
 
 		errMeta := errorMeta(start, err, nil)
 		errMeta["retry_count"] = retry
-		return ExecutionResponse{
-			Success:  false,
-			Error:    err.Error(),
-			Metadata: errMeta,
-		}
+		return ExecutionResponse{Success: false, Error: err.Error(), Metadata: errMeta}
 	}
 
-	return ExecutionResponse{
-		Success:  false,
-		Error:    "Max retries exceeded",
-		Metadata: durationMeta(start),
-	}
+	return ExecutionResponse{Success: false, Error: "Max retries exceeded", Metadata: durationMeta(start)}
 }
 
-func (r *goRunner) callMCP(endpoint, token, question string, retry int) (ExecutionResponse, map[string]any, error) {
+func (r *goRunner) callMCP(ctx context.Context, endpoint, token, question string, retry int) (ExecutionResponse, map[string]any, error) {
 	client := mcp.NewClient(&mcp.Implementation{Name: "agenteval-runner", Version: "v1.0.0"}, nil)
 
 	httpClient := &http.Client{
-		Timeout: 10 * time.Minute,
+		Timeout: runnerTaskTimeout,
 		Transport: &authTransport{
 			token: token,
 			base:  http.DefaultTransport,
 		},
 	}
 
-	connectCtx, cancelConnect := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancelConnect()
-	session, err := client.Connect(connectCtx, &mcp.StreamableClientTransport{
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
 		Endpoint:             endpoint,
 		HTTPClient:           httpClient,
 		DisableStandaloneSSE: true,
@@ -140,15 +153,15 @@ func (r *goRunner) callMCP(endpoint, token, question string, retry int) (Executi
 			select {
 			case <-progressStop:
 				return
+			case <-ctx.Done():
+				return
 			case <-ticker.C:
 				log.Printf("[GO RUNNER] Still processing MCP... %ds", int(time.Since(callStart).Seconds()))
 			}
 		}
 	}()
 
-	callCtx, cancelCall := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancelCall()
-	res, err := session.CallTool(callCtx, &mcp.CallToolParams{
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name: "query",
 		Arguments: map[string]any{
 			"query_content": question,
@@ -183,7 +196,7 @@ func (r *goRunner) callMCP(endpoint, token, question string, retry int) (Executi
 	}, metadata, nil
 }
 
-func (r *goRunner) executeOpenAI(req ExecutionRequest) ExecutionResponse {
+func (r *goRunner) executeOpenAI(ctx context.Context, req ExecutionRequest) ExecutionResponse {
 	start := time.Now()
 	apiKey := firstNonEmptyString(req.Config, "api_key")
 	promptID := firstNonEmptyString(req.Config, "prompt_id")
@@ -231,6 +244,10 @@ func (r *goRunner) executeOpenAI(req ExecutionRequest) ExecutionResponse {
 		}
 	}
 
+	if ctx != nil && ctx.Err() != nil {
+		return ExecutionResponse{Success: false, Error: ctx.Err().Error(), Metadata: errorMeta(start, ctx.Err(), nil)}
+	}
+
 	var resultText string
 	var rawResponse map[string]any
 	var err error
@@ -258,7 +275,7 @@ func (r *goRunner) executeOpenAI(req ExecutionRequest) ExecutionResponse {
 		}
 		promptSent = inputPayload
 
-		resultText, rawResponse, err = callOpenAIResponses(apiKey, projectID, promptID, promptVersion, inputPayload)
+		resultText, rawResponse, err = callOpenAIResponses(ctx, apiKey, projectID, promptID, promptVersion, inputPayload)
 	} else if imageData != nil {
 		dataURL, err := buildImageDataURL(imageData)
 		if err != nil {
@@ -268,11 +285,11 @@ func (r *goRunner) executeOpenAI(req ExecutionRequest) ExecutionResponse {
 			{"type": "image_url", "image_url": map[string]any{"url": dataURL}},
 		}
 		promptSent = content
-		resultText, rawResponse, err = callOpenAIChat(apiKey, projectID, []map[string]any{{"role": "user", "content": content}})
+		resultText, rawResponse, err = callOpenAIChat(ctx, apiKey, projectID, []map[string]any{{"role": "user", "content": content}})
 	} else {
 		questionText = buildEvaluationPrompt(questionText, originalQuestion, expectedAnswer)
 		promptSent = questionText
-		resultText, rawResponse, err = callOpenAIChat(apiKey, projectID, []map[string]any{{"role": "user", "content": questionText}})
+		resultText, rawResponse, err = callOpenAIChat(ctx, apiKey, projectID, []map[string]any{{"role": "user", "content": questionText}})
 	}
 
 	if err != nil {
@@ -436,7 +453,7 @@ func buildEvaluationPrompt(question, originalQuestion, expectedAnswer string) st
 	return b.String()
 }
 
-func callOpenAIResponses(apiKey, projectID, promptID, promptVersion string, inputPayload any) (string, map[string]any, error) {
+func callOpenAIResponses(ctx context.Context, apiKey, projectID, promptID, promptVersion string, inputPayload any) (string, map[string]any, error) {
 	body := map[string]any{
 		"prompt": map[string]any{
 			"id":      promptID,
@@ -448,20 +465,20 @@ func callOpenAIResponses(apiKey, projectID, promptID, promptVersion string, inpu
 		"include":   []string{"web_search_call.action.sources"},
 	}
 
-	return callOpenAI(apiKey, projectID, "responses", body, parseOpenAIResponses)
+	return callOpenAI(ctx, apiKey, projectID, "responses", body, parseOpenAIResponses)
 }
 
-func callOpenAIChat(apiKey, projectID string, messages []map[string]any) (string, map[string]any, error) {
+func callOpenAIChat(ctx context.Context, apiKey, projectID string, messages []map[string]any) (string, map[string]any, error) {
 	body := map[string]any{
 		"model":    "gpt-4o-mini",
 		"messages": messages,
 	}
-	return callOpenAI(apiKey, projectID, "chat/completions", body, parseOpenAIChat)
+	return callOpenAI(ctx, apiKey, projectID, "chat/completions", body, parseOpenAIChat)
 }
 
 type parseFn func(map[string]any) (string, error)
 
-func callOpenAI(apiKey, projectID, path string, body map[string]any, parser parseFn) (string, map[string]any, error) {
+func callOpenAI(ctx context.Context, apiKey, projectID, path string, body map[string]any, parser parseFn) (string, map[string]any, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return "", nil, err
@@ -472,7 +489,10 @@ func callOpenAI(apiKey, projectID, path string, body map[string]any, parser pars
 		baseURL = "https://api.openai.com/v1"
 	}
 
-	req, err := http.NewRequest("POST", baseURL+"/"+path, bytes.NewReader(payload))
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/"+path, bytes.NewReader(payload))
 	if err != nil {
 		return "", nil, err
 	}
@@ -482,7 +502,7 @@ func callOpenAI(apiKey, projectID, path string, body map[string]any, parser pars
 		req.Header.Set("OpenAI-Project", projectID)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Minute}
+	client := &http.Client{Timeout: runnerTaskTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", nil, err

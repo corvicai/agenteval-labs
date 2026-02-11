@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -21,6 +22,8 @@ type Engine struct {
 	workerCount     int
 	taskQueue       chan *Task
 	cancelledRuns   map[uuid.UUID]bool
+	runContexts     map[uuid.UUID]context.Context
+	runCancels      map[uuid.UUID]context.CancelFunc
 	agentSemaphores map[uuid.UUID]chan struct{} // Per-agent concurrency control
 	mu              sync.RWMutex
 	wg              sync.WaitGroup
@@ -63,6 +66,8 @@ func NewEngine(db *gorm.DB, pythonURL string, workers int) *Engine {
 		workerCount:     workers,
 		taskQueue:       make(chan *Task, 10000),
 		cancelledRuns:   make(map[uuid.UUID]bool),
+		runContexts:     make(map[uuid.UUID]context.Context),
+		runCancels:      make(map[uuid.UUID]context.CancelFunc),
 		agentSemaphores: make(map[uuid.UUID]chan struct{}),
 	}
 }
@@ -143,10 +148,36 @@ func (e *Engine) QueueTask(task *Task) {
 	e.taskQueue <- task
 }
 
+func (e *Engine) ensureRunContext(runID uuid.UUID) context.Context {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if ctx, ok := e.runContexts[runID]; ok {
+		return ctx
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	e.runContexts[runID] = ctx
+	e.runCancels[runID] = cancel
+	return ctx
+}
+
+func (e *Engine) cancelRunContext(runID uuid.UUID) {
+	var cancel context.CancelFunc
+	e.mu.Lock()
+	cancel = e.runCancels[runID]
+	delete(e.runCancels, runID)
+	delete(e.runContexts, runID)
+	e.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
 func (e *Engine) CancelRun(runID uuid.UUID) {
 	e.mu.Lock()
 	e.cancelledRuns[runID] = true
 	e.mu.Unlock()
+
+	e.cancelRunContext(runID)
 
 	// Update run status in DB
 	if e.db != nil {
@@ -176,6 +207,10 @@ func (e *Engine) executeTask(task *Task) {
 		})
 	}
 
+	runCtx := e.ensureRunContext(task.RunID)
+	taskCtx, cancel := context.WithTimeout(runCtx, runnerTaskTimeout)
+	defer cancel()
+
 	startTime := time.Now().UTC()
 	progressStop := make(chan struct{})
 	if e.eventCallback != nil && workspaceID != uuid.Nil {
@@ -185,6 +220,8 @@ func (e *Engine) executeTask(task *Task) {
 			for {
 				select {
 				case <-progressStop:
+					return
+				case <-taskCtx.Done():
 					return
 				case <-ticker.C:
 					elapsed := time.Since(startTime)
@@ -231,7 +268,7 @@ func (e *Engine) executeTask(task *Task) {
 		Payload:      payload,
 	}
 
-	executionResult, err := e.runner.Execute(req)
+	executionResult, err := e.runner.Execute(taskCtx, req)
 	if err != nil {
 		executionResult = ExecutionResponse{Success: false, Error: err.Error()}
 	}
@@ -298,6 +335,10 @@ func (e *Engine) checkRunCompletion(runID uuid.UUID) {
 		return
 	}
 
+	if run.Status == "cancelled" {
+		return
+	}
+
 	// Count expected vs completed results
 	var count int64
 	e.db.Model(&models.RunResult{}).Where("run_id = ?", runID).Count(&count)
@@ -325,6 +366,8 @@ func (e *Engine) checkRunCompletion(runID uuid.UUID) {
 				"status":      newStatus,
 			})
 		}
+
+		e.cancelRunContext(runID)
 	}
 }
 
@@ -698,6 +741,8 @@ func (e *Engine) StartRun(workspaceID uuid.UUID, questionSetID uuid.UUID, agentI
 		return nil, err
 	}
 
+	e.ensureRunContext(run.ID)
+
 	// Queue tasks for each agent + question
 	for _, agent := range agents {
 		if agent.ProviderType == "evaluator" {
@@ -773,6 +818,8 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 	if err := e.db.First(&agent, "id = ?", agentID).Error; err != nil {
 		return fmt.Errorf("agent not found")
 	}
+
+	e.ensureRunContext(run.ID)
 
 	// Optional: Use result_id to locate the exact answer to evaluate
 	var resultFromPayload *models.RunResult

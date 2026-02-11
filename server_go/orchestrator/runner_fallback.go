@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"log"
 	"strings"
 )
@@ -21,21 +22,24 @@ func (r *fallbackRunner) Health() error {
 	return r.primary.Health()
 }
 
-func (r *fallbackRunner) Execute(req ExecutionRequest) (ExecutionResponse, error) {
+func (r *fallbackRunner) Execute(ctx context.Context, req ExecutionRequest) (ExecutionResponse, error) {
 	if r.primary == nil {
 		if r.fallback == nil {
 			return ExecutionResponse{Success: false, Error: "runner not configured"}, nil
 		}
-		return r.fallback.Execute(req)
+		return r.fallback.Execute(ctx, req)
 	}
 
-	res, err := r.primary.Execute(req)
+	res, err := r.primary.Execute(ctx, req)
+	if ctx != nil && ctx.Err() != nil {
+		return res, err
+	}
 	if !shouldFallback(res, err) || r.fallback == nil {
 		return res, err
 	}
 
 	log.Printf("[RUNNER] Primary runner failed, falling back to HTTP runner")
-	return r.fallback.Execute(req)
+	return r.fallback.Execute(ctx, req)
 }
 
 func shouldFallback(res ExecutionResponse, err error) bool {
