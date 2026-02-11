@@ -25,11 +25,7 @@ func newRunner(pythonURL string) Runner {
 		return newHTTPRunner(trimmedURL)
 	}
 
-	primary := newGoRunner()
-	if trimmedURL != "" {
-		return newFallbackRunner(primary, newHTTPRunner(trimmedURL))
-	}
-	return primary
+	return newGoRunner()
 }
 
 func shouldUseGoRunner(pythonURL string) bool { return strings.TrimSpace(pythonURL) == "" }
