@@ -36,7 +36,11 @@ steps:
       RELEASE_TAG=$(cat infra/releng/release-tag.txt)
       
       echo "Deploying web..."
-      gcloud run deploy agenteval-web-prod --image ${_IMAGE_REPO_BASE}/agenteval-web:release-${RELEASE_TAG} --region ${_DEPLOY_REGION} --quiet
+      gcloud run deploy agenteval-web-prod \
+        --image ${_IMAGE_REPO_BASE}/agenteval-web:release-${RELEASE_TAG} \
+        --region ${_DEPLOY_REGION} \
+        --quiet \
+        --update-env-vars VITE_AFK_TIMEOUT_MS=180000
 
 options:
   automapSubstitutions: true
