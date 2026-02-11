@@ -152,11 +152,11 @@
                   <div class="response-text">
                     <div 
                       v-if="!expandedResponses[question.id]"
-                      v-html="formatResponseWithImages(getQuestionResponse(question.id, true))"
+                      v-html="formatResponseHtml(getQuestionResponse(question.id, true))"
                     ></div>
                     <div 
                       v-else
-                      v-html="formatResponseWithImages(getQuestionResponse(question.id, false))"
+                      v-html="formatResponseHtml(getQuestionResponse(question.id, false))"
                     ></div>
                     <button 
                       v-if="isResponseLong(question.id)"
@@ -268,6 +268,7 @@ import { exportResultsReport } from '../utils/exporters.js'
 import { downloadManager } from '../services/DownloadManager.js'
 import { contentCache } from '../services/ContentCache.js'
 import { useWSStore } from '../stores/wsStore'
+import { processContent } from '../utils/markdown.js'
 
 const props = defineProps({
   workspaceId: String,
@@ -423,18 +424,19 @@ const hasResults = computed(() => {
   return runResults.value && Object.keys(runResults.value).length > 0
 })
 
-// Granular progress: started tasks count for half (0.5x), completed count for full (1x)
-// This gives visual feedback that tasks are running before they complete
+// Granular progress: started tasks add a small baseline, completed tasks count fully
 const progressPercent = computed(() => {
   if (totalTasks.value === 0) return 0
   return Math.round((completedTasks.value / totalTasks.value) * 100)
 })
 
+const STARTED_TASK_WEIGHT_PERCENT = 10
+
 const progressPercentStarted = computed(() => {
   if (totalTasks.value === 0) return 0
-  // Started but not completed tasks contribute half progress
-  const inProgress = startedTasks.value - completedTasks.value
-  const inProgressContribution = (inProgress / totalTasks.value) * 50 // 0.5x weight
+  // Started but not completed tasks contribute a small baseline progress
+  const inProgress = Math.max(0, startedTasks.value - completedTasks.value)
+  const inProgressContribution = (inProgress / totalTasks.value) * STARTED_TASK_WEIGHT_PERCENT
   const completedContribution = (completedTasks.value / totalTasks.value) * 100
   const softBoost = softProgressBoost.value
   return Math.min(100, Math.round(completedContribution + inProgressContribution + softBoost))
@@ -735,70 +737,10 @@ function toggleResponse(questionId) {
   expandedResponses.value[questionId] = !expandedResponses.value[questionId]
 }
 
-// Format response text to display base64 images
-function formatResponseWithImages(text) {
-  if (!text) return ''
-  
-  // Escape HTML to prevent XSS, but preserve base64 image data URIs
-  const escapeHtml = (str) => {
-    const div = document.createElement('div')
-    div.textContent = str
-    return div.innerHTML
-  }
-  
-  // Pattern to match base64 image data URIs: data:image/[type];base64,[base64 string]
-  // This pattern matches the full data URI including the base64 encoded data
-  const base64ImagePattern = /(data:image\/(?:png|jpg|jpeg|gif|webp|svg\+xml|bmp);base64,[A-Za-z0-9+/=\s]+)/gi
-  
-  // Find all base64 images first
-  const images = []
-  let match
-  const pattern = new RegExp(base64ImagePattern)
-  while ((match = pattern.exec(text)) !== null) {
-    images.push({
-      index: match.index,
-      length: match[0].length,
-      data: match[0].trim() // Remove any whitespace
-    })
-  }
-  
-  // If no images found, just escape and return text with line breaks
-  if (images.length === 0) {
-    const escaped = escapeHtml(text)
-    return escaped.replace(/\n/g, '<br>')
-  }
-  
-  // Build result by processing text segments and images
-  let result = ''
-  let lastIndex = 0
-  
-  images.forEach((img, idx) => {
-    // Add text before this image
-    if (img.index > lastIndex) {
-      const textBefore = text.substring(lastIndex, img.index)
-      const escaped = escapeHtml(textBefore)
-      result += escaped.replace(/\n/g, '<br>')
-    }
-    
-    // Add the image
-    result += `<img src="${escapeHtml(img.data)}" class="response-image" alt="Response image" />`
-    
-    lastIndex = img.index + img.length
-    
-    // Add a line break after image if there's more content
-    if (idx < images.length - 1 || lastIndex < text.length) {
-      result += '<br>'
-    }
-  })
-  
-  // Add remaining text after last image
-  if (lastIndex < text.length) {
-    const textAfter = text.substring(lastIndex)
-    const escaped = escapeHtml(textAfter)
-    result += escaped.replace(/\n/g, '<br>')
-  }
-  
-  return result
+function formatResponseHtml(text) {
+  if (!text || typeof text !== 'string') return ''
+  const processed = processContent(text)
+  return processed.html || ''
 }
 
 // Retry a question for all agents
