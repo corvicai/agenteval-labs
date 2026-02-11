@@ -1092,6 +1092,7 @@ async function handleStartRun({ questionSetId, agentIds }) {
     const result = await wsService.startRun(questionSetId, agentIds)
     currentRun.value = { id: result.run_id || result.id, status: 'running', agentIds }
     localStorage.setItem('activeRunId', currentRun.value.id)
+    saveRunProgress(currentRun.value.id)
     
     // Process buffered results
     if (pendingResultsBuffer.value.length > 0) {
@@ -1142,6 +1143,9 @@ function processTaskCompleted(data) {
         delete taskProgress.value[data.agent_id]
       }
     }
+    if (currentRun.value?.id) {
+      saveRunProgress(currentRun.value.id)
+    }
 
     // Check if run completed for this question set
     if (isRunning.value && completedTasks.value === totalTasks.value) {
@@ -1150,6 +1154,9 @@ function processTaskCompleted(data) {
          wsStore.setRunningQuestionSetId(null)
        }
        taskProgress.value = {}
+       if (currentRun.value?.id) {
+         clearRunProgress(currentRun.value.id)
+       }
     }
 }
 
@@ -1179,6 +1186,7 @@ async function cancelBenchmark() {
     currentRun.value.status = 'cancelled'
     wsStore.setRunningQuestionSetId(null)
     taskProgress.value = {}
+    clearRunProgress(currentRun.value.id)
   } catch (e) {
     console.error('Failed to cancel run:', e)
   }
@@ -1371,6 +1379,9 @@ async function restoreActiveRun(runId) {
     if (!data || !data.run) return
 
     if (data.run.status === 'running') {
+      if (data.question_set && (!currentQuestionSet.value || currentQuestionSet.value.id !== data.question_set.id)) {
+        currentQuestionSet.value = data.question_set
+      }
       const runAgentIds = resolveRunAgentIds(data)
       currentRun.value = { ...data.run, agentIds: runAgentIds }
       console.log('Restored active run:', runId, 'with agents:', runAgentIds)
@@ -1379,10 +1390,34 @@ async function restoreActiveRun(runId) {
       wsStore.setRunningQuestionSetId(activeRunQuestionSetId.value)
       localStorage.setItem('activeRunId', runId)
 
-      totalTasks.value = data.run.total_tasks || (runAgentIds.length * (flatQuestions.value?.length || 0))
+      const storedProgress = loadRunProgress(runId)
+      const questionIds = extractQuestionIdsFromQuestionSet(data.question_set)
+      const fallbackTotal = runAgentIds.length * (questionIds.length || flatQuestions.value?.length || 0)
+      totalTasks.value = data.run.total_tasks || storedProgress?.total || fallbackTotal
+
+      const baseResults = {}
+      if (questionIds.length > 0 && runAgentIds.length > 0) {
+        runAgentIds.forEach(agentId => {
+          baseResults[agentId] = {}
+          questionIds.forEach(qId => {
+            baseResults[agentId][qId] = {
+              id: null,
+              loading: true,
+              success: null,
+              answer: '',
+              error: null,
+              duration: null,
+              timestamp: null,
+              evaluations: [],
+              metadata: null,
+              queued: false
+            }
+          })
+        })
+      }
 
       if (data.results) {
-        const restored = {}
+        const restored = { ...baseResults }
         data.results.forEach(res => {
           const agentId = res.agent_id
           const qIdStr = String(res.question_id)
@@ -1401,14 +1436,23 @@ async function restoreActiveRun(runId) {
           }
         })
         runResults.value = restored
-        completedTasks.value = data.results.length
+        completedTasks.value = Math.max(data.results.length, storedProgress?.completed || 0)
+      } else {
+        runResults.value = baseResults
+        completedTasks.value = storedProgress?.completed || 0
       }
 
-      if (data.question_set && (!currentQuestionSet.value || currentQuestionSet.value.id !== data.question_set.id)) {
-        currentQuestionSet.value = data.question_set
-      }
+      startedTasks.value = Math.max(completedTasks.value, storedProgress?.started || completedTasks.value)
+      saveRunProgress(runId)
     } else if (runId) {
       localStorage.removeItem('activeRunId')
+      clearRunProgress(runId)
+      isRunning.value = false
+      currentRun.value = null
+      startedTasks.value = 0
+      completedTasks.value = 0
+      totalTasks.value = 0
+      taskProgress.value = {}
     }
   } catch (e) {
     console.error('Failed to restore active run:', e)
@@ -1442,6 +1486,9 @@ onMounted(async () => {
     wsService.on('EVT_TASK_STARTED', (data) => {
         if (isRunning.value) {
             startedTasks.value++
+            if (currentRun.value?.id) {
+              saveRunProgress(currentRun.value.id)
+            }
         }
         
         // Update specific item status if it exists (for reruns)
@@ -1521,6 +1568,9 @@ onMounted(async () => {
         isRunning.value = false
         localStorage.removeItem('activeRunId')
         taskProgress.value = {}
+        if (currentRun.value?.id) {
+          clearRunProgress(currentRun.value.id)
+        }
     })
 })
 
