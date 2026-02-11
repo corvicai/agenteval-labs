@@ -26,21 +26,6 @@
        @cancel="showRunSetup = false"
     />
 
-    <div v-if="showPrimaryAgentModal" class="modal-overlay" @click.self="showPrimaryAgentModal = false">
-      <div class="modal-container primary-agent-modal">
-        <div class="modal-header">
-          <h3>Primary agent required</h3>
-          <button class="btn-close" @click="showPrimaryAgentModal = false">×</button>
-        </div>
-        <div class="modal-body">
-          <p>Please enable at least one primary agent to start.</p>
-        </div>
-        <div class="modal-footer">
-          <button class="btn btn-primary" @click="showPrimaryAgentModal = false">Got it</button>
-        </div>
-      </div>
-    </div>
-
     <!-- Left Sidebar with Tabs -->
     <LeftSidebar
       :question-sets="questionSets"
@@ -299,7 +284,6 @@ const { state: wsState } = wsStore
 const currentQuestionSet = ref(null)
 const currentRun = ref(null)
 const runResults = ref({})
-const taskProgress = ref({})
 const isRunning = ref(false)
 const activeRunQuestionSetId = ref(null)
 const isLoadingResults = ref(false)
@@ -309,7 +293,6 @@ const totalTasks = ref(0)
 const selectedQuestionId = ref('')
 const showSummary = ref(false)
 const showRunSetup = ref(false)
-const showPrimaryAgentModal = ref(false)
 const showDetailsModal = ref(false)
 const selectedDetails = ref(null)
 const expandedResponses = ref({})
@@ -318,8 +301,6 @@ const latestRunCache = new Map()
 const pendingResultsBuffer = ref([])
 const startRunError = ref(null)
 const isExportingPdf = ref(false)
-const isRestoringRun = ref(false)
-const runProgressStorageKey = (runId) => `run_progress_${runId}`
 
 // Init logic for Question Set
 watch(() => props.questionSets, (sets) => {
@@ -829,7 +810,7 @@ function startRunSetup() {
   if (primaryAgents.length === 0) {
     console.warn('[Arena] Start blocked. Enabled count:', enabledAgents.value.length, 'Primary count:', primaryAgents.length)
     console.log('[Arena] Merged Agents dump:', mergedAgents.value)
-    showPrimaryAgentModal.value = true
+    alert('Please enable at least one primary agent to start.')
     return
   }
   showRunSetup.value = true
@@ -951,7 +932,6 @@ function ensureResultsLoaded() {
 
 function applyRunLiteData(data) {
   runResults.value = {}
-  taskProgress.value = {}
   currentRun.value = null
   totalTasks.value = 0
   completedTasks.value = 0
@@ -978,12 +958,11 @@ function applyRunLiteData(data) {
       loading: !cached,
       success: res.status === 'success',
       answer: cached ? cached.answer : '',
-      error: res.status === 'error' ? (res.error || 'Error in run') : null,
+      error: res.status === 'error' ? 'Error in run' : null,
       duration: res.duration_ms / 1000,
       timestamp: res.created_at,
       evaluations: cached ? (cached.evaluations || []) : [],
-      humanValidation: cached ? cached.evaluations?.find(e => e.rater_type === 'user')?.rating : null,
-      metadata: null
+      humanValidation: cached ? cached.evaluations?.find(e => e.rater_type === 'user')?.rating : null
     }
 
     if (!cached) allResultIds.push(res.id)
@@ -1003,14 +982,6 @@ function applyRunLiteData(data) {
 }
 
 watch(() => wsState.recentRuns, () => {
-  if (currentQuestionSet.value && !isRunning.value && !currentRun.value) {
-    const running = getRunningRunForCurrentQS()
-    if (running?.id) {
-      localStorage.setItem('activeRunId', running.id)
-      restoreActiveRun(running.id)
-      return
-    }
-  }
   if (!currentQuestionSet.value || isRunning.value || isLoadingResults.value) return
   const qsId = currentQuestionSet.value.id
   const latestId = getRecentRunIdForQS(qsId)
@@ -1045,8 +1016,6 @@ function getAgentResults(agentId, includeAllQuestions = false) {
       timestamp: res ? res.timestamp : null,
       id: res ? res.id : null,
       error: res ? res.error : null,
-      metadata: res ? res.metadata : null,
-      progress: taskProgress.value[agentId]?.[qIdStr] || null,
       evaluations: res ? (res.evaluations || []) : [],
       humanValidation: res ? (ratingMap[res.humanValidation] || res.humanValidation) : null
     }
@@ -1088,7 +1057,6 @@ async function handleStartRun({ questionSetId, agentIds }) {
   completedTasks.value = 0
   totalTasks.value = selectedAgentsCount * flatQuestions.value.length
   runResults.value = {}
-  taskProgress.value = {}
   
   try {
     const result = await wsService.startRun(questionSetId, agentIds)
@@ -1099,7 +1067,6 @@ async function handleStartRun({ questionSetId, agentIds }) {
       totalTasks.value = backendTotalTasks
     }
     localStorage.setItem('activeRunId', currentRun.value.id)
-    saveRunProgress(currentRun.value.id)
     
     // Process buffered results
     if (pendingResultsBuffer.value.length > 0) {
@@ -1121,7 +1088,6 @@ async function handleStartRun({ questionSetId, agentIds }) {
     
     isRunning.value = false
     pendingResultsBuffer.value = []
-    taskProgress.value = {}
   }
 
 }
@@ -1140,18 +1106,8 @@ function processTaskCompleted(data) {
             error: data.error,
             duration: data.duration_ms / 1000,
             timestamp: new Date().toISOString(),
-            evaluations: data.evaluations || [],
-            metadata: data.metadata || null
+            evaluations: data.evaluations || []
         }
-    }
-    if (taskProgress.value[data.agent_id]) {
-      delete taskProgress.value[data.agent_id][data.question_id]
-      if (Object.keys(taskProgress.value[data.agent_id]).length === 0) {
-        delete taskProgress.value[data.agent_id]
-      }
-    }
-    if (currentRun.value?.id) {
-      saveRunProgress(currentRun.value.id)
     }
 
     // Check if run completed for this question set
@@ -1159,10 +1115,6 @@ function processTaskCompleted(data) {
        isRunning.value = false
        if (activeRunQuestionSetId.value === currentQuestionSet.value?.id) {
          wsStore.setRunningQuestionSetId(null)
-       }
-       taskProgress.value = {}
-       if (currentRun.value?.id) {
-         clearRunProgress(currentRun.value.id)
        }
     }
 }
@@ -1191,9 +1143,6 @@ async function cancelBenchmark() {
     await wsService.cancelRun(currentRun.value.id)
     isRunning.value = false
     currentRun.value.status = 'cancelled'
-    wsStore.setRunningQuestionSetId(null)
-    taskProgress.value = {}
-    clearRunProgress(currentRun.value.id)
   } catch (e) {
     console.error('Failed to cancel run:', e)
   }
@@ -1305,175 +1254,84 @@ function onRetry(agentId, index) {
   }
 }
 
-function saveRunProgress(runId) {
-  if (!runId) return
-  const payload = {
-    started: startedTasks.value || 0,
-    completed: completedTasks.value || 0,
-    total: totalTasks.value || 0,
-    updatedAt: new Date().toISOString()
-  }
-  localStorage.setItem(runProgressStorageKey(runId), JSON.stringify(payload))
-}
+function resolveRunAgentIdsFromDetails(data) {
+  const ids = new Set()
 
-function loadRunProgress(runId) {
-  if (!runId) return null
-  const raw = localStorage.getItem(runProgressStorageKey(runId))
-  if (!raw) return null
-  try {
-    return JSON.parse(raw)
-  } catch (e) {
-    return null
-  }
-}
-
-function clearRunProgress(runId) {
-  if (!runId) return
-  localStorage.removeItem(runProgressStorageKey(runId))
-}
-
-function resolveRunAgentIds(data) {
-  const qsAgents = data?.question_set?.agents || []
-  const enabledAgents = qsAgents.filter(a => a.enabled !== false).map(a => a.id)
-  if (enabledAgents.length > 0) {
-    return enabledAgents
-  }
-  if (data?.agents) {
-    return Object.keys(data.agents)
-  }
-  return []
-}
-
-function extractQuestionIdsFromQuestionSet(questionSet) {
-  const ids = []
-  if (!questionSet?.data) return ids
-  let data = questionSet.data
-  if (typeof data === 'string') {
-    try {
-      data = JSON.parse(data)
-    } catch (e) {
-      return ids
-    }
+  const runAgentIds = data?.run?.agent_ids || data?.run?.agentIds
+  if (Array.isArray(runAgentIds)) {
+    runAgentIds.forEach(id => {
+      if (id) ids.add(id)
+    })
   }
 
-  const categories = data.categories || []
-  for (let catIdx = 0; catIdx < categories.length; catIdx++) {
-    const cat = categories[catIdx]
-    const catQuestions = cat.questions || []
-    for (let qIdx = 0; qIdx < catQuestions.length; qIdx++) {
-      const q = catQuestions[qIdx]
-      const qId = q.id != null && q.id !== '' ? String(q.id) : `${catIdx + 1}-${qIdx + 1}`
-      ids.push(qId)
-    }
+  if (data?.results && Array.isArray(data.results)) {
+    data.results.forEach(res => {
+      if (res?.agent_id) ids.add(res.agent_id)
+    })
   }
-  return ids
-}
 
-function getRunningRunForCurrentQS() {
-  if (!currentQuestionSet.value) return null
-  const runs = wsState.recentRuns || []
-  const matches = runs.filter(r => r.status === 'running' && r.question_set_id === currentQuestionSet.value.id)
-  if (matches.length === 0) return null
-  matches.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
-  return matches[0]
-}
-
-async function restoreActiveRun(runId) {
-  if (!runId || isRestoringRun.value || !wsState.isConnected) return
-  isRestoringRun.value = true
-  try {
-    const data = await wsService.getRunDetails(runId)
-    if (!data || !data.run) return
-
-    if (data.run.status === 'running') {
-      if (data.question_set && (!currentQuestionSet.value || currentQuestionSet.value.id !== data.question_set.id)) {
-        currentQuestionSet.value = data.question_set
-      }
-      const runAgentIds = resolveRunAgentIds(data)
-      currentRun.value = { ...data.run, agentIds: runAgentIds }
-      console.log('Restored active run:', runId, 'with agents:', runAgentIds)
-      isRunning.value = true
-      activeRunQuestionSetId.value = data.run.question_set_id || data.question_set?.id || null
-      wsStore.setRunningQuestionSetId(activeRunQuestionSetId.value)
-      localStorage.setItem('activeRunId', runId)
-
-      const storedProgress = loadRunProgress(runId)
-      const questionIds = extractQuestionIdsFromQuestionSet(data.question_set)
-      const fallbackTotal = runAgentIds.length * (questionIds.length || flatQuestions.value?.length || 0)
-      totalTasks.value = data.run.total_tasks || storedProgress?.total || fallbackTotal
-
-      const baseResults = {}
-      if (questionIds.length > 0 && runAgentIds.length > 0) {
-        runAgentIds.forEach(agentId => {
-          baseResults[agentId] = {}
-          questionIds.forEach(qId => {
-            baseResults[agentId][qId] = {
-              id: null,
-              loading: true,
-              success: null,
-              answer: '',
-              error: null,
-              duration: null,
-              timestamp: null,
-              evaluations: [],
-              metadata: null,
-              queued: false
-            }
-          })
-        })
-      }
-
-      if (data.results) {
-        const restored = { ...baseResults }
-        data.results.forEach(res => {
-          const agentId = res.agent_id
-          const qIdStr = String(res.question_id)
-          if (!restored[agentId]) restored[agentId] = {}
-          restored[agentId][qIdStr] = {
-            id: res.id,
-            loading: false,
-            success: res.status === 'success',
-            answer: res.answer,
-            error: res.status === 'error' ? (res.error || 'Error') : null,
-            duration: res.duration_ms / 1000,
-            timestamp: res.created_at,
-            evaluations: res.evaluations || [],
-            metadata: res.metadata || null,
-            humanValidation: res.evaluations?.find(e => e.rater_type === 'user')?.rating
-          }
-        })
-        runResults.value = restored
-        completedTasks.value = Math.max(data.results.length, storedProgress?.completed || 0)
-      } else {
-        runResults.value = baseResults
-        completedTasks.value = storedProgress?.completed || 0
-      }
-
-      startedTasks.value = Math.max(completedTasks.value, storedProgress?.started || completedTasks.value)
-      saveRunProgress(runId)
-    } else if (runId) {
-      localStorage.removeItem('activeRunId')
-      clearRunProgress(runId)
-      isRunning.value = false
-      currentRun.value = null
-      startedTasks.value = 0
-      completedTasks.value = 0
-      totalTasks.value = 0
-      taskProgress.value = {}
-    }
-  } catch (e) {
-    console.error('Failed to restore active run:', e)
-  } finally {
-    isRestoringRun.value = false
+  if (data?.agents && typeof data.agents === 'object' && !Array.isArray(data.agents)) {
+    Object.keys(data.agents).forEach(id => {
+      if (id) ids.add(id)
+    })
   }
+
+  const qsAgents = data?.question_set?.agents
+  if (Array.isArray(qsAgents)) {
+    qsAgents.forEach(agent => {
+      const id = agent?.agent_id || agent?.id
+      const enabled = agent?.enabled
+      if (id && enabled !== false) ids.add(id)
+    })
+  }
+
+  return Array.from(ids).filter(Boolean)
 }
 
 // Global Listeners for THIS component
 // We need to listen to WS events to update live results
 onMounted(async () => {
+    // Check for active run restoration
     const activeRunId = localStorage.getItem('activeRunId')
     if (activeRunId) {
-        await restoreActiveRun(activeRunId)
+        try {
+            const data = await wsService.getRunDetails(activeRunId)
+            if (data && data.run && data.run.status === 'running') {
+                const runAgentIds = resolveRunAgentIdsFromDetails(data)
+                currentRun.value = { ...data.run, agentIds: runAgentIds }
+                console.log('Restored active run:', activeRunId, 'with agents:', runAgentIds)
+                isRunning.value = true
+                totalTasks.value = data.run.total_tasks
+                
+                if (data.results) {
+                    const restored = {}
+                    data.results.forEach(res => {
+                        const agentId = res.agent_id
+                        const qIdStr = String(res.question_id)
+                        if (!restored[agentId]) restored[agentId] = {}
+                        restored[agentId][qIdStr] = {
+                             id: res.id,
+                             loading: false,
+                             success: res.status === 'success',
+                             answer: res.answer,
+                             error: res.status === 'error' ? 'Error' : null,
+                             duration: res.duration_ms / 1000,
+                             timestamp: res.created_at,
+                             evaluations: res.evaluations || [],
+                             humanValidation: res.evaluations?.find(e => e.rater_type === 'user')?.rating
+                        }
+                    })
+                    runResults.value = restored
+                    completedTasks.value = data.results.length
+                 }
+                 
+                 if (data.question_set && (!currentQuestionSet.value || currentQuestionSet.value.id !== data.question_set.id)) {
+                     currentQuestionSet.value = data.question_set
+                 }
+            } else if (activeRunId) {
+                 localStorage.removeItem('activeRunId')
+            }
+        } catch (e) { console.error('Failed to restore active run:', e) }
     }
     
     // Safety check for loaded results
@@ -1493,9 +1351,6 @@ onMounted(async () => {
     wsService.on('EVT_TASK_STARTED', (data) => {
         if (isRunning.value) {
             startedTasks.value++
-            if (currentRun.value?.id) {
-              saveRunProgress(currentRun.value.id)
-            }
         }
         
         // Update specific item status if it exists (for reruns)
@@ -1507,19 +1362,6 @@ onMounted(async () => {
             runResults.value[agentId][qIdStr].queued = false
             runResults.value[agentId][qIdStr].loading = true
             runResults.value[agentId][qIdStr].error = null
-        }
-    })
-
-    wsService.on('EVT_TASK_PROGRESS', (data) => {
-        if (!currentRun.value) return
-        if (data.run_id !== currentRun.value.id) return
-        const agentId = data.agent_id
-        const qIdStr = String(data.question_id)
-        if (!taskProgress.value[agentId]) taskProgress.value[agentId] = {}
-        taskProgress.value[agentId][qIdStr] = {
-            message: data.message || 'Runner still processing...',
-            elapsed_ms: data.elapsed_ms || null,
-            timestamp: new Date().toISOString()
         }
     })
 
@@ -1561,11 +1403,10 @@ onMounted(async () => {
                 loading: false,
                 success: res.status === 'success',
                 answer: res.answer,
-                error: res.status === 'error' ? (res.error || 'Error') : null,
+                error: res.status === 'error' ? 'Error' : null,
                 duration: res.duration_ms / 1000,
                 timestamp: res.created_at,
                 evaluations: res.evaluations || [],
-                metadata: res.metadata || null,
                 humanValidation: res.evaluations?.find(e => e.rater_type === 'user')?.rating,
             }
         })
@@ -1574,19 +1415,7 @@ onMounted(async () => {
     wsService.on('EVT_RUN_FINISHED', () => {
         isRunning.value = false
         localStorage.removeItem('activeRunId')
-        taskProgress.value = {}
-        if (currentRun.value?.id) {
-          clearRunProgress(currentRun.value.id)
-        }
     })
-})
-
-watch(() => wsState.isConnected, (connected) => {
-  if (!connected) return
-  const activeRunId = localStorage.getItem('activeRunId')
-  if (activeRunId) {
-    restoreActiveRun(activeRunId)
-  }
 })
 
 // Helper function to check if any results are still loading
@@ -1894,23 +1723,6 @@ defineExpose({
 .questions-list-view .question-status.status-completed {
   background: #d1fae5;
   color: #065f46;
-}
-
-.primary-agent-modal {
-  max-width: 420px;
-}
-
-.primary-agent-modal .modal-body {
-  padding: 1.25rem 1.5rem;
-  color: #334155;
-}
-
-.primary-agent-modal .modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.75rem;
-  padding: 0.75rem 1.5rem 1.25rem;
-  border-top: 1px solid #f1f5f9;
 }
 
 .questions-list-view .question-status.status-error {
