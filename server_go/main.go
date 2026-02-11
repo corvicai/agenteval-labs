@@ -156,8 +156,12 @@ func main() {
 		}
 	}
 	// Initialize orchestration engine
-	pythonURL := os.Getenv("PYTHON_RUNNER_URL")
-	if pythonURL == "" {
+	runnerMode := strings.ToLower(strings.TrimSpace(os.Getenv("RUNNER_MODE")))
+	if runnerMode == "" {
+		runnerMode = "go"
+	}
+	pythonURL := strings.TrimSpace(os.Getenv("PYTHON_RUNNER_URL"))
+	if (runnerMode == "http" || runnerMode == "python" || runnerMode == "external") && pythonURL == "" {
 		pythonURL = "http://localhost:3003"
 	}
 
@@ -205,6 +209,14 @@ func main() {
 	}
 
 	engine := orchestrator.NewEngine(database, pythonURL, workerCount)
+	if database != nil {
+		res := database.Model(&models.Run{}).Where("status = ?", "running").Update("status", "cancelled")
+		if res.Error != nil {
+			log.Printf("[RUN] Failed to cancel stale runs on startup: %v", res.Error)
+		} else if res.RowsAffected > 0 {
+			log.Printf("[RUN] Marked %d stale running run(s) as cancelled on startup", res.RowsAffected)
+		}
+	}
 
 	// Initialize Firebase Admin SDK
 	fbClient, err := firebase.InitFirebase()
@@ -365,7 +377,13 @@ func main() {
 	log.Printf("=======================================================")
 	log.Printf("BENCHMARKING PLATFORM - Go Server")
 	log.Printf("Starting on port %s", port)
-	log.Printf("Python Runner URL: %s", pythonURL)
+	if runnerMode == "http" || runnerMode == "python" || runnerMode == "external" {
+		log.Printf("Runner Mode: http (%s)", pythonURL)
+	} else if pythonURL != "" {
+		log.Printf("Runner Mode: go (fallback http: %s)", pythonURL)
+	} else {
+		log.Printf("Runner Mode: go (in-process)")
+	}
 	log.Printf("=======================================================")
 	e.Logger.Fatal(e.Start(":" + port))
 }

@@ -318,6 +318,8 @@ const latestRunCache = new Map()
 const pendingResultsBuffer = ref([])
 const startRunError = ref(null)
 const isExportingPdf = ref(false)
+const isRestoringRun = ref(false)
+const runProgressStorageKey = (runId) => `run_progress_${runId}`
 
 // Init logic for Question Set
 watch(() => props.questionSets, (sets) => {
@@ -999,6 +1001,14 @@ function applyRunLiteData(data) {
 }
 
 watch(() => wsState.recentRuns, () => {
+  if (currentQuestionSet.value && !isRunning.value && !currentRun.value) {
+    const running = getRunningRunForCurrentQS()
+    if (running?.id) {
+      localStorage.setItem('activeRunId', running.id)
+      restoreActiveRun(running.id)
+      return
+    }
+  }
   if (!currentQuestionSet.value || isRunning.value || isLoadingResults.value) return
   const qsId = currentQuestionSet.value.id
   const latestId = getRecentRunIdForQS(qsId)
@@ -1280,52 +1290,139 @@ function onRetry(agentId, index) {
   }
 }
 
+function saveRunProgress(runId) {
+  if (!runId) return
+  const payload = {
+    started: startedTasks.value || 0,
+    completed: completedTasks.value || 0,
+    total: totalTasks.value || 0,
+    updatedAt: new Date().toISOString()
+  }
+  localStorage.setItem(runProgressStorageKey(runId), JSON.stringify(payload))
+}
+
+function loadRunProgress(runId) {
+  if (!runId) return null
+  const raw = localStorage.getItem(runProgressStorageKey(runId))
+  if (!raw) return null
+  try {
+    return JSON.parse(raw)
+  } catch (e) {
+    return null
+  }
+}
+
+function clearRunProgress(runId) {
+  if (!runId) return
+  localStorage.removeItem(runProgressStorageKey(runId))
+}
+
+function resolveRunAgentIds(data) {
+  const qsAgents = data?.question_set?.agents || []
+  const enabledAgents = qsAgents.filter(a => a.enabled !== false).map(a => a.id)
+  if (enabledAgents.length > 0) {
+    return enabledAgents
+  }
+  if (data?.agents) {
+    return Object.keys(data.agents)
+  }
+  return []
+}
+
+function extractQuestionIdsFromQuestionSet(questionSet) {
+  const ids = []
+  if (!questionSet?.data) return ids
+  let data = questionSet.data
+  if (typeof data === 'string') {
+    try {
+      data = JSON.parse(data)
+    } catch (e) {
+      return ids
+    }
+  }
+
+  const categories = data.categories || []
+  for (let catIdx = 0; catIdx < categories.length; catIdx++) {
+    const cat = categories[catIdx]
+    const catQuestions = cat.questions || []
+    for (let qIdx = 0; qIdx < catQuestions.length; qIdx++) {
+      const q = catQuestions[qIdx]
+      const qId = q.id != null && q.id !== '' ? String(q.id) : `${catIdx + 1}-${qIdx + 1}`
+      ids.push(qId)
+    }
+  }
+  return ids
+}
+
+function getRunningRunForCurrentQS() {
+  if (!currentQuestionSet.value) return null
+  const runs = wsState.recentRuns || []
+  const matches = runs.filter(r => r.status === 'running' && r.question_set_id === currentQuestionSet.value.id)
+  if (matches.length === 0) return null
+  matches.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+  return matches[0]
+}
+
+async function restoreActiveRun(runId) {
+  if (!runId || isRestoringRun.value || !wsState.isConnected) return
+  isRestoringRun.value = true
+  try {
+    const data = await wsService.getRunDetails(runId)
+    if (!data || !data.run) return
+
+    if (data.run.status === 'running') {
+      const runAgentIds = resolveRunAgentIds(data)
+      currentRun.value = { ...data.run, agentIds: runAgentIds }
+      console.log('Restored active run:', runId, 'with agents:', runAgentIds)
+      isRunning.value = true
+      activeRunQuestionSetId.value = data.run.question_set_id || data.question_set?.id || null
+      wsStore.setRunningQuestionSetId(activeRunQuestionSetId.value)
+      localStorage.setItem('activeRunId', runId)
+
+      totalTasks.value = data.run.total_tasks || (runAgentIds.length * (flatQuestions.value?.length || 0))
+
+      if (data.results) {
+        const restored = {}
+        data.results.forEach(res => {
+          const agentId = res.agent_id
+          const qIdStr = String(res.question_id)
+          if (!restored[agentId]) restored[agentId] = {}
+          restored[agentId][qIdStr] = {
+            id: res.id,
+            loading: false,
+            success: res.status === 'success',
+            answer: res.answer,
+            error: res.status === 'error' ? (res.error || 'Error') : null,
+            duration: res.duration_ms / 1000,
+            timestamp: res.created_at,
+            evaluations: res.evaluations || [],
+            metadata: res.metadata || null,
+            humanValidation: res.evaluations?.find(e => e.rater_type === 'user')?.rating
+          }
+        })
+        runResults.value = restored
+        completedTasks.value = data.results.length
+      }
+
+      if (data.question_set && (!currentQuestionSet.value || currentQuestionSet.value.id !== data.question_set.id)) {
+        currentQuestionSet.value = data.question_set
+      }
+    } else if (runId) {
+      localStorage.removeItem('activeRunId')
+    }
+  } catch (e) {
+    console.error('Failed to restore active run:', e)
+  } finally {
+    isRestoringRun.value = false
+  }
+}
+
 // Global Listeners for THIS component
 // We need to listen to WS events to update live results
 onMounted(async () => {
-    // Check for active run restoration
     const activeRunId = localStorage.getItem('activeRunId')
     if (activeRunId) {
-        try {
-            const data = await wsService.getRunDetails(activeRunId)
-            if (data && data.run && data.run.status === 'running') {
-                const runAgentIds = data.agents ? Object.keys(data.agents) : []
-                currentRun.value = { ...data.run, agentIds: runAgentIds }
-                console.log('Restored active run:', activeRunId, 'with agents:', runAgentIds)
-                isRunning.value = true
-                wsStore.setRunningQuestionSetId(data.run.question_set_id || data.question_set?.id || null)
-                totalTasks.value = data.run.total_tasks
-                
-                if (data.results) {
-                    const restored = {}
-                    data.results.forEach(res => {
-                        const agentId = res.agent_id
-                        const qIdStr = String(res.question_id)
-                        if (!restored[agentId]) restored[agentId] = {}
-                        restored[agentId][qIdStr] = {
-                             id: res.id,
-                             loading: false,
-                             success: res.status === 'success',
-                             answer: res.answer,
-                             error: res.status === 'error' ? (res.error || 'Error') : null,
-                             duration: res.duration_ms / 1000,
-                             timestamp: res.created_at,
-                             evaluations: res.evaluations || [],
-                             metadata: res.metadata || null,
-                             humanValidation: res.evaluations?.find(e => e.rater_type === 'user')?.rating
-                        }
-                    })
-                    runResults.value = restored
-                    completedTasks.value = data.results.length
-                 }
-                 
-                 if (data.question_set && (!currentQuestionSet.value || currentQuestionSet.value.id !== data.question_set.id)) {
-                     currentQuestionSet.value = data.question_set
-                 }
-            } else if (activeRunId) {
-                 localStorage.removeItem('activeRunId')
-            }
-        } catch (e) { console.error('Failed to restore active run:', e) }
+        await restoreActiveRun(activeRunId)
     }
     
     // Safety check for loaded results
@@ -1425,6 +1522,14 @@ onMounted(async () => {
         localStorage.removeItem('activeRunId')
         taskProgress.value = {}
     })
+})
+
+watch(() => wsState.isConnected, (connected) => {
+  if (!connected) return
+  const activeRunId = localStorage.getItem('activeRunId')
+  if (activeRunId) {
+    restoreActiveRun(activeRunId)
+  }
 })
 
 // Helper function to check if any results are still loading

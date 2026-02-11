@@ -1,17 +1,13 @@
 package orchestrator
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
 
-	"benchmarking-platform/internal/security"
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
@@ -21,7 +17,7 @@ import (
 
 type Engine struct {
 	db              *gorm.DB
-	pythonRunnerURL string
+	runner          Runner
 	workerCount     int
 	taskQueue       chan *Task
 	cancelledRuns   map[uuid.UUID]bool
@@ -29,7 +25,6 @@ type Engine struct {
 	mu              sync.RWMutex
 	wg              sync.WaitGroup
 	eventCallback   func(workspaceID uuid.UUID, eventType string, correlationID string, payload any)
-	httpClient      *http.Client
 }
 
 type Task struct {
@@ -62,54 +57,21 @@ type ExecutionResponse struct {
 }
 
 func NewEngine(db *gorm.DB, pythonURL string, workers int) *Engine {
-	transport := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 50,
-		IdleConnTimeout:     90 * time.Second,
-	}
-
 	return &Engine{
 		db:              db,
-		pythonRunnerURL: pythonURL,
+		runner:          newRunner(pythonURL),
 		workerCount:     workers,
 		taskQueue:       make(chan *Task, 10000),
 		cancelledRuns:   make(map[uuid.UUID]bool),
 		agentSemaphores: make(map[uuid.UUID]chan struct{}),
-		httpClient: &http.Client{
-			Transport: transport,
-			Timeout:   10 * time.Minute,
-		},
 	}
 }
 
-func (e *Engine) PingRunner(ctx context.Context) error {
-	if e.pythonRunnerURL == "" {
-		return fmt.Errorf("python runner url not configured")
+func (e *Engine) PingRunner() error {
+	if e.runner == nil {
+		return fmt.Errorf("runner not configured")
 	}
-
-	url := fmt.Sprintf("%s/health", e.pythonRunnerURL)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return err
-	}
-
-	token, _ := security.GetGoogleIDToken(e.pythonRunnerURL)
-	if token != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-		req.Header.Set("X-Serverless-Authorization", fmt.Sprintf("Bearer %s", token))
-	}
-
-	resp, err := e.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("runner health check failed: status %d", resp.StatusCode)
-	}
-
-	return nil
+	return e.runner.Health()
 }
 
 func (e *Engine) SetEventCallback(cb func(workspaceID uuid.UUID, eventType string, correlationID string, payload any)) {
@@ -269,32 +231,9 @@ func (e *Engine) executeTask(task *Task) {
 		Payload:      payload,
 	}
 
-	body, _ := json.Marshal(req)
-
-	// Request for Python Runner
-	pythonURL := fmt.Sprintf("%s/execute", e.pythonRunnerURL)
-	reqHttp, err := http.NewRequest("POST", pythonURL, bytes.NewBuffer(body))
-	var resp *http.Response
-	if err == nil {
-		reqHttp.Header.Set("Content-Type", "application/json")
-
-		// Service-to-Service Authentication (Cloud Run)
-		token, _ := security.GetGoogleIDToken(e.pythonRunnerURL)
-		if token != "" {
-			reqHttp.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-			// Also add X-Serverless-Authorization for redundancy/compatibility
-			reqHttp.Header.Set("X-Serverless-Authorization", fmt.Sprintf("Bearer %s", token))
-		}
-
-		resp, err = e.httpClient.Do(reqHttp)
-	}
-
-	var executionResult ExecutionResponse
+	executionResult, err := e.runner.Execute(req)
 	if err != nil {
 		executionResult = ExecutionResponse{Success: false, Error: err.Error()}
-	} else {
-		defer resp.Body.Close()
-		json.NewDecoder(resp.Body).Decode(&executionResult)
 	}
 
 	durationMs := int(time.Since(startTime).Milliseconds())

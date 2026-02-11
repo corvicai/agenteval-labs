@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -78,10 +77,8 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 	}
 
 	const runnerPingTimeout = 5 * time.Minute
-	ctx, cancel := context.WithTimeout(context.Background(), runnerPingTimeout)
-	defer cancel()
 	log.Printf("[RUNNER] Ping: are you there? (timeout=%s)", runnerPingTimeout)
-	if err := h.engine.PingRunner(ctx); err != nil {
+	if err := h.engine.PingRunner(); err != nil {
 		log.Printf("[RUNNER] Ping failed: %v", err)
 		c.SendError(env.CorrelationID, "Runner sounds offline. Please try again in a moment.")
 		return
