@@ -436,7 +436,23 @@ const progressPercentStarted = computed(() => {
   const inProgress = startedTasks.value - completedTasks.value
   const inProgressContribution = (inProgress / totalTasks.value) * 50 // 0.5x weight
   const completedContribution = (completedTasks.value / totalTasks.value) * 100
-  return Math.min(100, Math.round(completedContribution + inProgressContribution))
+  const softBoost = softProgressBoost.value
+  return Math.min(100, Math.round(completedContribution + inProgressContribution + softBoost))
+})
+
+const softProgressBoost = computed(() => {
+  let boost = 0
+  const progress = taskProgress.value || {}
+  for (const agentId in progress) {
+    const agentProgress = progress[agentId] || {}
+    for (const qId in agentProgress) {
+      const entry = agentProgress[qId]
+      const elapsedMs = typeof entry?.elapsed_ms === 'number' ? entry.elapsed_ms : 0
+      const ticks = Math.floor(elapsedMs / 10000)
+      boost += ticks * 0.5
+    }
+  }
+  return boost
 })
 
 const progressStatusText = computed(() => {
