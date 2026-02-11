@@ -304,7 +304,14 @@ class WebSocketService {
                 this.pendingRequests.delete(envelope.correlation_id)
 
                 if (envelope.type === 'EVT_ERROR') {
-                    reject(new Error(payload.error || 'Server error'))
+                    const details = payload && payload.details !== undefined ? payload.details : null
+                    const detailsText = details == null
+                        ? ''
+                        : (typeof details === 'string' ? details : JSON.stringify(details))
+                    const message = detailsText
+                        ? `${payload.error || 'Server error'} (${detailsText})`
+                        : (payload.error || 'Server error')
+                    reject(new Error(message))
                 } else {
                     resolve(payload)
                 }
