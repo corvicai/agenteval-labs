@@ -601,6 +601,7 @@ function getQuestionStatus(questionId) {
   
   let hasError = false
   let hasAnswer = false
+  let hasSuccess = false
   let isLoading = false
   
   for (const agentId in runResults.value) {
@@ -610,12 +611,13 @@ function getQuestionStatus(questionId) {
       if (result.loading) isLoading = true
       if (result.error) hasError = true
       if (result.answer) hasAnswer = true
+      if (result.success === true) hasSuccess = true
     }
   }
   
+  if (hasError && !hasAnswer && !hasSuccess) return 'status-error'
+  if (hasAnswer || hasSuccess) return 'status-completed'
   if (isLoading) return 'status-loading'
-  if (hasError) return 'status-error'
-  if (hasAnswer) return 'status-completed'
   return 'status-not-run'
 }
 
@@ -1090,7 +1092,12 @@ async function handleStartRun({ questionSetId, agentIds }) {
   
   try {
     const result = await wsService.startRun(questionSetId, agentIds)
-    currentRun.value = { id: result.run_id || result.id, status: 'running', agentIds }
+    const runId = result.run_id || result.id
+    currentRun.value = { id: runId, status: 'running', agentIds }
+    const backendTotalTasks = Number(result.total_tasks || result.totalTasks || 0)
+    if (backendTotalTasks > 0) {
+      totalTasks.value = backendTotalTasks
+    }
     localStorage.setItem('activeRunId', currentRun.value.id)
     saveRunProgress(currentRun.value.id)
     
@@ -1148,7 +1155,7 @@ function processTaskCompleted(data) {
     }
 
     // Check if run completed for this question set
-    if (isRunning.value && completedTasks.value === totalTasks.value) {
+    if (isRunning.value && completedTasks.value >= totalTasks.value) {
        isRunning.value = false
        if (activeRunQuestionSetId.value === currentQuestionSet.value?.id) {
          wsStore.setRunningQuestionSetId(null)
