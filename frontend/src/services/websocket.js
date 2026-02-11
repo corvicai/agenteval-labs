@@ -262,10 +262,12 @@ class WebSocketService {
 
                     ws.onclose = (closeEvent) => {
                         if (this.ws !== ws) return
+                        const reconnectPlanned = !this.suppressNextReconnect && this.shouldReconnect
                         console.log('[WS] Disconnected', {
                             code: closeEvent?.code,
                             reason: closeEvent?.reason || '',
-                            wasClean: closeEvent?.wasClean
+                            wasClean: closeEvent?.wasClean,
+                            reconnectPlanned
                         })
                         this._emit('disconnected', {})
                         this._rejectPendingRequests('WebSocket disconnected')
@@ -333,8 +335,13 @@ class WebSocketService {
         }
     }
 
-    disconnect() {
+    disconnect(reason = 'manual') {
         if (this.ws) {
+            console.log('[WS] Disconnect requested', {
+                reason,
+                readyState: this.ws.readyState,
+                workspaceId: this.workspaceId || null
+            })
             this.shouldReconnect = false
             this.suppressNextReconnect = true
             this._rejectPendingRequests('WebSocket disconnected')

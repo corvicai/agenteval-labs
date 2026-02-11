@@ -20,8 +20,8 @@ export function useWSStore() {
         await wsService.connect(workspaceId, token)
     }
 
-    const disconnect = () => {
-        wsService.disconnect()
+    const disconnect = (reason = 'manual') => {
+        wsService.disconnect(reason)
         state.isConnected = false
         state.agents = []
         state.questionSets = []

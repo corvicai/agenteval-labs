@@ -1,4 +1,5 @@
 import asyncio
+import traceback
 import time
 import httpx
 import uuid
@@ -223,6 +224,11 @@ async def run_mcp_query(endpoint: str, token: str, question: str):
             # Python 3.11+ TaskGroup errors
             first_error = eg.exceptions[0] if eg.exceptions else eg
             error_str = str(first_error)
+            error_type = type(first_error).__name__
+            sub_errors = [f"{type(exc).__name__}: {exc}" for exc in (eg.exceptions or [])]
+            verbose_trace = None
+            if os.environ.get("APP_ENV") != "production":
+                verbose_trace = "".join(traceback.format_exception(type(first_error), first_error, first_error.__traceback__))
             
             # Check for rate limiting (429)
             if "429" in error_str and retry_count < max_retries:
@@ -235,14 +241,22 @@ async def run_mcp_query(endpoint: str, token: str, question: str):
             print(f"[PYTHON] ❌ MCP ExceptionGroup ERROR: {eg}")
             return {
                 "success": False,
-                "error": str(first_error),
+                "error": f"{error_type}: {error_str}" if error_type else error_str,
                 "metadata": {
                     "duration_ms": int((time.time() - start_time) * 1000),
-                    "retry_count": retry_count
+                    "retry_count": retry_count,
+                    "error_type": error_type,
+                    "error_detail": error_str,
+                    "sub_errors": sub_errors,
+                    "traceback": verbose_trace
                 }
             }
         except Exception as e:
             error_str = str(e)
+            error_type = type(e).__name__
+            verbose_trace = None
+            if os.environ.get("APP_ENV") != "production":
+                verbose_trace = "".join(traceback.format_exception(type(e), e, e.__traceback__))
             
             # Check for rate limiting (429)
             if "429" in error_str and retry_count < max_retries:
@@ -255,10 +269,13 @@ async def run_mcp_query(endpoint: str, token: str, question: str):
             print(f"[PYTHON] ❌ MCP HTTP ERROR: {e}")
             return {
                 "success": False,
-                "error": error_str,
+                "error": f"{error_type}: {error_str}" if error_type else error_str,
                 "metadata": {
                     "duration_ms": int((time.time() - start_time) * 1000),
-                    "retry_count": retry_count
+                    "retry_count": retry_count,
+                    "error_type": error_type,
+                    "error_detail": error_str,
+                    "traceback": verbose_trace
                 }
             }
     

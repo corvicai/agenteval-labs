@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -43,7 +44,7 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 			return
 		}
 
-		for _, agent := range agents {
+	for _, agent := range agents {
 			// Skip disabled agents? UI sends selected agents. We validate all selected.
 			var config map[string]interface{}
 			if err := json.Unmarshal(agent.Config, &config); err != nil {
@@ -75,6 +76,17 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 			}
 		}
 	}
+
+	const runnerPingTimeout = 5 * time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), runnerPingTimeout)
+	defer cancel()
+	log.Printf("[RUNNER] Ping: are you there? (timeout=%s)", runnerPingTimeout)
+	if err := h.engine.PingRunner(ctx); err != nil {
+		log.Printf("[RUNNER] Ping failed: %v", err)
+		c.SendError(env.CorrelationID, "Runner appears offline. Please try again in a moment.")
+		return
+	}
+	log.Printf("[RUNNER] Ping OK: I'm here")
 
 	// For legacy support, we use the connection's workspace
 	run, err := h.engine.StartRun(c.WorkspaceID, qsID, agentIDs)

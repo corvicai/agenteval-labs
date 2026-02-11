@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -79,6 +80,36 @@ func NewEngine(db *gorm.DB, pythonURL string, workers int) *Engine {
 			Timeout:   10 * time.Minute,
 		},
 	}
+}
+
+func (e *Engine) PingRunner(ctx context.Context) error {
+	if e.pythonRunnerURL == "" {
+		return fmt.Errorf("python runner url not configured")
+	}
+
+	url := fmt.Sprintf("%s/health", e.pythonRunnerURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return err
+	}
+
+	token, _ := security.GetGoogleIDToken(e.pythonRunnerURL)
+	if token != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+		req.Header.Set("X-Serverless-Authorization", fmt.Sprintf("Bearer %s", token))
+	}
+
+	resp, err := e.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("runner health check failed: status %d", resp.StatusCode)
+	}
+
+	return nil
 }
 
 func (e *Engine) SetEventCallback(cb func(workspaceID uuid.UUID, eventType string, correlationID string, payload any)) {
@@ -286,6 +317,7 @@ func (e *Engine) executeTask(task *Task) {
 			"success":       executionResult.Success,
 			"answer":        executionResult.Answer,
 			"error":         executionResult.Error,
+			"metadata":      executionResult.Metadata,
 			"duration_ms":   durationMs,
 		})
 	}

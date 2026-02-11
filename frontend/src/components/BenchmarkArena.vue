@@ -26,6 +26,21 @@
        @cancel="showRunSetup = false"
     />
 
+    <div v-if="showPrimaryAgentModal" class="modal-overlay" @click.self="showPrimaryAgentModal = false">
+      <div class="modal-container primary-agent-modal">
+        <div class="modal-header">
+          <h3>Primary agent required</h3>
+          <button class="btn-close" @click="showPrimaryAgentModal = false">×</button>
+        </div>
+        <div class="modal-body">
+          <p>Please enable at least one primary agent to start.</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-primary" @click="showPrimaryAgentModal = false">Got it</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Left Sidebar with Tabs -->
     <LeftSidebar
       :question-sets="questionSets"
@@ -293,6 +308,7 @@ const totalTasks = ref(0)
 const selectedQuestionId = ref('')
 const showSummary = ref(false)
 const showRunSetup = ref(false)
+const showPrimaryAgentModal = ref(false)
 const showDetailsModal = ref(false)
 const selectedDetails = ref(null)
 const expandedResponses = ref({})
@@ -808,7 +824,7 @@ function startRunSetup() {
   if (primaryAgents.length === 0) {
     console.warn('[Arena] Start blocked. Enabled count:', enabledAgents.value.length, 'Primary count:', primaryAgents.length)
     console.log('[Arena] Merged Agents dump:', mergedAgents.value)
-    alert('Please enable at least one primary agent to start.')
+    showPrimaryAgentModal.value = true
     return
   }
   showRunSetup.value = true
@@ -956,11 +972,12 @@ function applyRunLiteData(data) {
       loading: !cached,
       success: res.status === 'success',
       answer: cached ? cached.answer : '',
-      error: res.status === 'error' ? 'Error in run' : null,
+      error: res.status === 'error' ? (res.error || 'Error in run') : null,
       duration: res.duration_ms / 1000,
       timestamp: res.created_at,
       evaluations: cached ? (cached.evaluations || []) : [],
-      humanValidation: cached ? cached.evaluations?.find(e => e.rater_type === 'user')?.rating : null
+      humanValidation: cached ? cached.evaluations?.find(e => e.rater_type === 'user')?.rating : null,
+      metadata: null
     }
 
     if (!cached) allResultIds.push(res.id)
@@ -1014,6 +1031,7 @@ function getAgentResults(agentId, includeAllQuestions = false) {
       timestamp: res ? res.timestamp : null,
       id: res ? res.id : null,
       error: res ? res.error : null,
+      metadata: res ? res.metadata : null,
       evaluations: res ? (res.evaluations || []) : [],
       humanValidation: res ? (ratingMap[res.humanValidation] || res.humanValidation) : null
     }
@@ -1099,7 +1117,8 @@ function processTaskCompleted(data) {
             error: data.error,
             duration: data.duration_ms / 1000,
             timestamp: new Date().toISOString(),
-            evaluations: data.evaluations || []
+            evaluations: data.evaluations || [],
+            metadata: data.metadata || null
         }
     }
 
@@ -1260,6 +1279,7 @@ onMounted(async () => {
                 currentRun.value = { ...data.run, agentIds: runAgentIds }
                 console.log('Restored active run:', activeRunId, 'with agents:', runAgentIds)
                 isRunning.value = true
+                wsStore.setRunningQuestionSetId(data.run.question_set_id || data.question_set?.id || null)
                 totalTasks.value = data.run.total_tasks
                 
                 if (data.results) {
@@ -1273,10 +1293,11 @@ onMounted(async () => {
                              loading: false,
                              success: res.status === 'success',
                              answer: res.answer,
-                             error: res.status === 'error' ? 'Error' : null,
+                             error: res.status === 'error' ? (res.error || 'Error') : null,
                              duration: res.duration_ms / 1000,
                              timestamp: res.created_at,
                              evaluations: res.evaluations || [],
+                             metadata: res.metadata || null,
                              humanValidation: res.evaluations?.find(e => e.rater_type === 'user')?.rating
                         }
                     })
@@ -1362,10 +1383,11 @@ onMounted(async () => {
                 loading: false,
                 success: res.status === 'success',
                 answer: res.answer,
-                error: res.status === 'error' ? 'Error' : null,
+                error: res.status === 'error' ? (res.error || 'Error') : null,
                 duration: res.duration_ms / 1000,
                 timestamp: res.created_at,
                 evaluations: res.evaluations || [],
+                metadata: res.metadata || null,
                 humanValidation: res.evaluations?.find(e => e.rater_type === 'user')?.rating,
             }
         })
@@ -1682,6 +1704,23 @@ defineExpose({
 .questions-list-view .question-status.status-completed {
   background: #d1fae5;
   color: #065f46;
+}
+
+.primary-agent-modal {
+  max-width: 420px;
+}
+
+.primary-agent-modal .modal-body {
+  padding: 1.25rem 1.5rem;
+  color: #334155;
+}
+
+.primary-agent-modal .modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 0.75rem 1.5rem 1.25rem;
+  border-top: 1px solid #f1f5f9;
 }
 
 .questions-list-view .question-status.status-error {

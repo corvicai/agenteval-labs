@@ -324,6 +324,14 @@ watch(() => wsState.questionSets, (newSets) => {
   }
 }, { immediate: true, deep: true })
 
+watch(() => wsState.runningQuestionSetId, (runId) => {
+  if (runId) {
+    clearAfkTimer()
+    return
+  }
+  scheduleAfkTimer()
+})
+
 const isRunning = ref(false)
 const isLoadingResults = ref(false)
 const completedTasks = ref(0)
@@ -476,7 +484,7 @@ async function handleLogout() {
   // runResults, currentRun, tasks, selectedQuestionId are now in BenchmarkArena and will be unmounted.
   // We just need to clear global state.
   isManager.value = false
-  wsService.disconnect()
+  wsService.disconnect('logout')
   // Redirect to login page
   viewMode.value = 'benchmarks'
 }
@@ -503,6 +511,18 @@ async function loadWorkspaces() {
     }
 
     workspaces.value = (await wsService.getWorkspaces()) || []
+
+    if ((workspaces.value?.length || 0) === 0) {
+      try {
+        const fallbackOwner = currentUser.value?.name || currentUser.value?.email || 'My'
+        const fallbackName = `${fallbackOwner} Workspace`
+        console.warn('[App] No workspaces found; creating a default workspace:', fallbackName)
+        const created = await wsService.createWorkspace(fallbackName)
+        workspaces.value = created ? [created] : []
+      } catch (err) {
+        console.error('[App] Failed to auto-create workspace:', err)
+      }
+    }
     
     // Validate current workspace - check if we have one (logic continues...)
     const savedWs = localStorage.getItem('workspace')
@@ -876,14 +896,18 @@ function clearAfkTimer() {
 }
 
 function canTrackAfk() {
-  return isAuthenticated.value && appReady.value && !wsState.isMaintenance
+  return isAuthenticated.value && appReady.value && !wsState.isMaintenance && !wsState.runningQuestionSetId
 }
 
 async function activateAfkMode() {
   if (!canTrackAfk() || afkOverlayVisible.value) return
+  console.log('[AFK] Idle timeout reached; pausing session', {
+    timeoutMs: afkTimeoutMs,
+    workspaceId: currentWorkspace.value?.id || null
+  })
   afkOverlayVisible.value = true
   isReconnectingFromAfk.value = false
-  wsDisconnect()
+  wsDisconnect('afk-timeout')
 }
 
 function scheduleAfkTimer() {
@@ -910,12 +934,14 @@ function handleVisibilityChange() {
 
 async function reconnectFromAfk() {
   if (isReconnectingFromAfk.value) return
+  console.log('[AFK] Reconnect requested by user')
   isReconnectingFromAfk.value = true
   try {
     await wsConnect(currentWorkspace.value?.id || null)
     await syncState()
     afkOverlayVisible.value = false
     scheduleAfkTimer()
+    console.log('[AFK] Reconnected and sync completed')
   } catch (e) {
     console.error('[App] AFK reconnect failed:', e)
   } finally {
@@ -1004,7 +1030,7 @@ onUnmounted(() => {
   afkActivityEvents.forEach((eventName) => window.removeEventListener(eventName, handleUserActivity))
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   clearAfkTimer()
-  wsDisconnect()
+  wsDisconnect('app-unmount')
   if (refreshInterval.value) {
     clearInterval(refreshInterval.value)
   }
