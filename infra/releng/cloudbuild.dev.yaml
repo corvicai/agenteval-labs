@@ -34,7 +34,7 @@ steps:
       
       # Deploy runner first
       echo "Deploying runner..."
-      gcloud run deploy agenteval-runner-dev --image ${_IMAGE_REPO_BASE}/agenteval-runner:${COMMIT_SHA} --region ${_DEPLOY_REGION} --quiet
+      gcloud run deploy agenteval-runner-dev --image ${_IMAGE_REPO_BASE}/agenteval-runner:${COMMIT_SHA} --region ${_DEPLOY_REGION} --timeout=600s --quiet
 
       echo "Deploying api..."
       gcloud run deploy agenteval-api-dev \

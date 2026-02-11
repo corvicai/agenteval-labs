@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -40,6 +41,20 @@ func setupOrchestratorTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func setRunnerMode(t *testing.T, mode string) {
+	prev := os.Getenv("RUNNER_MODE")
+	if err := os.Setenv("RUNNER_MODE", mode); err != nil {
+		t.Fatalf("failed to set RUNNER_MODE: %v", err)
+	}
+	t.Cleanup(func() {
+		if prev == "" {
+			_ = os.Unsetenv("RUNNER_MODE")
+		} else {
+			_ = os.Setenv("RUNNER_MODE", prev)
+		}
+	})
+}
+
 func createTestRun(db *gorm.DB) (uuid.UUID, uuid.UUID) {
 	user := models.User{ID: uuid.New(), Name: "Test", Email: "test@test.com"}
 	db.Create(&user)
@@ -60,6 +75,7 @@ func createTestRun(db *gorm.DB) (uuid.UUID, uuid.UUID) {
 }
 
 func TestEngine_QueueTask(t *testing.T) {
+	setRunnerMode(t, "http")
 	db := setupOrchestratorTestDB(t)
 	runID, _ := createTestRun(db)
 
@@ -108,6 +124,7 @@ func TestEngine_QueueTask(t *testing.T) {
 }
 
 func TestEngine_CancelRun(t *testing.T) {
+	setRunnerMode(t, "http")
 	db := setupOrchestratorTestDB(t)
 	runID, _ := createTestRun(db)
 
@@ -138,6 +155,7 @@ func TestEngine_CancelRun(t *testing.T) {
 }
 
 func TestEngine_EventCallback(t *testing.T) {
+	setRunnerMode(t, "http")
 	db := setupOrchestratorTestDB(t)
 	runID, workspaceID := createTestRun(db)
 
@@ -185,6 +203,7 @@ func TestEngine_EventCallback(t *testing.T) {
 }
 
 func TestEngine_HandlesErrors(t *testing.T) {
+	setRunnerMode(t, "http")
 	db := setupOrchestratorTestDB(t)
 	runID, _ := createTestRun(db)
 
@@ -222,6 +241,7 @@ func TestEngine_HandlesErrors(t *testing.T) {
 }
 
 func TestEngine_Concurrency(t *testing.T) {
+	setRunnerMode(t, "http")
 	db := setupOrchestratorTestDB(t)
 	runID, _ := createTestRun(db)
 

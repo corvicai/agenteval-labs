@@ -211,7 +211,7 @@
           </div>
           <div v-else class="loading-status">
             <div class="loading-spinner"></div>
-            <span>Loading...</span>
+            <span>{{ qa.progress && qa.progress.message ? qa.progress.message : 'Loading...' }}</span>
           </div>
         </div>
         <div class="answer" v-else-if="qa.error || (qa.success === false && !qa.loading)">

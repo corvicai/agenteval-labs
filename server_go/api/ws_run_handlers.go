@@ -76,6 +76,15 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 		}
 	}
 
+	const runnerPingTimeout = 5 * time.Minute
+	log.Printf("[RUNNER] Ping: are you there? (timeout=%s)", runnerPingTimeout)
+	if err := h.engine.PingRunner(); err != nil {
+		log.Printf("[RUNNER] Ping failed: %v", err)
+		c.SendError(env.CorrelationID, "Runner sounds offline. Please try again in a moment.")
+		return
+	}
+	log.Printf("[RUNNER] Ping OK: I'm here")
+
 	// For legacy support, we use the connection's workspace
 	run, err := h.engine.StartRun(c.WorkspaceID, qsID, agentIDs)
 	if err != nil {

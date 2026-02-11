@@ -1,16 +1,14 @@
 package orchestrator
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
 
-	"benchmarking-platform/internal/security"
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
@@ -20,15 +18,16 @@ import (
 
 type Engine struct {
 	db              *gorm.DB
-	pythonRunnerURL string
+	runner          Runner
 	workerCount     int
 	taskQueue       chan *Task
 	cancelledRuns   map[uuid.UUID]bool
+	runContexts     map[uuid.UUID]context.Context
+	runCancels      map[uuid.UUID]context.CancelFunc
 	agentSemaphores map[uuid.UUID]chan struct{} // Per-agent concurrency control
 	mu              sync.RWMutex
 	wg              sync.WaitGroup
 	eventCallback   func(workspaceID uuid.UUID, eventType string, correlationID string, payload any)
-	httpClient      *http.Client
 }
 
 type Task struct {
@@ -61,24 +60,23 @@ type ExecutionResponse struct {
 }
 
 func NewEngine(db *gorm.DB, pythonURL string, workers int) *Engine {
-	transport := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 50,
-		IdleConnTimeout:     90 * time.Second,
-	}
-
 	return &Engine{
 		db:              db,
-		pythonRunnerURL: pythonURL,
+		runner:          newRunner(pythonURL),
 		workerCount:     workers,
 		taskQueue:       make(chan *Task, 10000),
 		cancelledRuns:   make(map[uuid.UUID]bool),
+		runContexts:     make(map[uuid.UUID]context.Context),
+		runCancels:      make(map[uuid.UUID]context.CancelFunc),
 		agentSemaphores: make(map[uuid.UUID]chan struct{}),
-		httpClient: &http.Client{
-			Transport: transport,
-			Timeout:   10 * time.Minute,
-		},
 	}
+}
+
+func (e *Engine) PingRunner() error {
+	if e.runner == nil {
+		return fmt.Errorf("runner not configured")
+	}
+	return e.runner.Health()
 }
 
 func (e *Engine) SetEventCallback(cb func(workspaceID uuid.UUID, eventType string, correlationID string, payload any)) {
@@ -150,10 +148,36 @@ func (e *Engine) QueueTask(task *Task) {
 	e.taskQueue <- task
 }
 
+func (e *Engine) ensureRunContext(runID uuid.UUID) context.Context {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if ctx, ok := e.runContexts[runID]; ok {
+		return ctx
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	e.runContexts[runID] = ctx
+	e.runCancels[runID] = cancel
+	return ctx
+}
+
+func (e *Engine) cancelRunContext(runID uuid.UUID) {
+	var cancel context.CancelFunc
+	e.mu.Lock()
+	cancel = e.runCancels[runID]
+	delete(e.runCancels, runID)
+	delete(e.runContexts, runID)
+	e.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
 func (e *Engine) CancelRun(runID uuid.UUID) {
 	e.mu.Lock()
 	e.cancelledRuns[runID] = true
 	e.mu.Unlock()
+
+	e.cancelRunContext(runID)
 
 	// Update run status in DB
 	if e.db != nil {
@@ -183,7 +207,36 @@ func (e *Engine) executeTask(task *Task) {
 		})
 	}
 
+	runCtx := e.ensureRunContext(task.RunID)
+	taskCtx, cancel := context.WithTimeout(runCtx, runnerTaskTimeout)
+	defer cancel()
+
 	startTime := time.Now().UTC()
+	progressStop := make(chan struct{})
+	if e.eventCallback != nil && workspaceID != uuid.Nil {
+		go func(runID uuid.UUID, agentID uuid.UUID, questionID string) {
+			ticker := time.NewTicker(10 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-progressStop:
+					return
+				case <-taskCtx.Done():
+					return
+				case <-ticker.C:
+					elapsed := time.Since(startTime)
+					e.eventCallback(workspaceID, "EVT_TASK_PROGRESS", runID.String(), map[string]any{
+						"run_id":      runID.String(),
+						"agent_id":    agentID.String(),
+						"question_id": questionID,
+						"elapsed_ms":  int(elapsed.Milliseconds()),
+						"message":     fmt.Sprintf("Runner still processing (%ds)", int(elapsed.Seconds())),
+					})
+				}
+			}
+		}(task.RunID, task.AgentID, task.QuestionID)
+	}
+	defer close(progressStop)
 
 	providerType := task.ProviderType
 	if providerType == "evaluator" {
@@ -215,32 +268,9 @@ func (e *Engine) executeTask(task *Task) {
 		Payload:      payload,
 	}
 
-	body, _ := json.Marshal(req)
-
-	// Request for Python Runner
-	pythonURL := fmt.Sprintf("%s/execute", e.pythonRunnerURL)
-	reqHttp, err := http.NewRequest("POST", pythonURL, bytes.NewBuffer(body))
-	var resp *http.Response
-	if err == nil {
-		reqHttp.Header.Set("Content-Type", "application/json")
-
-		// Service-to-Service Authentication (Cloud Run)
-		token, _ := security.GetGoogleIDToken(e.pythonRunnerURL)
-		if token != "" {
-			reqHttp.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-			// Also add X-Serverless-Authorization for redundancy/compatibility
-			reqHttp.Header.Set("X-Serverless-Authorization", fmt.Sprintf("Bearer %s", token))
-		}
-
-		resp, err = e.httpClient.Do(reqHttp)
-	}
-
-	var executionResult ExecutionResponse
+	executionResult, err := e.runner.Execute(taskCtx, req)
 	if err != nil {
 		executionResult = ExecutionResponse{Success: false, Error: err.Error()}
-	} else {
-		defer resp.Body.Close()
-		json.NewDecoder(resp.Body).Decode(&executionResult)
 	}
 
 	durationMs := int(time.Since(startTime).Milliseconds())
@@ -286,6 +316,7 @@ func (e *Engine) executeTask(task *Task) {
 			"success":       executionResult.Success,
 			"answer":        executionResult.Answer,
 			"error":         executionResult.Error,
+			"metadata":      executionResult.Metadata,
 			"duration_ms":   durationMs,
 		})
 	}
@@ -301,6 +332,10 @@ func (e *Engine) checkRunCompletion(runID uuid.UUID) {
 
 	var run models.Run
 	if err := e.db.First(&run, "id = ?", runID).Error; err != nil {
+		return
+	}
+
+	if run.Status == "cancelled" {
 		return
 	}
 
@@ -331,6 +366,8 @@ func (e *Engine) checkRunCompletion(runID uuid.UUID) {
 				"status":      newStatus,
 			})
 		}
+
+		e.cancelRunContext(runID)
 	}
 }
 
@@ -704,6 +741,8 @@ func (e *Engine) StartRun(workspaceID uuid.UUID, questionSetID uuid.UUID, agentI
 		return nil, err
 	}
 
+	e.ensureRunContext(run.ID)
+
 	// Queue tasks for each agent + question
 	for _, agent := range agents {
 		if agent.ProviderType == "evaluator" {
@@ -779,6 +818,8 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 	if err := e.db.First(&agent, "id = ?", agentID).Error; err != nil {
 		return fmt.Errorf("agent not found")
 	}
+
+	e.ensureRunContext(run.ID)
 
 	// Optional: Use result_id to locate the exact answer to evaluate
 	var resultFromPayload *models.RunResult
