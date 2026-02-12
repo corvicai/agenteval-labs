@@ -78,6 +78,7 @@ const (
 	ReqGetRunLite              = "REQ_GET_RUN_LITE"
 	ReqGetLatestRunByQS        = "REQ_GET_LATEST_RUN_BY_QS"
 	ReqGetResultDetails        = "REQ_GET_RESULT_DETAILS"
+	ReqGetRetryStatus          = "REQ_GET_RETRY_STATUS"
 	ReqCheckDBPerf             = "REQ_CHECK_DB_PERF"
 	ReqDeleteRun               = "REQ_DELETE_RUN"
 	ReqDeleteAllRuns           = "REQ_DELETE_ALL_RUNS"
@@ -148,6 +149,7 @@ const (
 	DataWorkspaceRuns    = "DATA_WORKSPACE_RUNS"
 	DataRunLite          = "DATA_RUN_LITE"
 	DataResultDetails    = "DATA_RESULT_DETAILS"
+	DataRetryStatus      = "DATA_RETRY_STATUS"
 
 	// Admin Data types
 	DataAdminUsers         = "DATA_ADMIN_USERS"

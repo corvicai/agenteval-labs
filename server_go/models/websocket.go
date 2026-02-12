@@ -225,6 +225,26 @@ type ResultDetailsResponse struct {
 	Results []RunResult `json:"results"`
 }
 
+type GetRetryStatusPayload struct {
+	RetryIDs []string `json:"retry_ids"`
+}
+
+type RetryStatusItem struct {
+	RetryID     string    `json:"retry_id"`
+	RunID       string    `json:"run_id,omitempty"`
+	AgentID     string    `json:"agent_id,omitempty"`
+	QuestionID  string    `json:"question_id,omitempty"`
+	Status      string    `json:"status"`
+	RunResultID string    `json:"run_result_id,omitempty"`
+	Error       string    `json:"error,omitempty"`
+	DurationMs  int       `json:"duration_ms,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type RetryStatusResponse struct {
+	Items []RetryStatusItem `json:"items"`
+}
+
 type RunEvaluatorsPayload struct {
 	RunID string `json:"run_id"`
 }

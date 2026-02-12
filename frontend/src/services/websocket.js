@@ -13,6 +13,7 @@ class WebSocketService {
         this.shouldReconnect = true
         this.suppressNextReconnect = false
         this._iapTokenPromise = null
+        this.lastDisconnectReason = null
     }
 
     async _probeWebSocketHttpEndpoint(wsUrl) {
@@ -269,7 +270,14 @@ class WebSocketService {
                             wasClean: closeEvent?.wasClean,
                             reconnectPlanned
                         })
-                        this._emit('disconnected', {})
+                        this._emit('disconnected', {
+                            code: closeEvent?.code,
+                            reason: closeEvent?.reason || '',
+                            wasClean: closeEvent?.wasClean,
+                            reconnectPlanned,
+                            disconnectReason: this.lastDisconnectReason
+                        })
+                        this.lastDisconnectReason = null
                         this._rejectPendingRequests('WebSocket disconnected')
                         if (this.suppressNextReconnect) {
                             this.suppressNextReconnect = false
@@ -342,6 +350,7 @@ class WebSocketService {
                 readyState: this.ws.readyState,
                 workspaceId: this.workspaceId || null
             })
+            this.lastDisconnectReason = reason
             this.shouldReconnect = false
             this.suppressNextReconnect = true
             this._rejectPendingRequests('WebSocket disconnected')
@@ -513,6 +522,10 @@ class WebSocketService {
 
     getResultDetails(resultIds) {
         return this.request('REQ_GET_RESULT_DETAILS', { result_ids: resultIds })
+    }
+
+    getRetryStatus(retryIds) {
+        return this.request('REQ_GET_RETRY_STATUS', { retry_ids: retryIds })
     }
 
     createEvaluation(runResultId, rating, comments = '') {

@@ -25,6 +25,7 @@ type Engine struct {
 	runContexts     map[uuid.UUID]context.Context
 	runCancels      map[uuid.UUID]context.CancelFunc
 	agentSemaphores map[uuid.UUID]chan struct{} // Per-agent concurrency control
+	retryStates     map[string]retryState
 	mu              sync.RWMutex
 	wg              sync.WaitGroup
 	eventCallback   func(workspaceID uuid.UUID, eventType string, correlationID string, payload any)
@@ -70,6 +71,7 @@ func NewEngine(db *gorm.DB, pythonURL string, workers int) *Engine {
 		runContexts:     make(map[uuid.UUID]context.Context),
 		runCancels:      make(map[uuid.UUID]context.CancelFunc),
 		agentSemaphores: make(map[uuid.UUID]chan struct{}),
+		retryStates:     make(map[string]retryState),
 	}
 }
 
@@ -138,6 +140,20 @@ func (e *Engine) getAgentSemaphore(agentID uuid.UUID, maxConcurrency int) chan s
 }
 
 func (e *Engine) QueueTask(task *Task) {
+	if task != nil && task.RetryID != "" {
+		e.setRetryState(
+			task.RetryID,
+			task.RunID,
+			task.WorkspaceID,
+			task.AgentID,
+			task.QuestionID,
+			"queued",
+			uuid.Nil,
+			"",
+			0,
+		)
+	}
+
 	// Emit queued event so frontend can show "Queued" state
 	if e.eventCallback != nil && task.WorkspaceID != uuid.Nil {
 		payload := map[string]any{
@@ -183,6 +199,7 @@ func (e *Engine) CancelRun(runID uuid.UUID) {
 	e.mu.Unlock()
 
 	e.cancelRunContext(runID)
+	e.markRunRetriesCancelled(runID)
 
 	// Update run status in DB
 	if e.db != nil {
@@ -204,6 +221,20 @@ func (e *Engine) executeTask(task *Task) {
 	}
 
 	// Send task started event
+	if task.RetryID != "" {
+		e.setRetryState(
+			task.RetryID,
+			task.RunID,
+			workspaceID,
+			task.AgentID,
+			task.QuestionID,
+			"running",
+			uuid.Nil,
+			"",
+			0,
+		)
+	}
+
 	if e.eventCallback != nil {
 		payload := map[string]any{
 			"run_id":      task.RunID.String(),
@@ -338,6 +369,24 @@ func (e *Engine) executeTask(task *Task) {
 	}
 
 	// Send task completed event
+	if task.RetryID != "" {
+		finalStatus := "completed"
+		if !executionResult.Success {
+			finalStatus = "error"
+		}
+		e.setRetryState(
+			task.RetryID,
+			task.RunID,
+			workspaceID,
+			task.AgentID,
+			task.QuestionID,
+			finalStatus,
+			runResultID,
+			executionResult.Error,
+			durationMs,
+		)
+	}
+
 	if e.eventCallback != nil {
 		payload := map[string]any{
 			"run_id":        task.RunID.String(),
