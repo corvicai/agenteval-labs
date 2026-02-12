@@ -1012,6 +1012,17 @@ onMounted(async () => {
     }
   })
 
+  wsService.on('disconnected', (payload) => {
+    if (!isAuthenticated.value || !appReady.value) return
+    if (afkOverlayVisible.value) return
+    if (wsState.isMaintenance) return
+    const reason = payload?.disconnectReason || 'unknown'
+    if (['afk-timeout', 'logout', 'app-unmount'].includes(reason)) return
+    console.warn('[App] WS disconnected; showing reconnect overlay', payload)
+    afkOverlayVisible.value = true
+    isReconnectingFromAfk.value = false
+  })
+
   wsService.on('EVT_FORCE_LOGOUT', (payload) => {
     console.warn('[App] Force Logout received:', payload)
     handleLogout()

@@ -14,6 +14,27 @@ const state = reactive({
     runningQuestionSetId: null
 })
 
+const listSignature = (items = []) => {
+    if (!Array.isArray(items)) return ''
+    return items.map(item => {
+        const id = item?.id || ''
+        const updated = item?.updated_at || item?.updatedAt || item?.created_at || ''
+        if (updated) return `${id}:${updated}`
+        try {
+            return `${id}:${JSON.stringify(item)}`
+        } catch (e) {
+            return `${id}:`
+        }
+    }).join('|')
+}
+
+const shouldReplaceList = (current, incoming) => {
+    if (!Array.isArray(incoming)) return false
+    if (!Array.isArray(current)) return true
+    if (current.length !== incoming.length) return true
+    return listSignature(current) !== listSignature(incoming)
+}
+
 // Action: Initialize WebSocket and listeners
 export function useWSStore() {
     const connect = async (workspaceId, token) => {
@@ -23,12 +44,14 @@ export function useWSStore() {
     const disconnect = (reason = 'manual') => {
         wsService.disconnect(reason)
         state.isConnected = false
-        state.agents = []
-        state.questionSets = []
-        state.recentRuns = []
-        state.lastError = null
-        state.onlineUsers = []
-        state.onlineCount = 0
+        if (reason === 'logout' || reason === 'app-unmount') {
+            state.agents = []
+            state.questionSets = []
+            state.recentRuns = []
+            state.lastError = null
+            state.onlineUsers = []
+            state.onlineCount = 0
+        }
     }
 
     const syncState = async () => {
@@ -39,9 +62,19 @@ export function useWSStore() {
             const data = await wsService.request('REQ_SYNC_STATE', {})
             console.log('[WS Store] Sync state received:', data)
             if (data && (data.agents || data.question_sets)) {
-                state.agents = data.agents || []
-                state.questionSets = data.question_sets || []
-                state.recentRuns = data.recent_runs || []
+                const nextAgents = data.agents || []
+                const nextQuestionSets = data.question_sets || []
+                const nextRuns = data.recent_runs || []
+
+                if (shouldReplaceList(state.agents, nextAgents)) {
+                    state.agents = nextAgents
+                }
+                if (shouldReplaceList(state.questionSets, nextQuestionSets)) {
+                    state.questionSets = nextQuestionSets
+                }
+                if (shouldReplaceList(state.recentRuns, nextRuns)) {
+                    state.recentRuns = nextRuns
+                }
                 state.lastError = null
             } else {
                 console.warn('[WS Store] Sync returned empty or invalid data, keeping current state')
@@ -98,14 +131,17 @@ export function useWSStore() {
             syncState()
         })
 
-        wsService.on('disconnected', () => {
+        wsService.on('disconnected', (payload) => {
             state.isConnected = false
-            state.agents = []
-            state.questionSets = []
-            state.recentRuns = []
-            state.lastError = null
-            state.onlineUsers = []
-            state.onlineCount = 0
+            const reason = payload?.disconnectReason || 'unknown'
+            if (reason === 'logout' || reason === 'app-unmount') {
+                state.agents = []
+                state.questionSets = []
+                state.recentRuns = []
+                state.lastError = null
+                state.onlineUsers = []
+                state.onlineCount = 0
+            }
         })
 
         wsService.on('EVT_DATA_CHANGED', handleDataChanged)
