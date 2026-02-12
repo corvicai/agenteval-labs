@@ -50,9 +50,6 @@
 
       <!-- Agents Tab -->
       <div v-show="activeTab === 'agents'" class="tab-panel">
-        <div class="agents-header">
-          <h3>🤖 Agents</h3>
-        </div>
         <div class="agents-list-sidebar">
           <div 
             v-for="agent in agents" 
