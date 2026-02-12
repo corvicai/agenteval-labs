@@ -21,8 +21,8 @@
                 @input="markPendingChanges(agent)"
                 @blur="saveAgent(agent); stopEditing()"
               />
-                <span class="agent-type-badge" :class="agent.provider_type">
-                {{ agent.provider_type === 'mcp' ? 'Corvic' : (agent.provider_type === 'evaluator' ? 'Evaluator (OpenAI)' : agent.provider_type) }}
+              <span class="agent-type-badge" :class="agent.provider_type">
+                {{ getAgentTypeLabel(agent) }}
               </span>
               <div class="agent-actions">
                 <button class="btn-icon" @click="toggleAgent(agent)" :title="agent.enabled ? 'Disable' : 'Enable'">
@@ -77,22 +77,61 @@
               </div>
               <div v-else-if="agent.provider_type === 'evaluator'" class="config-fields">
                 <!-- Evaluator is explicitly OpenAI, so we also need API Key here if not global -->
-                 <div class="field">
+                <div class="field full-width">
+                  <label>OpenAI Mode</label>
+                  <select
+                    v-model="agent.config.openai_mode"
+                    @focus="startEditing"
+                    @blur="saveAgent(agent); stopEditing()"
+                    @change="markPendingChanges(agent)"
+                  >
+                    <option value="managed">Managed Prompt</option>
+                    <option value="standard">Standard API</option>
+                  </select>
+                  <small class="field-hint">
+                    Managed uses Prompt ID on OpenAI. Standard injects a system prompt on every call.
+                  </small>
+                </div>
+                <div class="field">
                   <label>OpenAI API Key</label>
                   <input v-model="agent.config.api_key" type="password" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" placeholder="sk-..." />
                 </div>
-                <div class="field">
-                  <label>Prompt ID (Optional)</label>
-                  <input v-model="agent.config.prompt_id" placeholder="e.g. prompt_..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
-                </div>
-                <div class="field">
-                  <label>Prompt Version (Optional)</label>
-                  <input v-model="agent.config.prompt_version" placeholder="e.g. v1" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
-                </div>
-                <div class="field">
-                  <label>Project ID (Optional)</label>
-                  <input v-model="agent.config.project_id" placeholder="proj_..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
-                </div>
+                <template v-if="getEvaluatorMode(agent) === 'managed'">
+                  <div class="field">
+                    <label>Prompt ID (Required)</label>
+                    <input v-model="agent.config.prompt_id" placeholder="prompt_..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field">
+                    <label>Prompt Version (Optional)</label>
+                    <input v-model="agent.config.prompt_version" placeholder="e.g. v1" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field">
+                    <label>Project ID (Optional)</label>
+                    <input v-model="agent.config.project_id" placeholder="proj_..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                </template>
+                <template v-else>
+                  <div class="field">
+                    <label>Model</label>
+                    <input v-model="agent.config.model" placeholder="gpt-4o-mini" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field">
+                    <label>Project ID (Optional)</label>
+                    <input v-model="agent.config.project_id" placeholder="proj_..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field full-width">
+                    <label>System Prompt (Injected on every request)</label>
+                    <textarea
+                      v-model="agent.config.system_prompt"
+                      rows="4"
+                      placeholder="Optional. Leave blank to use the platform default evaluator prompt."
+                      @focus="startEditing"
+                      @blur="saveAgent(agent); stopEditing()"
+                      @input="markPendingChanges(agent)"
+                    />
+                    <small class="field-hint">If empty, the API uses the backend default evaluator prompt.</small>
+                  </div>
+                </template>
               </div>
               
               <!-- Common Rate Limiting Field for all agent types -->
@@ -122,12 +161,47 @@
       <div class="modal-footer">
         <div class="agent-config-actions">
           <button class="btn btn-primary" @click="addAgent('mcp')">+ Corvic Agent</button>
-          <button class="btn btn-secondary" @click="addAgent('evaluator')">+ Evaluator (OpenAI)</button>
+          <button class="btn btn-secondary" @click="openEvaluatorModeModal">+ Eval Agent</button>
         </div>
         <div class="footer-right">
           <span v-if="saveStatus" class="save-status" :class="saveStatus">{{ saveStatusText }}</span>
           <button class="btn btn-primary" @click="saveAllAgents" :disabled="!pendingChanges || saveStatus === 'saving'">Save Changes</button>
           <button class="btn btn-secondary" @click="handleClose">Close</button>
+        </div>
+      </div>
+
+      <!-- Evaluator Mode Modal (Nested) -->
+      <div v-if="showEvaluatorModeModal" class="modal-overlay" style="z-index: 1001;" @click.self="closeEvaluatorModeModal">
+        <div class="modal-container evaluator-mode-modal">
+          <div class="modal-header">
+            <h3>🧪 Create Evaluator</h3>
+            <button class="btn-close" @click="closeEvaluatorModeModal">×</button>
+          </div>
+          <div class="modal-body">
+            <p class="evaluator-mode-intro">
+              <strong>Both options are OpenAI-compatible evaluators.</strong>
+              Choose how prompt instructions are provided.
+            </p>
+            <div class="evaluator-mode-grid">
+              <button class="evaluator-mode-card" @click="selectEvaluatorMode('managed')">
+                <span class="mode-title">Eval Managed</span>
+                <span class="mode-subtitle">Prompt ID / Prompt Version</span>
+                <span class="mode-description">
+                  Uses a managed prompt stored in OpenAI. Good when prompt governance is centralized.
+                </span>
+              </button>
+              <button class="evaluator-mode-card" @click="selectEvaluatorMode('standard')">
+                <span class="mode-title">Eval Standard</span>
+                <span class="mode-subtitle">Model + System Prompt</span>
+                <span class="mode-description">
+                  Sends model input with system prompt injected on every request.
+                </span>
+              </button>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" @click="closeEvaluatorModeModal">Cancel</button>
+          </div>
         </div>
       </div>
 
@@ -180,6 +254,7 @@ const pendingChanges = ref(false)
 const dirtyAgentIds = ref(new Set())
 const pendingCreateIds = ref(new Set())
 const isEditing = ref(false) // Block watcher updates when editing
+const showEvaluatorModeModal = ref(false)
 
 function normalizeConfig(rawConfig, providerType) {
   let config = rawConfig
@@ -210,13 +285,24 @@ function normalizeConfig(rawConfig, providerType) {
       ...config
     }
   } else if (providerType === 'evaluator') {
+    const currentMode = typeof config.openai_mode === 'string'
+      ? config.openai_mode.trim().toLowerCase()
+      : ''
+    const inferredMode = (currentMode === 'managed' || currentMode === 'standard')
+      ? currentMode
+      : ((typeof config.prompt_id === 'string' && config.prompt_id.trim() !== '') ? 'managed' : 'standard')
+
     config = {
       target_agent_id: '',
+      openai_mode: inferredMode,
       api_key: '',
+      model: 'gpt-4o-mini',
+      system_prompt: '',
       prompt_id: '',
       prompt_version: '',
       project_id: '',
-      ...config
+      ...config,
+      openai_mode: inferredMode
     }
   }
 
@@ -296,17 +382,71 @@ async function addAgent(providerType) {
   const defaultConfigs = {
     mcp: { mode: 'http', endpoint: '', token: '' },
     openai: { api_key: '', prompt_id: '', prompt_version: '' },
-    evaluator: { target_agent_id: '', api_key: '' }
+    evaluator: {
+      target_agent_id: '',
+      openai_mode: 'managed',
+      api_key: '',
+      model: 'gpt-4o-mini',
+      system_prompt: '',
+      prompt_id: '',
+      prompt_version: '',
+      project_id: ''
+    }
   }
-  
+
+  return addAgentWithConfig(providerType, defaultConfigs[providerType] || {})
+}
+
+function addEvaluator(mode = 'managed') {
+  const selectedMode = mode === 'standard' ? 'standard' : 'managed'
+  const evaluatorConfig = selectedMode === 'managed'
+    ? {
+      target_agent_id: '',
+      openai_mode: 'managed',
+      api_key: '',
+      prompt_id: '',
+      prompt_version: '',
+      project_id: '',
+      model: 'gpt-4o-mini',
+      system_prompt: ''
+    }
+    : {
+      target_agent_id: '',
+      openai_mode: 'standard',
+      api_key: '',
+      model: 'gpt-4o-mini',
+      system_prompt: '',
+      prompt_id: '',
+      prompt_version: '',
+      project_id: ''
+    }
+
+  return addAgentWithConfig('evaluator', evaluatorConfig)
+}
+
+function openEvaluatorModeModal() {
+  showEvaluatorModeModal.value = true
+}
+
+function closeEvaluatorModeModal() {
+  showEvaluatorModeModal.value = false
+}
+
+async function selectEvaluatorMode(mode) {
+  closeEvaluatorModeModal()
+  await addEvaluator(mode)
+}
+
+async function addAgentWithConfig(providerType, customConfig) {
+  if (!props.workspaceId) return
+
   try {
     const newAgent = await wsService.createAgent(props.workspaceId, {
       name: generateAgentName(providerType),
       provider_type: providerType,
-      config: defaultConfigs[providerType] || {}
+      config: customConfig || {}
     })
-    
-    // Add the new agent to localAgents immediately so it appears in the list
+
     const newAgentWithParsedConfig = {
       ...newAgent,
       config: normalizeConfig(newAgent.config, newAgent.provider_type || providerType),
@@ -316,18 +456,38 @@ async function addAgent(providerType) {
       pendingCreateIds.value.add(newAgent.id)
     }
     localAgents.value.unshift(newAgentWithParsedConfig)
-    
-    // If we have an active QS, we should also initialize this agent for this QS
+
     if (props.questionSet?.id) {
       await saveQuestionSetAgents()
     }
-    
+
     emit('update')
     showSaveStatus('saved', 'Agent created!')
   } catch (e) {
     console.error('Failed to create agent:', e)
     showSaveStatus('error', 'Failed to create')
   }
+}
+
+function getEvaluatorMode(agent) {
+  if (!agent || !agent.config) return 'standard'
+  const mode = typeof agent.config.openai_mode === 'string'
+    ? agent.config.openai_mode.trim().toLowerCase()
+    : ''
+  if (mode === 'managed' || mode === 'standard') {
+    return mode
+  }
+  const promptID = typeof agent.config.prompt_id === 'string' ? agent.config.prompt_id.trim() : ''
+  return promptID ? 'managed' : 'standard'
+}
+
+function getAgentTypeLabel(agent) {
+  if (!agent) return 'agent'
+  if (agent.provider_type === 'mcp') return 'Corvic'
+  if (agent.provider_type === 'evaluator') {
+    return getEvaluatorMode(agent) === 'managed' ? 'Eval Managed' : 'Eval Standard'
+  }
+  return agent.provider_type
 }
 
 function showSaveStatus(status, text) {
@@ -649,6 +809,7 @@ function startDrag(index) {
 .agent-config-actions {
   display: flex;
   gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 /* Config Fields */
@@ -683,7 +844,8 @@ function startDrag(index) {
 }
 
 .field input,
-.field select {
+.field select,
+.field textarea {
   padding: 0.5rem;
   border: 1px solid #e2e8f0;
   border-radius: 6px;
@@ -693,10 +855,21 @@ function startDrag(index) {
 }
 
 .field input:focus,
-.field select:focus {
+.field select:focus,
+.field textarea:focus {
   outline: none;
   border-color: #3b82f6;
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.field textarea {
+  resize: vertical;
+  min-height: 92px;
+}
+
+.field-hint {
+  font-size: 0.75rem;
+  color: #64748b;
 }
 
 .config-help {
@@ -787,5 +960,58 @@ function startDrag(index) {
 
 .disabled-card:hover {
   opacity: 1;
+}
+
+.evaluator-mode-modal {
+  width: 92%;
+  max-width: 680px;
+}
+
+.evaluator-mode-intro {
+  margin: 0 0 1rem;
+  color: #475569;
+}
+
+.evaluator-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.75rem;
+}
+
+.evaluator-mode-card {
+  text-align: left;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 1rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  transition: all 0.2s ease;
+}
+
+.evaluator-mode-card:hover {
+  border-color: #94a3b8;
+  box-shadow: 0 4px 10px rgba(2, 6, 23, 0.08);
+  transform: translateY(-1px);
+}
+
+.mode-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.mode-subtitle {
+  font-size: 0.8rem;
+  color: #0f766e;
+  font-weight: 600;
+}
+
+.mode-description {
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: #475569;
 }
 </style>

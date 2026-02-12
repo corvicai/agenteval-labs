@@ -198,6 +198,18 @@ func isAgentConfigured(agent models.Agent) bool {
 		if apiKey == "" {
 			return false
 		}
+		mode := strings.ToLower(strings.TrimSpace(getConfigString(config, "openai_mode")))
+		promptID := strings.TrimSpace(getConfigString(config, "prompt_id"))
+		if mode == "" {
+			if promptID != "" {
+				mode = "managed"
+			} else {
+				mode = "standard"
+			}
+		}
+		if mode == "managed" && promptID == "" {
+			return false
+		}
 	}
 
 	return true

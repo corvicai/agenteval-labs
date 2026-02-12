@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,13 @@ import (
 
 type goRunner struct {
 	appEnv string
+}
+
+//go:embed prompts/evaluator_system_prompt.txt
+var defaultEvaluatorSystemPrompt string
+
+func DefaultEvaluatorSystemPrompt() string {
+	return strings.TrimSpace(defaultEvaluatorSystemPrompt)
 }
 
 func newGoRunner() *goRunner {
@@ -207,6 +215,15 @@ func (r *goRunner) executeOpenAI(ctx context.Context, req ExecutionRequest) Exec
 	promptID := firstNonEmptyString(req.Config, "prompt_id")
 	promptVersion := firstNonEmptyString(req.Config, "prompt_version")
 	projectID := firstNonEmptyString(req.Config, "project_id")
+	systemPrompt := firstNonEmptyString(req.Config, "system_prompt", "instructions")
+	if strings.TrimSpace(systemPrompt) == "" {
+		systemPrompt = DefaultEvaluatorSystemPrompt()
+	}
+	model := strings.TrimSpace(firstNonEmptyString(req.Config, "model"))
+	if model == "" {
+		model = "gpt-4o-mini"
+	}
+	openAIMode := resolveOpenAIMode(req.Config, promptID)
 
 	payload := req.Payload
 	questionText := resolveQuestionText(payload)
@@ -258,7 +275,17 @@ func (r *goRunner) executeOpenAI(ctx context.Context, req ExecutionRequest) Exec
 	var err error
 	var promptSent any
 
-	if promptID != "" && promptVersion != "" {
+	if openAIMode == "managed" {
+		if promptID == "" {
+			return ExecutionResponse{
+				Success: false,
+				Error:   "Prompt ID is required when OpenAI mode is set to managed",
+				Metadata: map[string]any{
+					"duration_ms": int(time.Since(start).Milliseconds()),
+				},
+			}
+		}
+
 		var inputPayload any
 		if imageData != nil {
 			dataURL, err := buildImageDataURL(imageData)
@@ -278,23 +305,41 @@ func (r *goRunner) executeOpenAI(ctx context.Context, req ExecutionRequest) Exec
 		} else {
 			inputPayload = questionText
 		}
-		promptSent = inputPayload
+		promptSent = map[string]any{
+			"mode":           "managed",
+			"prompt_id":      promptID,
+			"prompt_version": promptVersion,
+			"input":          inputPayload,
+		}
 
 		resultText, rawResponse, err = callOpenAIResponses(ctx, apiKey, projectID, promptID, promptVersion, inputPayload)
-	} else if imageData != nil {
-		dataURL, err := buildImageDataURL(imageData)
-		if err != nil {
-			return ExecutionResponse{Success: false, Error: err.Error(), Metadata: durationMeta(start)}
-		}
-		content := []map[string]any{
-			{"type": "image_url", "image_url": map[string]any{"url": dataURL}},
-		}
-		promptSent = content
-		resultText, rawResponse, err = callOpenAIChat(ctx, apiKey, projectID, []map[string]any{{"role": "user", "content": content}})
 	} else {
-		questionText = buildEvaluationPrompt(questionText, originalQuestion, expectedAnswer)
-		promptSent = questionText
-		resultText, rawResponse, err = callOpenAIChat(ctx, apiKey, projectID, []map[string]any{{"role": "user", "content": questionText}})
+		var inputPayload any
+		if imageData != nil {
+			dataURL, err := buildImageDataURL(imageData)
+			if err != nil {
+				return ExecutionResponse{Success: false, Error: err.Error(), Metadata: durationMeta(start)}
+			}
+			inputPayload = []map[string]any{
+				{
+					"role": "user",
+					"content": []map[string]any{
+						{"type": "input_image", "image_url": dataURL},
+					},
+				},
+			}
+		} else {
+			questionText = buildEvaluationPrompt(questionText, originalQuestion, expectedAnswer)
+			inputPayload = questionText
+		}
+
+		promptSent = map[string]any{
+			"mode":         "standard",
+			"model":        model,
+			"instructions": systemPrompt,
+			"input":        inputPayload,
+		}
+		resultText, rawResponse, err = callOpenAIResponsesWithModel(ctx, apiKey, projectID, model, systemPrompt, inputPayload)
 	}
 
 	if err != nil {
@@ -312,6 +357,21 @@ func (r *goRunner) executeOpenAI(ctx context.Context, req ExecutionRequest) Exec
 		"prompt_sent":  promptSent,
 	}
 	return ExecutionResponse{Success: true, Answer: resultText, Metadata: metadata}
+}
+
+func resolveOpenAIMode(config map[string]any, promptID string) string {
+	mode := strings.ToLower(strings.TrimSpace(firstNonEmptyString(config, "openai_mode")))
+	switch mode {
+	case "managed", "managed_prompt", "prompt":
+		return "managed"
+	case "standard", "direct", "default":
+		return "standard"
+	}
+
+	if strings.TrimSpace(promptID) != "" {
+		return "managed"
+	}
+	return "standard"
 }
 
 func (r *goRunner) isProduction() bool {
@@ -471,15 +531,35 @@ func buildEvaluationPrompt(question, originalQuestion, expectedAnswer string) st
 }
 
 func callOpenAIResponses(ctx context.Context, apiKey, projectID, promptID, promptVersion string, inputPayload any) (string, map[string]any, error) {
+	prompt := map[string]any{
+		"id": promptID,
+	}
+	if strings.TrimSpace(promptVersion) != "" {
+		prompt["version"] = promptVersion
+	}
+
 	body := map[string]any{
-		"prompt": map[string]any{
-			"id":      promptID,
-			"version": promptVersion,
-		},
+		"prompt":    prompt,
 		"input":     inputPayload,
 		"reasoning": map[string]any{},
 		"store":     true,
 		"include":   []string{"web_search_call.action.sources"},
+	}
+
+	return callOpenAI(ctx, apiKey, projectID, "responses", body, parseOpenAIResponses)
+}
+
+func callOpenAIResponsesWithModel(ctx context.Context, apiKey, projectID, model, instructions string, inputPayload any) (string, map[string]any, error) {
+	body := map[string]any{
+		"model":     model,
+		"input":     inputPayload,
+		"reasoning": map[string]any{},
+		"store":     true,
+		"include":   []string{"web_search_call.action.sources"},
+	}
+
+	if strings.TrimSpace(instructions) != "" {
+		body["instructions"] = instructions
 	}
 
 	return callOpenAI(ctx, apiKey, projectID, "responses", body, parseOpenAIResponses)
