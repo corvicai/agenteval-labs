@@ -248,6 +248,17 @@ func main() {
 	e.GET("/health", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
+	e.GET("/prompts/evaluator-system", func(c echo.Context) error {
+		prompt := orchestrator.DefaultEvaluatorSystemPrompt()
+		if prompt == "" {
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": "default evaluator prompt is empty",
+			})
+		}
+		return c.JSON(http.StatusOK, map[string]string{
+			"prompt": prompt,
+		})
+	})
 	e.POST("/auth/register", authHandler.Register, authRateLimiter)
 	e.POST("/auth/login", authHandler.Login, authRateLimiter)
 	e.POST("/auth/bootstrap-admin", authHandler.BootstrapAdmin)

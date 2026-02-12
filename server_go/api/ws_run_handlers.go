@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"benchmarking-platform/models"
@@ -52,13 +53,43 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 
 			switch agent.ProviderType {
 			case "openai":
-				if v, ok := config["api_key"].(string); !ok || v == "" {
+				apiKey, _ := config["api_key"].(string)
+				if strings.TrimSpace(apiKey) == "" {
 					c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is missing credentials (API Key is required)", agent.Name))
 					return
 				}
+				promptID, _ := config["prompt_id"].(string)
+				mode, _ := config["openai_mode"].(string)
+				mode = strings.ToLower(strings.TrimSpace(mode))
+				if mode == "" {
+					if strings.TrimSpace(promptID) != "" {
+						mode = "managed"
+					} else {
+						mode = "standard"
+					}
+				}
+				if mode == "managed" && strings.TrimSpace(promptID) == "" {
+					c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is in managed mode but Prompt ID is missing", agent.Name))
+					return
+				}
 			case "evaluator":
-				if v, ok := config["api_key"].(string); !ok || v == "" {
+				apiKey, _ := config["api_key"].(string)
+				if strings.TrimSpace(apiKey) == "" {
 					c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is missing credentials (API Key is required)", agent.Name))
+					return
+				}
+				promptID, _ := config["prompt_id"].(string)
+				mode, _ := config["openai_mode"].(string)
+				mode = strings.ToLower(strings.TrimSpace(mode))
+				if mode == "" {
+					if strings.TrimSpace(promptID) != "" {
+						mode = "managed"
+					} else {
+						mode = "standard"
+					}
+				}
+				if mode == "managed" && strings.TrimSpace(promptID) == "" {
+					c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is in managed mode but Prompt ID is missing", agent.Name))
 					return
 				}
 			case "mcp":
