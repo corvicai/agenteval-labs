@@ -176,9 +176,10 @@
                   v-if="hasQuestionBeenRun(question.id)"
                   class="btn-retry" 
                   @click.stop="retryQuestionForAllAgents(question.id)"
-                  title="Retry this question"
+                  :disabled="isQuestionLoading(question.id)"
+                  :title="isQuestionLoading(question.id) ? 'Retrying...' : 'Retry this question'"
                 >
-                  🔄 Retry
+                  {{ isQuestionLoading(question.id) ? '⏳ Retrying' : '🔄 Retry' }}
                 </button>
               </div>
             </div>
@@ -320,6 +321,7 @@ const pendingResultsBuffer = ref([])
 const startRunError = ref(null)
 const isExportingPdf = ref(false)
 const isRestoringRun = ref(false)
+const retryingQuestions = ref({})
 const runProgressStorageKey = (runId) => `run_progress_${runId}`
 
 // Init logic for Question Set
@@ -612,10 +614,39 @@ function hasQuestionBeenRun(questionId) {
   return false
 }
 
+function markRetryStarted(questionId, retryId) {
+  if (!questionId || !retryId) return
+  const qIdStr = String(questionId)
+  if (!retryingQuestions.value[qIdStr]) {
+    retryingQuestions.value[qIdStr] = {}
+  }
+  retryingQuestions.value[qIdStr][retryId] = true
+}
+
+function markRetryFinished(questionId, retryId) {
+  if (!questionId || !retryId) return
+  const qIdStr = String(questionId)
+  const retries = retryingQuestions.value[qIdStr]
+  if (!retries) return
+  delete retries[retryId]
+  if (Object.keys(retries).length === 0) {
+    delete retryingQuestions.value[qIdStr]
+  }
+}
+
+function isQuestionRetrying(questionId) {
+  if (!questionId) return false
+  const qIdStr = String(questionId)
+  const retries = retryingQuestions.value[qIdStr]
+  return !!(retries && Object.keys(retries).length > 0)
+}
+
 // Get status class for question
 function getQuestionStatus(questionId) {
   if (!runResults.value || !questionId) return 'status-not-run'
   const qIdStr = String(questionId)
+
+  if (isQuestionRetrying(qIdStr)) return 'status-loading'
   
   let hasError = false
   let hasAnswer = false
@@ -633,10 +664,25 @@ function getQuestionStatus(questionId) {
     }
   }
   
+  if (isLoading) return 'status-loading'
   if (hasError && !hasAnswer && !hasSuccess) return 'status-error'
   if (hasAnswer || hasSuccess) return 'status-completed'
-  if (isLoading) return 'status-loading'
   return 'status-not-run'
+}
+
+function isQuestionLoading(questionId) {
+  if (!runResults.value || !questionId) return false
+  const qIdStr = String(questionId)
+
+  if (isQuestionRetrying(qIdStr)) return true
+
+  for (const agentId in runResults.value) {
+    const agentResults = runResults.value[agentId]
+    if (agentResults && agentResults[qIdStr]?.loading) {
+      return true
+    }
+  }
+  return false
 }
 
 // Get status text for question
@@ -658,6 +704,8 @@ function getQuestionStatusText(questionId) {
 function getQuestionResponse(questionId, truncated = true) {
   if (!runResults.value || !questionId) return null
   const qIdStr = String(questionId)
+
+  if (isQuestionRetrying(qIdStr)) return null
   
   // Find the first agent that has a response for this question
   for (const agentId in runResults.value) {
@@ -757,10 +805,24 @@ async function retryQuestionForAllAgents(questionId) {
     alert('No enabled agents found. Please enable at least one agent.')
     return
   }
+
+  const localRetryIds = {}
+  enabledAgents.forEach(agent => {
+    const localRetryId = `local-${agent.id}-${Date.now()}`
+    localRetryIds[agent.id] = localRetryId
+    markRetryStarted(qIdStr, localRetryId)
+    if (!runResults.value[agent.id]) runResults.value[agent.id] = {}
+    runResults.value[agent.id][qIdStr] = {
+      ...(runResults.value[agent.id][qIdStr] || {}),
+      loading: true,
+      queued: false,
+      error: null
+    }
+  })
   
   // Retry for each enabled agent
   for (const agent of enabledAgents) {
-    await rerunQuestion(agent.id, questionId)
+    await rerunQuestion(agent.id, questionId, localRetryIds[agent.id])
   }
 }
 
@@ -1112,6 +1174,11 @@ function processTaskCompleted(data) {
       saveRunProgress(currentRun.value.id)
     }
 
+    const qIdStr = String(data.question_id)
+    if (data.retry_id) {
+      markRetryFinished(qIdStr, data.retry_id)
+    }
+
     // Check if run completed for this question set
     if (isRunning.value && completedTasks.value >= totalTasks.value) {
        isRunning.value = false
@@ -1157,7 +1224,7 @@ async function cancelBenchmark() {
   }
 }
 
-async function rerunQuestion(agentId, questionId) {
+async function rerunQuestion(agentId, questionId, localRetryId = null) {
   if (!currentRun.value) return
   
   // Optimistic update
@@ -1209,17 +1276,27 @@ async function rerunQuestion(agentId, questionId) {
   }
 
   try {
-    await wsService.rerunTask(currentRun.value.id, agentId, questionId, {
+    const response = await wsService.rerunTask(currentRun.value.id, agentId, questionId, {
       questionSetId: currentQuestionSet.value?.id,
       resultId: resultIdToUse,
       originalQuestion: question?.question || '',
       expectedAnswer: question?.expected || question?.expected_answer || ''
     })
+    const retryId = response?.retry_id || response?.retryId
+    if (retryId) {
+      markRetryStarted(qIdStr, retryId)
+      if (localRetryId) {
+        markRetryFinished(qIdStr, localRetryId)
+      }
+    }
   } catch (e) {
     console.error('Failed to rerun:', e)
      // Revert on error
       if (runResults.value[agentId] && runResults.value[agentId][qIdStr]) {
          runResults.value[agentId][qIdStr].loading = false
+      }
+      if (localRetryId) {
+        markRetryFinished(qIdStr, localRetryId)
       }
   }
 }
@@ -1462,6 +1539,9 @@ onMounted(async () => {
     wsService.on('EVT_TASK_QUEUED', (data) => {
         const agentId = data.agent_id
         const qIdStr = String(data.question_id)
+        if (data.retry_id) {
+          markRetryStarted(qIdStr, data.retry_id)
+        }
         
         if (runResults.value[agentId] && runResults.value[agentId][qIdStr]) {
             runResults.value[agentId][qIdStr].queued = true
@@ -1476,6 +1556,10 @@ onMounted(async () => {
             if (currentRun.value?.id) {
               saveRunProgress(currentRun.value.id)
             }
+        }
+        if (data.retry_id) {
+          const qIdStr = String(data.question_id)
+          markRetryStarted(qIdStr, data.retry_id)
         }
         
         // Update specific item status if it exists (for reruns)
@@ -1495,6 +1579,9 @@ onMounted(async () => {
         if (data.run_id !== currentRun.value.id) return
         const agentId = data.agent_id
         const qIdStr = String(data.question_id)
+        if (data.retry_id) {
+          markRetryStarted(qIdStr, data.retry_id)
+        }
         if (!taskProgress.value[agentId]) taskProgress.value[agentId] = {}
         taskProgress.value[agentId][qIdStr] = {
             message: data.message || 'Runner still processing...',
@@ -1816,6 +1903,12 @@ defineExpose({
   border-radius: 6px;
   border-left: 3px solid #6366f1;
   word-wrap: break-word;
+}
+
+.questions-list-view .response-text ul,
+.questions-list-view .response-text ol {
+  padding-left: 1.25rem;
+  margin-left: 0.25rem;
 }
 
 .questions-list-view .response-image {

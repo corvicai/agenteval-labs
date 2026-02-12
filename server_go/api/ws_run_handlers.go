@@ -104,6 +104,7 @@ func (h *Hub) handleRerunTask(c *Connection, env models.Envelope) {
 
 	runID, _ := uuid.Parse(payload.RunID)
 	agentID, _ := uuid.Parse(payload.AgentID)
+	retryID := uuid.NewString()
 
 	// Pass frontend-provided context to engine
 	opts := &orchestrator.RerunTaskOptions{
@@ -111,6 +112,7 @@ func (h *Hub) handleRerunTask(c *Connection, env models.Envelope) {
 		ExpectedAnswer:   payload.ExpectedAnswer,
 		QuestionSetID:    payload.QuestionSetID,
 		ResultID:         payload.ResultID,
+		RetryID:          retryID,
 	}
 
 	if err := h.engine.RerunTask(runID, agentID, payload.QuestionID, opts); err != nil {
@@ -118,7 +120,10 @@ func (h *Hub) handleRerunTask(c *Connection, env models.Envelope) {
 		return
 	}
 
-	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "queued"})
+	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{
+		"status":   "queued",
+		"retry_id": retryID,
+	})
 }
 
 func (h *Hub) handleCancelRun(c *Connection, env models.Envelope) {
