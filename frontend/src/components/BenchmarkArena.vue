@@ -1911,6 +1911,10 @@ defineExpose({
   margin-left: 0.25rem;
 }
 
+.questions-list-view .response-text > * {
+  margin-left: 13px;
+}
+
 .questions-list-view .response-image {
   max-width: 100%;
   height: auto;
