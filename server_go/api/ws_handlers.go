@@ -37,6 +37,8 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 		h.handleGetLatestRunByQuestionSet(c, env)
 	case ReqGetResultDetails:
 		h.handleGetResultDetails(c, env)
+	case ReqGetRetryStatus:
+		h.handleGetRetryStatus(c, env)
 
 	// Dev/Auth handlers
 	case ReqDevGetManagers:

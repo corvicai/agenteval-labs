@@ -524,6 +524,10 @@ class WebSocketService {
         return this.request('REQ_GET_RESULT_DETAILS', { result_ids: resultIds })
     }
 
+    getRetryStatus(retryIds) {
+        return this.request('REQ_GET_RETRY_STATUS', { retry_ids: retryIds })
+    }
+
     createEvaluation(runResultId, rating, comments = '') {
         return this.request('REQ_CREATE_EVALUATION', {
             run_result_id: runResultId,

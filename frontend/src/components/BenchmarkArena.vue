@@ -169,7 +169,11 @@
                 </div>
               </div>
               <div class="question-actions">
-                <span class="question-status" :class="getQuestionStatus(question.id)">
+                <span
+                  class="question-status"
+                  :class="getQuestionStatus(question.id)"
+                  :title="getQuestionStatusTooltip(question.id) || null"
+                >
                   {{ getQuestionStatusText(question.id) }}
                 </span>
                 <button 
@@ -322,7 +326,10 @@ const startRunError = ref(null)
 const isExportingPdf = ref(false)
 const isRestoringRun = ref(false)
 const retryingQuestions = ref({})
+const retryRegistry = ref({})
+const RETRY_TRACK_TTL_MS = 20 * 60 * 1000
 const runProgressStorageKey = (runId) => `run_progress_${runId}`
+const retryStorageKey = () => `retry_tracking_${props.workspaceId || 'global'}`
 
 // Init logic for Question Set
 watch(() => props.questionSets, (sets) => {
@@ -351,6 +358,10 @@ watch(() => props.initialQuestionSetId, (newId) => {
 
 // Watch for workspaceId changes to trigger fetch if it was skipped
 watch(() => props.workspaceId, (newId) => {
+  loadRetryRegistry()
+  if (newId && wsState.isConnected) {
+    reconcileRetriesFromServer()
+  }
   if (newId && currentQuestionSet.value && !isRunning.value) {
     fetchLatestResultsForQS(currentQuestionSet.value.id)
   }
@@ -614,23 +625,112 @@ function hasQuestionBeenRun(questionId) {
   return false
 }
 
-function markRetryStarted(questionId, retryId) {
+function persistRetryRegistry() {
+  try {
+    localStorage.setItem(retryStorageKey(), JSON.stringify(retryRegistry.value))
+  } catch (e) {
+    console.warn('[Arena] Failed to persist retry registry:', e)
+  }
+}
+
+function pruneRetryRegistry() {
+  const now = Date.now()
+  const next = {}
+  for (const retryId in retryRegistry.value) {
+    const item = retryRegistry.value[retryId]
+    const expiresAt = item?.expires_at ? new Date(item.expires_at).getTime() : 0
+    if (expiresAt > now) {
+      next[retryId] = item
+    }
+  }
+  retryRegistry.value = next
+}
+
+function rebuildRetryingQuestionsFromRegistry() {
+  const active = {}
+  for (const retryId in retryRegistry.value) {
+    const item = retryRegistry.value[retryId]
+    if (!item?.question_id) continue
+    if (item.status !== 'queued' && item.status !== 'running') continue
+    const qIdStr = String(item.question_id)
+    if (!active[qIdStr]) active[qIdStr] = {}
+    active[qIdStr][retryId] = true
+  }
+  retryingQuestions.value = active
+}
+
+function loadRetryRegistry() {
+  try {
+    const raw = localStorage.getItem(retryStorageKey())
+    if (!raw) {
+      retryRegistry.value = {}
+      retryingQuestions.value = {}
+      return
+    }
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object') {
+      retryRegistry.value = parsed
+      pruneRetryRegistry()
+      rebuildRetryingQuestionsFromRegistry()
+      persistRetryRegistry()
+    }
+  } catch (e) {
+    console.warn('[Arena] Failed to load retry registry:', e)
+    retryRegistry.value = {}
+    retryingQuestions.value = {}
+  }
+}
+
+function markRetryStarted(questionId, retryId, meta = {}) {
   if (!questionId || !retryId) return
   const qIdStr = String(questionId)
   if (!retryingQuestions.value[qIdStr]) {
     retryingQuestions.value[qIdStr] = {}
   }
   retryingQuestions.value[qIdStr][retryId] = true
+
+  if (String(retryId).startsWith('local-')) {
+    return
+  }
+
+  const now = Date.now()
+  const existing = retryRegistry.value[retryId] || {}
+  retryRegistry.value[retryId] = {
+    retry_id: retryId,
+    run_id: meta.runId || existing.run_id || currentRun.value?.id || '',
+    agent_id: meta.agentId || existing.agent_id || '',
+    question_id: qIdStr,
+    question_set_id: meta.questionSetId || existing.question_set_id || currentQuestionSet.value?.id || '',
+    status: meta.status || existing.status || 'queued',
+    updated_at: new Date(now).toISOString(),
+    expires_at: new Date(now + RETRY_TRACK_TTL_MS).toISOString()
+  }
+
+  persistRetryRegistry()
 }
 
-function markRetryFinished(questionId, retryId) {
+function markRetryFinished(questionId, retryId, status = 'completed') {
   if (!questionId || !retryId) return
   const qIdStr = String(questionId)
   const retries = retryingQuestions.value[qIdStr]
-  if (!retries) return
-  delete retries[retryId]
-  if (Object.keys(retries).length === 0) {
-    delete retryingQuestions.value[qIdStr]
+  if (retries) {
+    delete retries[retryId]
+    if (Object.keys(retries).length === 0) {
+      delete retryingQuestions.value[qIdStr]
+    }
+  }
+
+  const existing = retryRegistry.value[retryId]
+  if (existing) {
+    if (status === 'queued' || status === 'running') {
+      existing.status = status
+      existing.updated_at = new Date().toISOString()
+      existing.expires_at = new Date(Date.now() + RETRY_TRACK_TTL_MS).toISOString()
+      retryRegistry.value[retryId] = existing
+    } else {
+      delete retryRegistry.value[retryId]
+    }
+    persistRetryRegistry()
   }
 }
 
@@ -698,6 +798,42 @@ function getQuestionStatusText(questionId) {
     default:
       return '⭕ Not Run'
   }
+}
+
+function getQuestionStatusTooltip(questionId) {
+  const status = getQuestionStatus(questionId)
+  if (status !== 'status-loading') return ''
+
+  const qIdStr = String(questionId)
+  let best = null
+
+  for (const agentId in taskProgress.value) {
+    const entry = taskProgress.value[agentId]?.[qIdStr]
+    if (!entry) continue
+    if (!best) {
+      best = entry
+      continue
+    }
+
+    const entryElapsed = typeof entry.elapsed_ms === 'number' ? entry.elapsed_ms : -1
+    const bestElapsed = typeof best.elapsed_ms === 'number' ? best.elapsed_ms : -1
+    if (entryElapsed > bestElapsed) {
+      best = entry
+      continue
+    }
+
+    if (entryElapsed === bestElapsed) {
+      const entryTs = Date.parse(entry.timestamp || '')
+      const bestTs = Date.parse(best.timestamp || '')
+      if (!Number.isNaN(entryTs) && (Number.isNaN(bestTs) || entryTs > bestTs)) {
+        best = entry
+      }
+    }
+  }
+
+  if (best?.message) return best.message
+  if (isQuestionRetrying(qIdStr)) return 'Retry is still running...'
+  return 'Task is running...'
 }
 
 // Get the response text for a question (from the first available agent)
@@ -1284,7 +1420,12 @@ async function rerunQuestion(agentId, questionId, localRetryId = null) {
     })
     const retryId = response?.retry_id || response?.retryId
     if (retryId) {
-      markRetryStarted(qIdStr, retryId)
+      markRetryStarted(qIdStr, retryId, {
+        runId: currentRun.value?.id,
+        agentId,
+        questionSetId: currentQuestionSet.value?.id,
+        status: 'queued'
+      })
       if (localRetryId) {
         markRetryFinished(qIdStr, localRetryId)
       }
@@ -1525,13 +1666,123 @@ async function restoreActiveRun(runId) {
   }
 }
 
+function applyRetryLoadingState(item) {
+  const agentId = item?.agent_id
+  const questionId = item?.question_id != null ? String(item.question_id) : ''
+  if (!agentId || !questionId) return
+
+  if (!runResults.value[agentId]) {
+    runResults.value[agentId] = {}
+  }
+
+  runResults.value[agentId][questionId] = {
+    ...(runResults.value[agentId][questionId] || {}),
+    loading: true,
+    queued: item?.status === 'queued',
+    error: null
+  }
+}
+
+function resolveRetryStatusItems(response) {
+  if (Array.isArray(response?.items)) return response.items
+  if (Array.isArray(response)) return response
+  return []
+}
+
+async function reconcileRetriesFromServer() {
+  if (!wsState.isConnected) return
+  loadRetryRegistry()
+
+  const retryIds = Object.keys(retryRegistry.value)
+  if (retryIds.length === 0) return
+
+  retryIds.forEach((retryId) => {
+    const item = retryRegistry.value[retryId]
+    if (item?.status === 'queued' || item?.status === 'running') {
+      markRetryStarted(item.question_id, retryId, {
+        runId: item.run_id,
+        agentId: item.agent_id,
+        questionSetId: item.question_set_id,
+        status: item.status
+      })
+      applyRetryLoadingState(item)
+    }
+  })
+
+  try {
+    const response = await wsService.getRetryStatus(retryIds)
+    const items = resolveRetryStatusItems(response)
+    const known = new Set()
+    let shouldRefreshResults = false
+
+    for (const item of items) {
+      if (!item?.retry_id) continue
+      const retryId = item.retry_id
+      const qIdStr = item?.question_id != null ? String(item.question_id) : ''
+      known.add(retryId)
+
+      if (item.status === 'queued' || item.status === 'running') {
+        markRetryStarted(qIdStr, retryId, {
+          runId: item.run_id,
+          agentId: item.agent_id,
+          questionSetId: currentQuestionSet.value?.id,
+          status: item.status
+        })
+        applyRetryLoadingState(item)
+        if (!isRunning.value) {
+          isRunning.value = true
+        }
+        if (!activeRunQuestionSetId.value && currentQuestionSet.value?.id) {
+          activeRunQuestionSetId.value = currentQuestionSet.value.id
+          wsStore.setRunningQuestionSetId(currentQuestionSet.value.id)
+        }
+        if (!currentRun.value?.id && item.run_id) {
+          currentRun.value = {
+            id: item.run_id,
+            status: 'running',
+            agentIds: displayAgents.value.map(a => a.id).filter(Boolean)
+          }
+        }
+      } else {
+        if (qIdStr) {
+          markRetryFinished(qIdStr, retryId, item.status)
+        } else {
+          delete retryRegistry.value[retryId]
+        }
+        shouldRefreshResults = true
+      }
+    }
+
+    retryIds.forEach((retryId) => {
+      if (known.has(retryId)) return
+      const entry = retryRegistry.value[retryId]
+      if (entry?.question_id) {
+        markRetryFinished(entry.question_id, retryId, 'not_found')
+      } else {
+        delete retryRegistry.value[retryId]
+      }
+    })
+
+    persistRetryRegistry()
+
+    if (shouldRefreshResults && currentQuestionSet.value?.id) {
+      fetchLatestResultsForQS(currentQuestionSet.value.id)
+    }
+  } catch (e) {
+    console.warn('[Arena] Failed to reconcile retries:', e)
+  }
+}
+
 // Global Listeners for THIS component
 // We need to listen to WS events to update live results
 onMounted(async () => {
+    loadRetryRegistry()
     const activeRunId = localStorage.getItem('activeRunId')
     if (activeRunId) {
         await restoreActiveRun(activeRunId)
     }
+
+    await reconcileRetriesFromServer()
     
     // Safety check for loaded results
     ensureResultsLoaded()
@@ -1540,7 +1791,12 @@ onMounted(async () => {
         const agentId = data.agent_id
         const qIdStr = String(data.question_id)
         if (data.retry_id) {
-          markRetryStarted(qIdStr, data.retry_id)
+          markRetryStarted(qIdStr, data.retry_id, {
+            runId: data.run_id,
+            agentId: data.agent_id,
+            questionSetId: currentQuestionSet.value?.id,
+            status: 'queued'
+          })
         }
         
         if (runResults.value[agentId] && runResults.value[agentId][qIdStr]) {
@@ -1559,7 +1815,12 @@ onMounted(async () => {
         }
         if (data.retry_id) {
           const qIdStr = String(data.question_id)
-          markRetryStarted(qIdStr, data.retry_id)
+          markRetryStarted(qIdStr, data.retry_id, {
+            runId: data.run_id,
+            agentId: data.agent_id,
+            questionSetId: currentQuestionSet.value?.id,
+            status: 'running'
+          })
         }
         
         // Update specific item status if it exists (for reruns)
@@ -1580,7 +1841,12 @@ onMounted(async () => {
         const agentId = data.agent_id
         const qIdStr = String(data.question_id)
         if (data.retry_id) {
-          markRetryStarted(qIdStr, data.retry_id)
+          markRetryStarted(qIdStr, data.retry_id, {
+            runId: data.run_id,
+            agentId: data.agent_id,
+            questionSetId: currentQuestionSet.value?.id,
+            status: 'running'
+          })
         }
         if (!taskProgress.value[agentId]) taskProgress.value[agentId] = {}
         taskProgress.value[agentId][qIdStr] = {
@@ -1654,6 +1920,7 @@ watch(() => wsState.isConnected, (connected) => {
   if (activeRunId) {
     restoreActiveRun(activeRunId)
   }
+  reconcileRetriesFromServer()
 })
 
 // Helper function to check if any results are still loading

@@ -536,6 +536,22 @@ func (h *Hub) handleGetResultDetails(c *Connection, env models.Envelope) {
 	c.SendResponse(DataResultDetails, env.CorrelationID, models.ResultDetailsResponse{Results: results})
 }
 
+func (h *Hub) handleGetRetryStatus(c *Connection, env models.Envelope) {
+	var payload models.GetRetryStatusPayload
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		c.SendError(env.CorrelationID, "invalid payload")
+		return
+	}
+
+	if len(payload.RetryIDs) == 0 {
+		c.SendResponse(DataRetryStatus, env.CorrelationID, models.RetryStatusResponse{Items: []models.RetryStatusItem{}})
+		return
+	}
+
+	items := h.engine.GetRetryStatus(c.WorkspaceID, payload.RetryIDs)
+	c.SendResponse(DataRetryStatus, env.CorrelationID, models.RetryStatusResponse{Items: items})
+}
+
 func (h *Hub) handleDeleteRun(c *Connection, env models.Envelope) {
 	if !c.IsAuthenticated {
 		c.SendError(env.CorrelationID, "not authenticated")
