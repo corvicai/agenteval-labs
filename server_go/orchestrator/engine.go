@@ -42,6 +42,7 @@ type Task struct {
 	AgentConfig      map[string]any
 	ProviderType     string
 	MaxConcurrency   int // Max parallel requests for this agent
+	RetryID          string
 }
 
 type ExecutionRequest struct {
@@ -139,11 +140,15 @@ func (e *Engine) getAgentSemaphore(agentID uuid.UUID, maxConcurrency int) chan s
 func (e *Engine) QueueTask(task *Task) {
 	// Emit queued event so frontend can show "Queued" state
 	if e.eventCallback != nil && task.WorkspaceID != uuid.Nil {
-		e.eventCallback(task.WorkspaceID, "EVT_TASK_QUEUED", task.RunID.String(), map[string]any{
+		payload := map[string]any{
 			"run_id":      task.RunID.String(),
 			"agent_id":    task.AgentID.String(),
 			"question_id": task.QuestionID,
-		})
+		}
+		if task.RetryID != "" {
+			payload["retry_id"] = task.RetryID
+		}
+		e.eventCallback(task.WorkspaceID, "EVT_TASK_QUEUED", task.RunID.String(), payload)
 	}
 	e.taskQueue <- task
 }
@@ -200,11 +205,15 @@ func (e *Engine) executeTask(task *Task) {
 
 	// Send task started event
 	if e.eventCallback != nil {
-		e.eventCallback(workspaceID, "EVT_TASK_STARTED", task.RunID.String(), map[string]any{
+		payload := map[string]any{
 			"run_id":      task.RunID.String(),
 			"agent_id":    task.AgentID.String(),
 			"question_id": task.QuestionID,
-		})
+		}
+		if task.RetryID != "" {
+			payload["retry_id"] = task.RetryID
+		}
+		e.eventCallback(workspaceID, "EVT_TASK_STARTED", task.RunID.String(), payload)
 	}
 
 	runCtx := e.ensureRunContext(task.RunID)
@@ -225,13 +234,17 @@ func (e *Engine) executeTask(task *Task) {
 					return
 				case <-ticker.C:
 					elapsed := time.Since(startTime)
-					e.eventCallback(workspaceID, "EVT_TASK_PROGRESS", runID.String(), map[string]any{
+					payload := map[string]any{
 						"run_id":      runID.String(),
 						"agent_id":    agentID.String(),
 						"question_id": questionID,
 						"elapsed_ms":  int(elapsed.Milliseconds()),
 						"message":     fmt.Sprintf("Runner still processing (%ds)", int(elapsed.Seconds())),
-					})
+					}
+					if task.RetryID != "" {
+						payload["retry_id"] = task.RetryID
+					}
+					e.eventCallback(workspaceID, "EVT_TASK_PROGRESS", runID.String(), payload)
 				}
 			}
 		}(task.RunID, task.AgentID, task.QuestionID)
@@ -273,6 +286,24 @@ func (e *Engine) executeTask(task *Task) {
 		executionResult = ExecutionResponse{Success: false, Error: err.Error()}
 	}
 
+	if !executionResult.Success {
+		metaSummary := ""
+		if len(executionResult.Metadata) > 0 {
+			if payload, err := json.Marshal(executionResult.Metadata); err == nil {
+				metaSummary = string(payload)
+			} else {
+				metaSummary = fmt.Sprintf("metadata_marshal_error=%v", err)
+			}
+		}
+		if metaSummary != "" {
+			log.Printf("[ENGINE] Task failed: Run %s, Agent %s, Question %s, Error=%s, Metadata=%s",
+				task.RunID, task.AgentID, task.QuestionID, executionResult.Error, truncate(metaSummary, 2000))
+		} else {
+			log.Printf("[ENGINE] Task failed: Run %s, Agent %s, Question %s, Error=%s",
+				task.RunID, task.AgentID, task.QuestionID, executionResult.Error)
+		}
+	}
+
 	durationMs := int(time.Since(startTime).Milliseconds())
 
 	// Store result in DB
@@ -308,7 +339,7 @@ func (e *Engine) executeTask(task *Task) {
 
 	// Send task completed event
 	if e.eventCallback != nil {
-		e.eventCallback(workspaceID, "EVT_TASK_COMPLETED", task.RunID.String(), map[string]any{
+		payload := map[string]any{
 			"run_id":        task.RunID.String(),
 			"run_result_id": runResultID.String(),
 			"agent_id":      task.AgentID.String(),
@@ -318,7 +349,11 @@ func (e *Engine) executeTask(task *Task) {
 			"error":         executionResult.Error,
 			"metadata":      executionResult.Metadata,
 			"duration_ms":   durationMs,
-		})
+		}
+		if task.RetryID != "" {
+			payload["retry_id"] = task.RetryID
+		}
+		e.eventCallback(workspaceID, "EVT_TASK_COMPLETED", task.RunID.String(), payload)
 	}
 
 	log.Printf("[ENGINE] Task completed: Run %s, Agent %s, Question %s, Success=%v, Duration=%dms",
@@ -803,10 +838,15 @@ type RerunTaskOptions struct {
 	ExpectedAnswer   string
 	QuestionSetID    string
 	ResultID         string
+	RetryID          string
 }
 
 // RerunTask reruns a single question for a specific agent
 func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string, opts *RerunTaskOptions) error {
+	retryID := ""
+	if opts != nil {
+		retryID = strings.TrimSpace(opts.RetryID)
+	}
 	// Get existing run
 	var run models.Run
 	if err := e.db.First(&run, "id = ?", runID).Error; err != nil {
@@ -987,6 +1027,7 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 		AgentConfig:      agentConfig,
 		ProviderType:     agent.ProviderType,
 		MaxConcurrency:   agent.MaxConcurrency,
+		RetryID:          retryID,
 	}
 
 	log.Printf("[RERUN] Queuing task: run=%s, agent=%s, qid=%s, ans_len=%d", task.RunID, task.AgentID, task.QuestionID, len(task.AgentAnswer))

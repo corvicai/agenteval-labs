@@ -152,11 +152,11 @@
                   <div class="response-text">
                     <div 
                       v-if="!expandedResponses[question.id]"
-                      v-html="formatResponseWithImages(getQuestionResponse(question.id, true))"
+                      v-html="formatResponseHtml(getQuestionResponse(question.id, true))"
                     ></div>
                     <div 
                       v-else
-                      v-html="formatResponseWithImages(getQuestionResponse(question.id, false))"
+                      v-html="formatResponseHtml(getQuestionResponse(question.id, false))"
                     ></div>
                     <button 
                       v-if="isResponseLong(question.id)"
@@ -176,9 +176,10 @@
                   v-if="hasQuestionBeenRun(question.id)"
                   class="btn-retry" 
                   @click.stop="retryQuestionForAllAgents(question.id)"
-                  title="Retry this question"
+                  :disabled="isQuestionLoading(question.id)"
+                  :title="isQuestionLoading(question.id) ? 'Retrying...' : 'Retry this question'"
                 >
-                  🔄 Retry
+                  {{ isQuestionLoading(question.id) ? '⏳ Retrying' : '🔄 Retry' }}
                 </button>
               </div>
             </div>
@@ -268,6 +269,7 @@ import { exportResultsReport } from '../utils/exporters.js'
 import { downloadManager } from '../services/DownloadManager.js'
 import { contentCache } from '../services/ContentCache.js'
 import { useWSStore } from '../stores/wsStore'
+import { processContent } from '../utils/markdown.js'
 
 const props = defineProps({
   workspaceId: String,
@@ -319,6 +321,7 @@ const pendingResultsBuffer = ref([])
 const startRunError = ref(null)
 const isExportingPdf = ref(false)
 const isRestoringRun = ref(false)
+const retryingQuestions = ref({})
 const runProgressStorageKey = (runId) => `run_progress_${runId}`
 
 // Init logic for Question Set
@@ -423,20 +426,37 @@ const hasResults = computed(() => {
   return runResults.value && Object.keys(runResults.value).length > 0
 })
 
-// Granular progress: started tasks count for half (0.5x), completed count for full (1x)
-// This gives visual feedback that tasks are running before they complete
+// Granular progress: started tasks add a small baseline, completed tasks count fully
 const progressPercent = computed(() => {
   if (totalTasks.value === 0) return 0
   return Math.round((completedTasks.value / totalTasks.value) * 100)
 })
 
+const STARTED_TASK_WEIGHT_PERCENT = 10
+
 const progressPercentStarted = computed(() => {
   if (totalTasks.value === 0) return 0
-  // Started but not completed tasks contribute half progress
-  const inProgress = startedTasks.value - completedTasks.value
-  const inProgressContribution = (inProgress / totalTasks.value) * 50 // 0.5x weight
+  // Started but not completed tasks contribute a small baseline progress
+  const inProgress = Math.max(0, startedTasks.value - completedTasks.value)
+  const inProgressContribution = (inProgress / totalTasks.value) * STARTED_TASK_WEIGHT_PERCENT
   const completedContribution = (completedTasks.value / totalTasks.value) * 100
-  return Math.min(100, Math.round(completedContribution + inProgressContribution))
+  const softBoost = softProgressBoost.value
+  return Math.min(100, Math.round(completedContribution + inProgressContribution + softBoost))
+})
+
+const softProgressBoost = computed(() => {
+  let boost = 0
+  const progress = taskProgress.value || {}
+  for (const agentId in progress) {
+    const agentProgress = progress[agentId] || {}
+    for (const qId in agentProgress) {
+      const entry = agentProgress[qId]
+      const elapsedMs = typeof entry?.elapsed_ms === 'number' ? entry.elapsed_ms : 0
+      const ticks = Math.floor(elapsedMs / 10000)
+      boost += ticks * 0.5
+    }
+  }
+  return boost
 })
 
 const progressStatusText = computed(() => {
@@ -594,10 +614,39 @@ function hasQuestionBeenRun(questionId) {
   return false
 }
 
+function markRetryStarted(questionId, retryId) {
+  if (!questionId || !retryId) return
+  const qIdStr = String(questionId)
+  if (!retryingQuestions.value[qIdStr]) {
+    retryingQuestions.value[qIdStr] = {}
+  }
+  retryingQuestions.value[qIdStr][retryId] = true
+}
+
+function markRetryFinished(questionId, retryId) {
+  if (!questionId || !retryId) return
+  const qIdStr = String(questionId)
+  const retries = retryingQuestions.value[qIdStr]
+  if (!retries) return
+  delete retries[retryId]
+  if (Object.keys(retries).length === 0) {
+    delete retryingQuestions.value[qIdStr]
+  }
+}
+
+function isQuestionRetrying(questionId) {
+  if (!questionId) return false
+  const qIdStr = String(questionId)
+  const retries = retryingQuestions.value[qIdStr]
+  return !!(retries && Object.keys(retries).length > 0)
+}
+
 // Get status class for question
 function getQuestionStatus(questionId) {
   if (!runResults.value || !questionId) return 'status-not-run'
   const qIdStr = String(questionId)
+
+  if (isQuestionRetrying(qIdStr)) return 'status-loading'
   
   let hasError = false
   let hasAnswer = false
@@ -615,10 +664,25 @@ function getQuestionStatus(questionId) {
     }
   }
   
+  if (isLoading) return 'status-loading'
   if (hasError && !hasAnswer && !hasSuccess) return 'status-error'
   if (hasAnswer || hasSuccess) return 'status-completed'
-  if (isLoading) return 'status-loading'
   return 'status-not-run'
+}
+
+function isQuestionLoading(questionId) {
+  if (!runResults.value || !questionId) return false
+  const qIdStr = String(questionId)
+
+  if (isQuestionRetrying(qIdStr)) return true
+
+  for (const agentId in runResults.value) {
+    const agentResults = runResults.value[agentId]
+    if (agentResults && agentResults[qIdStr]?.loading) {
+      return true
+    }
+  }
+  return false
 }
 
 // Get status text for question
@@ -640,6 +704,8 @@ function getQuestionStatusText(questionId) {
 function getQuestionResponse(questionId, truncated = true) {
   if (!runResults.value || !questionId) return null
   const qIdStr = String(questionId)
+
+  if (isQuestionRetrying(qIdStr)) return null
   
   // Find the first agent that has a response for this question
   for (const agentId in runResults.value) {
@@ -719,70 +785,10 @@ function toggleResponse(questionId) {
   expandedResponses.value[questionId] = !expandedResponses.value[questionId]
 }
 
-// Format response text to display base64 images
-function formatResponseWithImages(text) {
-  if (!text) return ''
-  
-  // Escape HTML to prevent XSS, but preserve base64 image data URIs
-  const escapeHtml = (str) => {
-    const div = document.createElement('div')
-    div.textContent = str
-    return div.innerHTML
-  }
-  
-  // Pattern to match base64 image data URIs: data:image/[type];base64,[base64 string]
-  // This pattern matches the full data URI including the base64 encoded data
-  const base64ImagePattern = /(data:image\/(?:png|jpg|jpeg|gif|webp|svg\+xml|bmp);base64,[A-Za-z0-9+/=\s]+)/gi
-  
-  // Find all base64 images first
-  const images = []
-  let match
-  const pattern = new RegExp(base64ImagePattern)
-  while ((match = pattern.exec(text)) !== null) {
-    images.push({
-      index: match.index,
-      length: match[0].length,
-      data: match[0].trim() // Remove any whitespace
-    })
-  }
-  
-  // If no images found, just escape and return text with line breaks
-  if (images.length === 0) {
-    const escaped = escapeHtml(text)
-    return escaped.replace(/\n/g, '<br>')
-  }
-  
-  // Build result by processing text segments and images
-  let result = ''
-  let lastIndex = 0
-  
-  images.forEach((img, idx) => {
-    // Add text before this image
-    if (img.index > lastIndex) {
-      const textBefore = text.substring(lastIndex, img.index)
-      const escaped = escapeHtml(textBefore)
-      result += escaped.replace(/\n/g, '<br>')
-    }
-    
-    // Add the image
-    result += `<img src="${escapeHtml(img.data)}" class="response-image" alt="Response image" />`
-    
-    lastIndex = img.index + img.length
-    
-    // Add a line break after image if there's more content
-    if (idx < images.length - 1 || lastIndex < text.length) {
-      result += '<br>'
-    }
-  })
-  
-  // Add remaining text after last image
-  if (lastIndex < text.length) {
-    const textAfter = text.substring(lastIndex)
-    const escaped = escapeHtml(textAfter)
-    result += escaped.replace(/\n/g, '<br>')
-  }
-  
-  return result
+function formatResponseHtml(text) {
+  if (!text || typeof text !== 'string') return ''
+  const processed = processContent(text)
+  return processed.html || ''
 }
 
 // Retry a question for all agents
@@ -799,10 +805,24 @@ async function retryQuestionForAllAgents(questionId) {
     alert('No enabled agents found. Please enable at least one agent.')
     return
   }
+
+  const localRetryIds = {}
+  enabledAgents.forEach(agent => {
+    const localRetryId = `local-${agent.id}-${Date.now()}`
+    localRetryIds[agent.id] = localRetryId
+    markRetryStarted(qIdStr, localRetryId)
+    if (!runResults.value[agent.id]) runResults.value[agent.id] = {}
+    runResults.value[agent.id][qIdStr] = {
+      ...(runResults.value[agent.id][qIdStr] || {}),
+      loading: true,
+      queued: false,
+      error: null
+    }
+  })
   
   // Retry for each enabled agent
   for (const agent of enabledAgents) {
-    await rerunQuestion(agent.id, questionId)
+    await rerunQuestion(agent.id, questionId, localRetryIds[agent.id])
   }
 }
 
@@ -1154,6 +1174,11 @@ function processTaskCompleted(data) {
       saveRunProgress(currentRun.value.id)
     }
 
+    const qIdStr = String(data.question_id)
+    if (data.retry_id) {
+      markRetryFinished(qIdStr, data.retry_id)
+    }
+
     // Check if run completed for this question set
     if (isRunning.value && completedTasks.value >= totalTasks.value) {
        isRunning.value = false
@@ -1199,7 +1224,7 @@ async function cancelBenchmark() {
   }
 }
 
-async function rerunQuestion(agentId, questionId) {
+async function rerunQuestion(agentId, questionId, localRetryId = null) {
   if (!currentRun.value) return
   
   // Optimistic update
@@ -1251,17 +1276,27 @@ async function rerunQuestion(agentId, questionId) {
   }
 
   try {
-    await wsService.rerunTask(currentRun.value.id, agentId, questionId, {
+    const response = await wsService.rerunTask(currentRun.value.id, agentId, questionId, {
       questionSetId: currentQuestionSet.value?.id,
       resultId: resultIdToUse,
       originalQuestion: question?.question || '',
       expectedAnswer: question?.expected || question?.expected_answer || ''
     })
+    const retryId = response?.retry_id || response?.retryId
+    if (retryId) {
+      markRetryStarted(qIdStr, retryId)
+      if (localRetryId) {
+        markRetryFinished(qIdStr, localRetryId)
+      }
+    }
   } catch (e) {
     console.error('Failed to rerun:', e)
      // Revert on error
       if (runResults.value[agentId] && runResults.value[agentId][qIdStr]) {
          runResults.value[agentId][qIdStr].loading = false
+      }
+      if (localRetryId) {
+        markRetryFinished(qIdStr, localRetryId)
       }
   }
 }
@@ -1333,15 +1368,37 @@ function clearRunProgress(runId) {
 }
 
 function resolveRunAgentIds(data) {
-  const qsAgents = data?.question_set?.agents || []
-  const enabledAgents = qsAgents.filter(a => a.enabled !== false).map(a => a.id)
-  if (enabledAgents.length > 0) {
-    return enabledAgents
+  const ids = new Set()
+
+  const runAgentIds = data?.run?.agent_ids || data?.run?.agentIds
+  if (Array.isArray(runAgentIds)) {
+    runAgentIds.forEach(id => {
+      if (id) ids.add(id)
+    })
   }
-  if (data?.agents) {
-    return Object.keys(data.agents)
+
+  if (Array.isArray(data?.results)) {
+    data.results.forEach(res => {
+      if (res?.agent_id) ids.add(res.agent_id)
+    })
   }
-  return []
+
+  const qsAgents = data?.question_set?.agents
+  if (Array.isArray(qsAgents)) {
+    qsAgents.forEach(agent => {
+      const id = agent?.agent_id || agent?.id
+      const enabled = agent?.enabled
+      if (id && enabled !== false) ids.add(id)
+    })
+  }
+
+  if (data?.agents && typeof data.agents === 'object' && !Array.isArray(data.agents)) {
+    Object.keys(data.agents).forEach(id => {
+      if (id) ids.add(id)
+    })
+  }
+
+  return Array.from(ids).filter(Boolean)
 }
 
 function extractQuestionIdsFromQuestionSet(questionSet) {
@@ -1482,6 +1539,9 @@ onMounted(async () => {
     wsService.on('EVT_TASK_QUEUED', (data) => {
         const agentId = data.agent_id
         const qIdStr = String(data.question_id)
+        if (data.retry_id) {
+          markRetryStarted(qIdStr, data.retry_id)
+        }
         
         if (runResults.value[agentId] && runResults.value[agentId][qIdStr]) {
             runResults.value[agentId][qIdStr].queued = true
@@ -1496,6 +1556,10 @@ onMounted(async () => {
             if (currentRun.value?.id) {
               saveRunProgress(currentRun.value.id)
             }
+        }
+        if (data.retry_id) {
+          const qIdStr = String(data.question_id)
+          markRetryStarted(qIdStr, data.retry_id)
         }
         
         // Update specific item status if it exists (for reruns)
@@ -1515,6 +1579,9 @@ onMounted(async () => {
         if (data.run_id !== currentRun.value.id) return
         const agentId = data.agent_id
         const qIdStr = String(data.question_id)
+        if (data.retry_id) {
+          markRetryStarted(qIdStr, data.retry_id)
+        }
         if (!taskProgress.value[agentId]) taskProgress.value[agentId] = {}
         taskProgress.value[agentId][qIdStr] = {
             message: data.message || 'Runner still processing...',
@@ -1836,6 +1903,16 @@ defineExpose({
   border-radius: 6px;
   border-left: 3px solid #6366f1;
   word-wrap: break-word;
+}
+
+.questions-list-view .response-text ul,
+.questions-list-view .response-text ol {
+  padding-left: 1.25rem;
+  margin-left: 0.25rem;
+}
+
+.questions-list-view .response-text > * {
+  margin-left: 13px;
 }
 
 .questions-list-view .response-image {

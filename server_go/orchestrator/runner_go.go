@@ -110,6 +110,10 @@ func (r *goRunner) executeMCP(ctx context.Context, req ExecutionRequest) Executi
 		}
 
 		errMeta := errorMeta(start, err, nil)
+		addTimeoutMeta(errMeta, ctx, runnerTaskTimeout)
+		if isGatewayTimeoutError(err) {
+			errMeta["timeout_source"] = "upstream_gateway"
+		}
 		errMeta["retry_count"] = retry
 		return ExecutionResponse{Success: false, Error: err.Error(), Metadata: errMeta}
 	}
@@ -143,6 +147,7 @@ func (r *goRunner) callMCP(ctx context.Context, endpoint, token, question string
 	defer session.Close()
 
 	log.Printf("[GO RUNNER] MCP query: %s", truncate(question, 200))
+	logTimeouts(ctx, httpClient.Timeout)
 
 	callStart := time.Now()
 	progressStop := make(chan struct{})
@@ -294,6 +299,10 @@ func (r *goRunner) executeOpenAI(ctx context.Context, req ExecutionRequest) Exec
 
 	if err != nil {
 		metadata := errorMeta(start, err, nil)
+		addTimeoutMeta(metadata, ctx, runnerTaskTimeout)
+		if isGatewayTimeoutError(err) {
+			metadata["timeout_source"] = "upstream_gateway"
+		}
 		return ExecutionResponse{Success: false, Error: err.Error(), Metadata: metadata}
 	}
 
@@ -339,6 +348,14 @@ func isRateLimitError(err error) bool {
 		return false
 	}
 	return strings.Contains(err.Error(), "429") || strings.Contains(strings.ToLower(err.Error()), "rate limit")
+}
+
+func isGatewayTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "gateway timeout") || strings.Contains(lower, "504")
 }
 
 func isMockToken(token string) bool {
@@ -597,6 +614,34 @@ func errorMeta(start time.Time, err error, subErrors []string) map[string]any {
 
 func durationMeta(start time.Time) map[string]any {
 	return map[string]any{"duration_ms": int(time.Since(start).Milliseconds())}
+}
+
+func addTimeoutMeta(meta map[string]any, ctx context.Context, httpTimeout time.Duration) {
+	if meta == nil {
+		return
+	}
+	meta["runner_task_timeout_ms"] = int(runnerTaskTimeout.Milliseconds())
+	meta["http_timeout_ms"] = int(httpTimeout.Milliseconds())
+	if ctx == nil {
+		return
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		meta["ctx_deadline"] = deadline.UTC().Format(time.RFC3339Nano)
+		meta["ctx_remaining_ms"] = int(time.Until(deadline).Milliseconds())
+	}
+}
+
+func logTimeouts(ctx context.Context, httpTimeout time.Duration) {
+	if ctx == nil {
+		log.Printf("[GO RUNNER] MCP timeouts: ctx_deadline=<none> http_timeout=%s", httpTimeout)
+		return
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline).Truncate(time.Second)
+		log.Printf("[GO RUNNER] MCP timeouts: ctx_deadline=%s remaining=%s http_timeout=%s", deadline.UTC().Format(time.RFC3339), remaining, httpTimeout)
+		return
+	}
+	log.Printf("[GO RUNNER] MCP timeouts: ctx_deadline=<none> http_timeout=%s", httpTimeout)
 }
 
 func fallbackString(value, fallback string) string {
