@@ -262,9 +262,10 @@ const parsedAfkTimeout = Number.parseInt(config.AFK_TIMEOUT_MS || '', 10)
 const afkTimeoutMs = Number.isFinite(parsedAfkTimeout) && parsedAfkTimeout > 0
   ? parsedAfkTimeout
   : DEFAULT_AFK_TIMEOUT_MS
-const afkActivityEvents = ['pointerdown', 'mousemove', 'touchstart', 'scroll']
+const afkActivityEvents = ['pointerdown', 'pointermove', 'mousemove', 'touchstart', 'scroll', 'wheel', 'keydown', 'keyup', 'click', 'input']
 let afkTimer = null
 let lastAfkResetAt = 0
+const afkListenerOptions = { capture: true, passive: true }
 
 const agents = computed(() => wsState.agents)
 const questionSets = computed(() => wsState.questionSets)
@@ -885,10 +886,6 @@ const isImpersonating = computed(() => {
   return !!user?.impersonator_id
 })
 
-const handleKeydown = () => {
-  handleUserActivity()
-}
-
 function clearAfkTimer() {
   if (!afkTimer) return
   clearTimeout(afkTimer)
@@ -913,23 +910,52 @@ async function activateAfkMode() {
 function scheduleAfkTimer() {
   clearAfkTimer()
   if (!canTrackAfk() || afkOverlayVisible.value) return
-  afkTimer = setTimeout(() => {
+  if (!lastAfkResetAt) {
+    lastAfkResetAt = Date.now()
+  }
+  const elapsed = Date.now() - lastAfkResetAt
+  const remaining = afkTimeoutMs - elapsed
+  if (remaining <= 0) {
     activateAfkMode()
-  }, afkTimeoutMs)
+    return
+  }
+  afkTimer = setTimeout(() => activateAfkMode(), remaining)
 }
 
 function handleUserActivity() {
-  if (!canTrackAfk() || afkOverlayVisible.value) return
+  if (afkOverlayVisible.value) return
   const now = Date.now()
-  if (now - lastAfkResetAt < 1000) return
+  if (now - lastAfkResetAt < 500) return
   lastAfkResetAt = now
+  if (!canTrackAfk()) {
+    clearAfkTimer()
+    return
+  }
   scheduleAfkTimer()
 }
 
 function handleVisibilityChange() {
-  if (document.visibilityState !== 'visible') return
+  if (document.visibilityState !== 'visible') {
+    clearAfkTimer()
+    return
+  }
   if (afkOverlayVisible.value) return
+  lastAfkResetAt = Date.now()
   scheduleAfkTimer()
+}
+
+function bindAfkActivityListeners() {
+  afkActivityEvents.forEach((eventName) => {
+    window.addEventListener(eventName, handleUserActivity, afkListenerOptions)
+    document.addEventListener(eventName, handleUserActivity, afkListenerOptions)
+  })
+}
+
+function unbindAfkActivityListeners() {
+  afkActivityEvents.forEach((eventName) => {
+    window.removeEventListener(eventName, handleUserActivity, afkListenerOptions)
+    document.removeEventListener(eventName, handleUserActivity, afkListenerOptions)
+  })
 }
 
 async function reconnectFromAfk() {
@@ -940,6 +966,7 @@ async function reconnectFromAfk() {
     await wsConnect(currentWorkspace.value?.id || null)
     await syncState()
     afkOverlayVisible.value = false
+    lastAfkResetAt = Date.now()
     scheduleAfkTimer()
     console.log('[AFK] Reconnected and sync completed')
   } catch (e) {
@@ -950,8 +977,7 @@ async function reconnectFromAfk() {
 }
 
 onMounted(async () => {
-  window.addEventListener('keydown', handleKeydown)
-  afkActivityEvents.forEach((eventName) => window.addEventListener(eventName, handleUserActivity))
+  bindAfkActivityListeners()
   document.addEventListener('visibilitychange', handleVisibilityChange)
   // If we think we are authenticated, verify with the backend
   if (isAuthenticated.value) {
@@ -993,11 +1019,13 @@ onMounted(async () => {
         handleLogout()
       } finally {
         appReady.value = true
+        lastAfkResetAt = Date.now()
         scheduleAfkTimer()
       }
     } else {
        // Not authenticated, but we should be ready to show login
        appReady.value = true
+       lastAfkResetAt = Date.now()
        clearAfkTimer()
     }
   
@@ -1037,8 +1065,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  window.removeEventListener('keydown', handleKeydown)
-  afkActivityEvents.forEach((eventName) => window.removeEventListener(eventName, handleUserActivity))
+  unbindAfkActivityListeners()
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   clearAfkTimer()
   wsDisconnect('app-unmount')
