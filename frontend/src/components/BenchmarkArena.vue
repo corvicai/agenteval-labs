@@ -61,6 +61,15 @@
       <button class="btn btn-primary" @click="startRunSetup" :disabled="isRunning || !currentQuestionSet">
         {{ isRunning ? '⏳ Running...' : '▶️ Run Benchmark' }}
       </button>
+      <button
+        v-if="hasEnabledEvaluators"
+        class="btn btn-secondary btn-eval"
+        @click="startEvaluationNow"
+        :disabled="!canStartEvaluation"
+        :title="startEvaluationDisabledReason"
+      >
+        🧪 Run Evaluation
+      </button>
       <button class="btn btn-secondary btn-pdf" @click="exportToPdf" :disabled="!currentRun || isExportingPdf">
         <span v-if="isExportingPdf" class="pdf-loading-spinner"></span>
         <span v-else>📄</span> PDF
@@ -92,7 +101,11 @@
       </div>
 
       <!-- Main Content Area: Questions + Chat Panels side by side -->
-      <div v-else-if="flatQuestions.length > 0" class="main-content-area">
+      <div
+        v-else-if="flatQuestions.length > 0"
+        class="main-content-area"
+        :class="{ 'single-panel': !showLegacyAgentPanels || displayAgents.length === 0 }"
+      >
         <!-- Questions List View -->
         <div class="questions-list-view">
           <div class="questions-list-header">
@@ -109,7 +122,7 @@
             >
               <div class="agent-stat-header">
                 <h4>{{ agentStat.name }}</h4>
-                <div v-if="agentStat.provider === 'openai'" class="evaluator-badge-small">Evaluator</div>
+                <div v-if="agentStat.isEvaluator" class="evaluator-badge-small">Evaluator</div>
                 <div v-else class="quality-score-badge">{{ agentStat.qualityScore }}%</div>
               </div>
               <div class="agent-stat-metrics">
@@ -122,11 +135,11 @@
                   <span class="metric-label">Avg Speed</span>
                 </div>
                 <div class="metric">
-                  <span class="metric-value">{{ agentStat.provider === 'openai' ? agentStat.stats.answered : (agentStat.stats.percentages.positive || 0) + '%' }}</span>
-                  <span class="metric-label">{{ agentStat.provider === 'openai' ? 'Evaluations' : 'Precision' }}</span>
+                  <span class="metric-value">{{ agentStat.isEvaluator ? agentStat.stats.answered : (agentStat.stats.percentages.positive || 0) + '%' }}</span>
+                  <span class="metric-label">{{ agentStat.isEvaluator ? 'Evaluations' : 'Precision' }}</span>
                 </div>
               </div>
-              <div v-if="agentStat.provider !== 'openai' && agentStat.stats.percentages" class="validations-bar-small">
+              <div v-if="!agentStat.isEvaluator && agentStat.stats.percentages" class="validations-bar-small">
                 <div class="v-segment-small pos" :style="{ width: agentStat.stats.percentages.positive + '%' }"></div>
                 <div class="v-segment-small alt" :style="{ width: agentStat.stats.percentages.alternative + '%' }"></div>
                 <div class="v-segment-small par" :style="{ width: agentStat.stats.percentages.partial + '%' }"></div>
@@ -167,6 +180,26 @@
                     </button>
                   </div>
                 </div>
+                <div v-if="getQuestionEvaluation(question.id)" class="question-response question-evaluation">
+                  <div class="response-label">Evaluation:</div>
+                  <div class="response-text">
+                    <div
+                      v-if="!expandedEvaluations[question.id]"
+                      v-html="formatResponseHtml(getQuestionEvaluation(question.id, true))"
+                    ></div>
+                    <div
+                      v-else
+                      v-html="formatResponseHtml(getQuestionEvaluation(question.id, false))"
+                    ></div>
+                    <button
+                      v-if="isEvaluationLong(question.id)"
+                      class="btn-expand-response"
+                      @click.stop="toggleEvaluation(question.id)"
+                    >
+                      {{ expandedEvaluations[question.id] ? 'Show less' : 'Show more' }}
+                    </button>
+                  </div>
+                </div>
               </div>
               <div class="question-actions">
                 <span
@@ -191,7 +224,7 @@
         </div>
 
         <!-- Chat Panels (when agents/results are available) -->
-        <div v-if="displayAgents.length > 0" class="chat-container">
+        <div v-if="showLegacyAgentPanels && displayAgents.length > 0" class="chat-container">
           <div class="chat-panels-bar">
             <div v-for="agent in displayAgents" :key="agent.id" class="chat-panel-wrapper">
               <ChatPanel 
@@ -221,7 +254,7 @@
       </div>
 
       <!-- Fallback: Chat Panels only (when results are available but no questions) -->
-      <div v-else-if="hasResults && displayAgents.length > 0" class="chat-container">
+      <div v-else-if="showLegacyAgentPanels && hasResults && displayAgents.length > 0" class="chat-container">
         <div class="chat-panels-bar">
           <div v-for="agent in displayAgents" :key="agent.id" class="chat-panel-wrapper">
             <ChatPanel 
@@ -319,9 +352,12 @@ const showPrimaryAgentModal = ref(false)
 const showDetailsModal = ref(false)
 const selectedDetails = ref(null)
 const expandedResponses = ref({})
+const expandedEvaluations = ref({})
 const isDev = import.meta.env.DEV
+const showLegacyAgentPanels = false
 const latestRunCache = new Map()
 const pendingResultsBuffer = ref([])
+const pendingEvaluatorRuns = ref({})
 const startRunError = ref(null)
 const isExportingPdf = ref(false)
 const isRestoringRun = ref(false)
@@ -330,6 +366,58 @@ const retryRegistry = ref({})
 const RETRY_TRACK_TTL_MS = 20 * 60 * 1000
 const runProgressStorageKey = (runId) => `run_progress_${runId}`
 const retryStorageKey = () => `retry_tracking_${props.workspaceId || 'global'}`
+
+function hasActiveRetryEntries() {
+  return Object.values(retryRegistry.value || {}).some((item) => item?.status === 'queued' || item?.status === 'running')
+}
+
+function clearQuestionLoadingState(questionId) {
+  if (!questionId) return
+  const qIdStr = String(questionId)
+  for (const agentId in runResults.value) {
+    const item = runResults.value[agentId]?.[qIdStr]
+    if (!item) continue
+    runResults.value[agentId][qIdStr] = {
+      ...item,
+      loading: false,
+      queued: false
+    }
+  }
+}
+
+function clearAllLoadingStates() {
+  for (const agentId in runResults.value) {
+    const agentResults = runResults.value[agentId]
+    if (!agentResults) continue
+    for (const qIdStr in agentResults) {
+      const item = agentResults[qIdStr]
+      if (!item) continue
+      if (!item.loading && !item.queued) continue
+      agentResults[qIdStr] = {
+        ...item,
+        loading: false,
+        queued: false
+      }
+    }
+  }
+}
+
+function maybeStopRunningWhenIdle() {
+  if (hasActiveRetryEntries()) return
+  if (String(currentRun.value?.status || '') === 'running') return
+  if (!isRunning.value) return
+
+  isRunning.value = false
+  taskProgress.value = {}
+  localStorage.removeItem('activeRunId')
+
+  if (currentRun.value?.id) {
+    clearRunProgress(currentRun.value.id)
+  }
+
+  activeRunQuestionSetId.value = null
+  wsStore.setRunningQuestionSetId(null)
+}
 
 // Init logic for Question Set
 watch(() => props.questionSets, (sets) => {
@@ -505,7 +593,7 @@ const mergedAgents = computed(() => {
   const overrideMap = {}
   qs.agents.forEach(oa => {
     // Check both agent_id and agentID just in case of inconsistency
-    const aid = oa.agent_id || oa.agentID
+    const aid = oa.agent_id || oa.agentID || oa.id
     if (aid) overrideMap[aid] = oa
   })
 
@@ -528,18 +616,106 @@ const mergedAgents = computed(() => {
   return merged
 })
 
-const enabledAgents = computed(() => mergedAgents.value.filter(a => a.enabled))
+function isLegacyEvaluatorConfig(config) {
+  if (!config || typeof config !== 'object') return false
+  const hasTargetField = Object.prototype.hasOwnProperty.call(config, 'target_agent_id')
+  const hasOpenAIMode = typeof config.openai_mode === 'string' && config.openai_mode.trim() !== ''
+  const hasSystemPrompt = typeof config.system_prompt === 'string' && config.system_prompt.trim() !== ''
+  return hasTargetField || hasOpenAIMode || hasSystemPrompt
+}
+
+function isEvaluatorAgentObject(agent) {
+  if (!agent) return false
+  if (agent.provider_type === 'evaluator') return true
+  if (agent.provider_type !== 'openai') return false
+  if (isLegacyEvaluatorConfig(agent.config || {})) return true
+  const name = String(agent.name || '').toLowerCase()
+  return name.includes('evaluator')
+}
+
+function getAgentById(agentId) {
+  if (!agentId) return null
+  return mergedAgents.value.find((a) => a.id === agentId) || props.agents.find((a) => a.id === agentId) || null
+}
+
+function isEvaluatorAgentID(agentId) {
+  const agent = getAgentById(agentId)
+  return isEvaluatorAgentObject(agent)
+}
+
+function toAgentID(entry) {
+  if (!entry || typeof entry !== 'object') return ''
+  return String(entry.agent_id || entry.agentID || entry.id || '')
+}
+
+const selectedAgentIdsForQuestionSet = computed(() => {
+  const overrides = Array.isArray(currentQuestionSet.value?.agents) ? currentQuestionSet.value.agents : []
+  const overrideIDs = overrides.map((item) => toAgentID(item)).filter(Boolean)
+  if (overrideIDs.length > 0) {
+    return [...new Set(
+      overrides
+        .filter((item) => !!item?.enabled)
+        .map((item) => toAgentID(item))
+        .filter(Boolean)
+    )]
+  }
+  return mergedAgents.value.filter((a) => a.enabled).map((a) => a.id)
+})
+
+const enabledAgents = computed(() =>
+  mergedAgents.value.filter((a) => selectedAgentIdsForQuestionSet.value.includes(a.id))
+)
+const enabledEvaluatorAgents = computed(() => enabledAgents.value.filter((a) => isEvaluatorAgentObject(a)))
+const hasEnabledEvaluators = computed(() => enabledEvaluatorAgents.value.length > 0)
+
+const hasPrimaryRunAnswers = computed(() => {
+  for (const agentId in runResults.value || {}) {
+    if (isEvaluatorAgentID(agentId)) continue
+    const agentResults = runResults.value[agentId] || {}
+    for (const qid in agentResults) {
+      const result = agentResults[qid]
+      const answerText = typeof result?.answer === 'string'
+        ? result.answer.trim()
+        : String(result?.answer || '').trim()
+      if (answerText !== '' && !result?.error) {
+        return true
+      }
+    }
+  }
+  return false
+})
+
+const canStartEvaluation = computed(() => {
+  return !!currentQuestionSet.value &&
+    !isRunning.value &&
+    !isLoadingResults.value &&
+    hasEnabledEvaluators.value &&
+    hasPrimaryRunAnswers.value
+})
+
+const startEvaluationDisabledReason = computed(() => {
+  if (!hasEnabledEvaluators.value) return 'No enabled evaluator agents'
+  if (isRunning.value) return 'Wait for the current run to finish'
+  if (isLoadingResults.value) return 'Wait until results finish loading'
+  if (!currentQuestionSet.value) return 'Select a question set first'
+  if (!hasPrimaryRunAnswers.value) return 'Not Run: run a primary agent first to generate at least one response'
+  return 'Run evaluators on existing answers'
+})
 
 const displayAgents = computed(() => {
   let list = []
   
   if (isRunning.value && currentRun.value?.agentIds) {
     // 1. If running, show agents participating in this specific run
-    const runIds = currentRun.value.agentIds
-    list = mergedAgents.value.filter(a => runIds.includes(a.id))
+    const runIds = new Set(currentRun.value.agentIds)
+    mergedAgents.value
+      .filter(a => isEvaluatorAgentObject(a) && a.enabled)
+      .forEach(a => runIds.add(a.id))
+    const runIdList = Array.from(runIds)
+    list = mergedAgents.value.filter(a => runIdList.includes(a.id))
     
     // Fallback for agents not in props.agents
-    const missingIds = runIds.filter(id => !list.some(a => a.id === id))
+    const missingIds = runIdList.filter(id => !list.some(a => a.id === id))
     if (missingIds.length > 0) {
       const missing = missingIds.map(id => {
         const globalAgent = props.agents.find(ga => ga.id === id)
@@ -551,9 +727,8 @@ const displayAgents = computed(() => {
 // 2. Not running - check if we have results to show (History mode)
     const resultAgentIds = Object.keys(runResults.value || {})
     if (resultAgentIds.length > 0) {
-      // Filter enabledAgents to only those in results OR explicitly enabled for NEXT run
-      // The user wants deselected agents to disappear from this screen.
-      const agentsWithResults = mergedAgents.value.filter(a => resultAgentIds.includes(a.id) && a.enabled)
+      // In history mode, if an agent has results it must stay visible even if currently disabled.
+      const agentsWithResults = mergedAgents.value.filter(a => resultAgentIds.includes(a.id))
       const oldAgentIds = resultAgentIds.filter(id => !mergedAgents.value.some(a => a.id === id))
       const oldAgents = oldAgentIds.map(id => {
         const found = mergedAgents.value.find(a => a.id === id)
@@ -566,10 +741,7 @@ const displayAgents = computed(() => {
     }
   }
 
-  const isEvaluator = (a) => a.provider_type === 'openai' || a.provider_type === 'evaluator'
   return list.sort((a, b) => {
-    if (isEvaluator(a) && !isEvaluator(b)) return 1
-    if (!isEvaluator(a) && isEvaluator(b)) return -1
     return (a.position || 0) - (b.position || 0)
   })
 })
@@ -581,6 +753,7 @@ const agentStats = computed(() => {
   return displayAgents.value.map(agent => {
     const results = getAgentResults(agent.id, true)
     const stats = calculateStats(results)
+    const isEvaluator = isEvaluatorAgentObject(agent)
     
     // Calculate quality score (same logic as PDF export)
     const totalValidations = stats.validations.positive + 
@@ -599,6 +772,7 @@ const agentStats = computed(() => {
       id: agent.id,
       name: agent.name || agent.config?.name || 'Agent',
       provider: agent.provider_type,
+      isEvaluator,
       stats,
       qualityScore
     }
@@ -732,6 +906,25 @@ function markRetryFinished(questionId, retryId, status = 'completed') {
     }
     persistRetryRegistry()
   }
+
+  if (!retryingQuestions.value[qIdStr]) {
+    clearQuestionLoadingState(qIdStr)
+  }
+  maybeStopRunningWhenIdle()
+}
+
+function clearRetryTrackingForRun(runId) {
+  if (!runId) return
+  let changed = false
+  for (const retryId in retryRegistry.value) {
+    if (retryRegistry.value[retryId]?.run_id === runId) {
+      delete retryRegistry.value[retryId]
+      changed = true
+    }
+  }
+  if (changed) {
+    persistRetryRegistry()
+  }
 }
 
 function isQuestionRetrying(questionId) {
@@ -836,89 +1029,127 @@ function getQuestionStatusTooltip(questionId) {
   return 'Task is running...'
 }
 
-// Get the response text for a question (from the first available agent)
-function getQuestionResponse(questionId, truncated = true) {
-  if (!runResults.value || !questionId) return null
-  const qIdStr = String(questionId)
+function truncatePreviewText(text, maxLen = 150) {
+  if (!text || typeof text !== 'string') return ''
+  if (text.length <= maxLen) return text
 
-  if (isQuestionRetrying(qIdStr)) return null
-  
-  // Find the first agent that has a response for this question
-  for (const agentId in runResults.value) {
-    const agentResults = runResults.value[agentId]
-    const result = agentResults[qIdStr]
-    if (result && result.answer && !result.loading && !result.error) {
-      const answer = result.answer
-      // Return truncated response if truncated is true and answer is long
-      if (truncated && answer.length > 150) {
-        // Check if truncation would break a base64 image
-        const base64ImagePattern = /data:image\/[^;]+;base64,[A-Za-z0-9+/=\s]+/g
-        const truncatedText = answer.substring(0, 150)
-        
-        // Find the last complete base64 image before truncation point
-        let lastImageEnd = -1
-        let match
-        const pattern = new RegExp(base64ImagePattern)
-        while ((match = pattern.exec(answer)) !== null) {
-          if (match.index + match[0].length <= 150) {
-            lastImageEnd = match.index + match[0].length
-          } else {
-            break
-          }
-        }
-        
-        // If we found an image that extends beyond truncation, include it fully
-        if (lastImageEnd > 0 && lastImageEnd > 150) {
-          return answer.substring(0, lastImageEnd) + '...'
-        }
-        
-        // Otherwise, truncate at a safe point (avoid breaking base64 strings)
-        // Try to truncate at a word boundary or before a potential base64 start
-        let truncateAt = 150
-        if (truncatedText.includes('data:image')) {
-          // If there's a base64 image starting, find where it ends
-          const imageStart = truncatedText.lastIndexOf('data:image')
-          if (imageStart >= 0) {
-            // Don't truncate in the middle of a base64 string
-            // Find a safe truncation point after the image or before it
-            const afterImage = truncatedText.indexOf(' ', imageStart + 100)
-            if (afterImage > 0 && afterImage <= 150) {
-              truncateAt = afterImage
-            } else {
-              // If image is too long, just truncate before it
-              truncateAt = imageStart
-            }
-          }
-        }
-        
-        return answer.substring(0, truncateAt) + '...'
-      }
-      return answer
+  const base64ImagePattern = /data:image\/[^;]+;base64,[A-Za-z0-9+/=\s]+/g
+  const truncatedText = text.substring(0, maxLen)
+
+  let lastImageEnd = -1
+  let match
+  const pattern = new RegExp(base64ImagePattern)
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index + match[0].length <= maxLen) {
+      lastImageEnd = match.index + match[0].length
+    } else {
+      break
     }
   }
-  
+
+  if (lastImageEnd > 0 && lastImageEnd > maxLen) {
+    return text.substring(0, lastImageEnd) + '...'
+  }
+
+  let truncateAt = maxLen
+  if (truncatedText.includes('data:image')) {
+    const imageStart = truncatedText.lastIndexOf('data:image')
+    if (imageStart >= 0) {
+      const afterImage = truncatedText.indexOf(' ', imageStart + 100)
+      truncateAt = afterImage > 0 && afterImage <= maxLen ? afterImage : imageStart
+    }
+  }
+
+  return text.substring(0, truncateAt) + '...'
+}
+
+function getPrimaryResponseEntry(questionId) {
+  if (!runResults.value || !questionId) return null
+  const qIdStr = String(questionId)
+  if (isQuestionRetrying(qIdStr)) return null
+
+  const orderedPrimaryAgents = mergedAgents.value
+    .filter((agent) => !isEvaluatorAgentObject(agent))
+    .sort((a, b) => (a.position || 0) - (b.position || 0))
+
+  const primaryAgentIDs = orderedPrimaryAgents.map((agent) => agent.id)
+  if (primaryAgentIDs.length === 0) {
+    for (const agentId in runResults.value) {
+      if (isEvaluatorAgentID(agentId)) continue
+      primaryAgentIDs.push(agentId)
+    }
+  }
+
+  for (const agentId of primaryAgentIDs) {
+    const result = runResults.value[agentId]?.[qIdStr]
+    if (result && result.answer && !result.loading && !result.error) {
+      return { agentId, answer: result.answer }
+    }
+  }
+
   return null
 }
 
-// Check if response is long enough to need truncation
-function isResponseLong(questionId) {
-  if (!runResults.value || !questionId) return false
-  const qIdStr = String(questionId)
-  
-  for (const agentId in runResults.value) {
-    const agentResults = runResults.value[agentId]
-    const result = agentResults[qIdStr]
-    if (result && result.answer && !result.loading && !result.error) {
-      return result.answer.length > 150
-    }
-  }
-  
-  return false
+function getQuestionResponse(questionId, truncated = true) {
+  const entry = getPrimaryResponseEntry(questionId)
+  if (!entry) return null
+  return truncated ? truncatePreviewText(entry.answer) : entry.answer
 }
 
-// Toggle response expansion
+function getQuestionEvaluation(questionId, truncated = true) {
+  if (!runResults.value || !questionId) return null
+
+  const responseEntry = getPrimaryResponseEntry(questionId)
+  if (!responseEntry?.agentId) return null
+
+  const qIdStr = String(questionId)
+  const expectedEvalKey = `eval-${responseEntry.agentId}-${qIdStr}`
+
+  const evaluatorAgentIDs = mergedAgents.value
+    .filter((agent) => isEvaluatorAgentObject(agent))
+    .sort((a, b) => (a.position || 0) - (b.position || 0))
+    .map((agent) => agent.id)
+
+  if (evaluatorAgentIDs.length === 0) {
+    for (const agentId in runResults.value) {
+      if (isEvaluatorAgentID(agentId)) evaluatorAgentIDs.push(agentId)
+    }
+  }
+
+  for (const evaluatorId of evaluatorAgentIDs) {
+    const evaluatorResults = runResults.value[evaluatorId]
+    if (!evaluatorResults) continue
+
+    let result = evaluatorResults[expectedEvalKey]
+    if (!result) {
+      const fallbackKey = Object.keys(evaluatorResults).find((key) => String(key).endsWith(`-${qIdStr}`))
+      if (fallbackKey) result = evaluatorResults[fallbackKey]
+    }
+
+    if (result && result.answer && !result.loading && !result.error) {
+      return truncated ? truncatePreviewText(result.answer) : result.answer
+    }
+  }
+
+  return null
+}
+
+function isResponseLong(questionId) {
+  const response = getQuestionResponse(questionId, false)
+  return !!response && response.length > 150
+}
+
+function isEvaluationLong(questionId) {
+  const evaluation = getQuestionEvaluation(questionId, false)
+  return !!evaluation && evaluation.length > 150
+}
+
 function toggleResponse(questionId) {
   expandedResponses.value[questionId] = !expandedResponses.value[questionId]
+}
+
+function toggleEvaluation(questionId) {
+  expandedEvaluations.value[questionId] = !expandedEvaluations.value[questionId]
 }
 
 function formatResponseHtml(text) {
@@ -935,7 +1166,7 @@ async function retryQuestionForAllAgents(questionId) {
   }
   
   const qIdStr = String(questionId)
-  const enabledAgents = mergedAgents.value.filter(a => a.enabled && a.provider_type !== 'evaluator')
+  const enabledAgents = mergedAgents.value.filter((a) => a.enabled && !isEvaluatorAgentObject(a))
   
   if (enabledAgents.length === 0) {
     alert('No enabled agents found. Please enable at least one agent.')
@@ -979,15 +1210,6 @@ function getQuestionCount(set) {
 
 function startRunSetup() {
   if (!currentQuestionSet.value) return
-  
-  const primaryAgents = enabledAgents.value.filter(a => a.provider_type !== 'evaluator')
-  
-  if (primaryAgents.length === 0) {
-    console.warn('[Arena] Start blocked. Enabled count:', enabledAgents.value.length, 'Primary count:', primaryAgents.length)
-    console.log('[Arena] Merged Agents dump:', mergedAgents.value)
-    showPrimaryAgentModal.value = true
-    return
-  }
   showRunSetup.value = true
 }
 
@@ -1178,6 +1400,7 @@ watch(() => wsState.recentRuns, () => {
 
 function getAgentResults(agentId, includeAllQuestions = false) {
   const results = runResults.value[agentId] || {}
+  const isEvaluator = isEvaluatorAgentID(agentId)
   
   // Filter questions if a specific one is selected (unless includeAllQuestions is true)
   const targetQuestions = (includeAllQuestions || !selectedQuestionId.value)
@@ -1190,7 +1413,13 @@ function getAgentResults(agentId, includeAllQuestions = false) {
 
   return targetQuestions.map(q => {
     const qIdStr = String(q.id)
-    const res = results[qIdStr]
+    let res = results[qIdStr]
+    if (!res && isEvaluator) {
+      const evalKey = Object.keys(results).find((key) => String(key).endsWith(`-${qIdStr}`))
+      if (evalKey) {
+        res = results[evalKey]
+      }
+    }
     const ratingMap = { 'like': 'positive', 'dislike': 'negative', 'valid': 'alternative', 'wrong': 'partial' }
     return {
       question: q,
@@ -1228,32 +1457,242 @@ watch(selectedQuestionId, (newId) => {
   if (newId) prioritizeQuestionInQueue(newId)
 })
 
+function uniqueStringIDs(ids = []) {
+  return [...new Set((ids || []).map((id) => String(id)).filter(Boolean))]
+}
+
+function splitSelectedAgents(payload = {}) {
+  const requested = uniqueStringIDs(payload.agentIds || [])
+
+  let primary = uniqueStringIDs(payload.primaryAgentIds || [])
+  let evaluators = uniqueStringIDs(payload.evaluatorAgentIds || [])
+
+  if (primary.length === 0 && evaluators.length === 0 && requested.length > 0) {
+    requested.forEach((agentId) => {
+      if (isEvaluatorAgentID(agentId)) {
+        evaluators.push(agentId)
+      } else {
+        primary.push(agentId)
+      }
+    })
+  }
+
+  return {
+    primary: uniqueStringIDs(primary),
+    evaluators: uniqueStringIDs(evaluators)
+  }
+}
+
+function mergeAgentIDs(baseIDs = [], extraIDs = []) {
+  return uniqueStringIDs([...(baseIDs || []), ...(extraIDs || [])])
+}
+
+function resolveQuestionSetIdForRun(runId = '') {
+  const targetRunId = String(runId || '')
+  if (targetRunId) {
+    const recentRuns = wsState.recentRuns || []
+    const recent = recentRuns.find((r) => String(r.id) === targetRunId)
+    if (recent?.question_set_id) {
+      return String(recent.question_set_id)
+    }
+  }
+
+  return String(
+    getRunQuestionSetID(currentRun.value) ||
+    activeRunQuestionSetId.value ||
+    currentQuestionSet.value?.id ||
+    ''
+  )
+}
+
+function queuePendingEvaluators(runId, evaluatorIds) {
+  if (!runId) return
+  const ids = uniqueStringIDs(evaluatorIds)
+  if (ids.length === 0) return
+  pendingEvaluatorRuns.value[String(runId)] = ids
+}
+
+function popPendingEvaluators(runId) {
+  if (!runId) return []
+  const key = String(runId)
+  const ids = uniqueStringIDs(pendingEvaluatorRuns.value[key] || [])
+  delete pendingEvaluatorRuns.value[key]
+  return ids
+}
+
+function getRunQuestionSetID(run) {
+  if (!run) return ''
+  return String(run.question_set_id || run.questionSetID || run.questionSetId || '')
+}
+
+async function resolveLatestRunIDForQuestionSet(questionSetId) {
+  const targetQuestionSetID = String(questionSetId || '')
+  const currentRunQuestionSetID = getRunQuestionSetID(currentRun.value)
+
+  if (currentRun.value?.id && currentRunQuestionSetID === targetQuestionSetID) {
+    return String(currentRun.value.id)
+  }
+
+  const latest = await wsService.getLatestRunByQuestionSet(targetQuestionSetID)
+  if (!latest?.run?.id) return ''
+
+  applyRunLiteData(latest)
+  return String(latest.run.id)
+}
+
+async function maybeTriggerQueuedEvaluatorsIfRunAlreadyFinished(runId, questionSetId = '') {
+  const targetRunId = String(runId || '')
+  if (!targetRunId) return
+
+  const pendingIDs = uniqueStringIDs(pendingEvaluatorRuns.value[targetRunId] || [])
+  if (pendingIDs.length === 0) return
+
+  try {
+    const runLite = await wsService.getRunLite(targetRunId)
+    const status = String(runLite?.run?.status || runLite?.status || '').toLowerCase()
+    if (!status || status === 'running') return
+
+    const queuedEvaluatorIDs = popPendingEvaluators(targetRunId)
+    if (queuedEvaluatorIDs.length === 0) return
+
+    const targetQuestionSetID = String(questionSetId || resolveQuestionSetIdForRun(targetRunId))
+    void triggerEvaluatorRun(targetRunId, targetQuestionSetID, queuedEvaluatorIDs)
+  } catch (e) {
+    console.warn('[Arena] Failed to verify run status for evaluator trigger:', e)
+  }
+}
+
+async function triggerEvaluatorRun(runId, questionSetId, evaluatorAgentIds) {
+  const evalIDs = uniqueStringIDs(evaluatorAgentIds)
+  if (!runId || evalIDs.length === 0) return false
+
+  const estimatedEvalTasks = evalIDs.length * flatQuestions.value.length
+  const baseDone = Math.max(completedTasks.value, totalTasks.value)
+  if (estimatedEvalTasks > 0) {
+    totalTasks.value = baseDone + estimatedEvalTasks
+    if (completedTasks.value > totalTasks.value) {
+      completedTasks.value = totalTasks.value
+    }
+  }
+
+  isRunning.value = true
+  activeRunQuestionSetId.value = questionSetId
+  wsStore.setRunningQuestionSetId(questionSetId)
+  currentRun.value = {
+    ...(currentRun.value || {}),
+    id: String(runId),
+    question_set_id: questionSetId || getRunQuestionSetID(currentRun.value),
+    status: 'running',
+    agentIds: mergeAgentIDs(currentRun.value?.agentIds || [], evalIDs)
+  }
+
+  try {
+    await wsService.runEvaluators(String(runId), evalIDs)
+    return true
+  } catch (e) {
+    console.error('[Arena] Failed to run evaluators:', e)
+    startRunError.value = e.message || 'Failed to run evaluators.'
+    setTimeout(() => {
+      if (startRunError.value) startRunError.value = null
+    }, 5000)
+    isRunning.value = false
+    activeRunQuestionSetId.value = null
+    wsStore.setRunningQuestionSetId(null)
+    return false
+  }
+}
+
+async function startEvaluationNow() {
+  if (!canStartEvaluation.value) {
+    if (startEvaluationDisabledReason.value) {
+      alert(startEvaluationDisabledReason.value)
+    }
+    return
+  }
+
+  const questionSetId = currentQuestionSet.value?.id
+  const evaluatorIds = enabledEvaluatorAgents.value.map((a) => a.id)
+  if (!questionSetId || evaluatorIds.length === 0) return
+
+  try {
+    const runId = await resolveLatestRunIDForQuestionSet(questionSetId)
+    if (!runId) {
+      alert('No previous run found for this question set. Run at least one benchmark agent first.')
+      return
+    }
+    await triggerEvaluatorRun(runId, questionSetId, evaluatorIds)
+  } catch (e) {
+    console.error('[Arena] Manual evaluator run failed:', e)
+    startRunError.value = e.message || 'Failed to run evaluators.'
+    setTimeout(() => {
+      if (startRunError.value) startRunError.value = null
+    }, 5000)
+  }
+}
+
 // Actions
-async function handleStartRun({ questionSetId, agentIds }) {
+async function handleStartRun(payload) {
+  const { questionSetId } = payload || {}
+  const { primary: primaryAgentIds, evaluators: evaluatorAgentIds } = splitSelectedAgents(payload || {})
+
   showRunSetup.value = false
   if (flatQuestions.value.length === 0) {
     alert('The current question set is empty.')
     return
   }
-  
-  const selectedAgentsCount = agentIds.length
+
+  if (primaryAgentIds.length === 0 && evaluatorAgentIds.length === 0) {
+    alert('Select at least one agent to run.')
+    return
+  }
+
+  if (primaryAgentIds.length === 0 && evaluatorAgentIds.length > 0) {
+    try {
+      const baseRunID = await resolveLatestRunIDForQuestionSet(questionSetId)
+      if (!baseRunID) {
+        alert('No previous run found for this question set. Run at least one benchmark agent first.')
+        return
+      }
+      await triggerEvaluatorRun(baseRunID, questionSetId, evaluatorAgentIds)
+    } catch (e) {
+      console.error('[Arena] Evaluator-only run failed:', e)
+      startRunError.value = e.message || 'Failed to run evaluators.'
+      setTimeout(() => {
+        if (startRunError.value) startRunError.value = null
+      }, 5000)
+    }
+    return
+  }
+
+  const selectedPrimaryCount = primaryAgentIds.length
   isRunning.value = true
   activeRunQuestionSetId.value = questionSetId
   wsStore.setRunningQuestionSetId(questionSetId)
   startedTasks.value = 0
   completedTasks.value = 0
-  totalTasks.value = selectedAgentsCount * flatQuestions.value.length
+  totalTasks.value = selectedPrimaryCount * flatQuestions.value.length
   runResults.value = {}
   taskProgress.value = {}
   
   try {
-    const result = await wsService.startRun(questionSetId, agentIds)
+    const result = await wsService.startRun(questionSetId, primaryAgentIds)
     const runId = result.run_id || result.id
-    currentRun.value = { id: runId, status: 'running', agentIds }
+    currentRun.value = {
+      id: runId,
+      question_set_id: questionSetId,
+      status: 'running',
+      agentIds: mergeAgentIDs(primaryAgentIds, evaluatorAgentIds)
+    }
     const backendTotalTasks = Number(result.total_tasks || result.totalTasks || 0)
     if (backendTotalTasks > 0) {
       totalTasks.value = backendTotalTasks
     }
+
+    if (evaluatorAgentIds.length > 0 && runId) {
+      queuePendingEvaluators(runId, evaluatorAgentIds)
+      void maybeTriggerQueuedEvaluatorsIfRunAlreadyFinished(runId, questionSetId)
+    }
+
     localStorage.setItem('activeRunId', currentRun.value.id)
     saveRunProgress(currentRun.value.id)
     
@@ -1278,6 +1717,8 @@ async function handleStartRun({ questionSetId, agentIds }) {
     isRunning.value = false
     pendingResultsBuffer.value = []
     taskProgress.value = {}
+    activeRunQuestionSetId.value = null
+    wsStore.setRunningQuestionSetId(null)
   }
 
 }
@@ -1315,12 +1756,29 @@ function processTaskCompleted(data) {
       markRetryFinished(qIdStr, data.retry_id)
     }
 
-    // Check if run completed for this question set
-    if (isRunning.value && completedTasks.value >= totalTasks.value) {
+    // Check if run completed for this question set.
+    // We also allow completion handling when `isRunning` is false if evaluators are queued.
+    const completedRunId = String(currentRun.value?.id || data.run_id || '')
+    const hasQueuedEvaluators =
+      !!completedRunId &&
+      uniqueStringIDs(pendingEvaluatorRuns.value[completedRunId] || []).length > 0
+    if (totalTasks.value > 0 && completedTasks.value >= totalTasks.value && (isRunning.value || hasQueuedEvaluators)) {
+       const queuedEvaluatorIDs = popPendingEvaluators(completedRunId)
+       if (completedRunId && queuedEvaluatorIDs.length > 0) {
+         const targetQuestionSetID = resolveQuestionSetIdForRun(completedRunId)
+         void triggerEvaluatorRun(completedRunId, targetQuestionSetID, queuedEvaluatorIDs)
+         return
+       }
+
        isRunning.value = false
+       if (currentRun.value) {
+         currentRun.value.status = 'completed'
+       }
        if (activeRunQuestionSetId.value === currentQuestionSet.value?.id) {
          wsStore.setRunningQuestionSetId(null)
        }
+       activeRunQuestionSetId.value = null
+       localStorage.removeItem('activeRunId')
        taskProgress.value = {}
        if (currentRun.value?.id) {
          clearRunProgress(currentRun.value.id)
@@ -1335,8 +1793,13 @@ async function handleRunSave(payload) {
   console.log('[Arena] handleRunSave: Received saved QS with', savedQuestionSet.agents?.length, 'agents')
 
   if (savedQuestionSet.id === currentQuestionSet.value.id) {
-    // Extract agents carefully
-    const newAgents = savedQuestionSet.agents || payload?.agents || currentQuestionSet.value.agents
+    const savedAgents = Array.isArray(savedQuestionSet.agents) && savedQuestionSet.agents.length > 0
+      ? savedQuestionSet.agents
+      : null
+    const payloadAgents = Array.isArray(payload?.agents) && payload.agents.length > 0
+      ? payload.agents
+      : null
+    const newAgents = savedAgents || payloadAgents || currentQuestionSet.value.agents
     
     currentQuestionSet.value = {
       ...currentQuestionSet.value,
@@ -1378,7 +1841,7 @@ async function rerunQuestion(agentId, questionId, localRetryId = null) {
   let resultIdToUse = resultItem?.id
   const agent = mergedAgents.value.find(a => a.id === agentId)
       
-  if (agent && (agent.provider_type === 'evaluator' || agent.config?.target_agent_id)) {
+  if (agent && (isEvaluatorAgentObject(agent) || agent.config?.target_agent_id)) {
       // It's an evaluator. Use heuristic to find the target answer.
       const targetAgentId = agent.config?.target_agent_id
       
@@ -1765,6 +2228,10 @@ async function reconcileRetriesFromServer() {
 
     persistRetryRegistry()
 
+    if (!hasActiveRetryEntries()) {
+      maybeStopRunningWhenIdle()
+    }
+
     if (shouldRefreshResults && currentQuestionSet.value?.id) {
       fetchLatestResultsForQS(currentQuestionSet.value.id)
     }
@@ -1904,12 +2371,42 @@ onMounted(async () => {
         })
     })
 
-    wsService.on('EVT_RUN_FINISHED', () => {
+    wsService.on('EVT_RUN_FINISHED', (data) => {
+        const finishedRunId = data?.run_id ? String(data.run_id) : ''
+        const runIdForPending = finishedRunId || String(currentRun.value?.id || '')
+        const queuedEvaluatorIDs = popPendingEvaluators(runIdForPending)
+        if (runIdForPending && queuedEvaluatorIDs.length > 0) {
+          const targetQuestionSetID = resolveQuestionSetIdForRun(runIdForPending)
+          void triggerEvaluatorRun(runIdForPending, targetQuestionSetID, queuedEvaluatorIDs)
+          return
+        }
+
+        if (finishedRunId && currentRun.value?.id && finishedRunId !== String(currentRun.value.id)) {
+          return
+        }
+
         isRunning.value = false
         localStorage.removeItem('activeRunId')
         taskProgress.value = {}
+        activeRunQuestionSetId.value = null
+        wsStore.setRunningQuestionSetId(null)
+
+        if (currentRun.value) {
+          currentRun.value.status = data?.status || 'completed'
+        }
         if (currentRun.value?.id) {
           clearRunProgress(currentRun.value.id)
+        }
+
+        if (finishedRunId) {
+          clearRetryTrackingForRun(finishedRunId)
+        }
+        retryingQuestions.value = {}
+        clearAllLoadingStates()
+        maybeStopRunningWhenIdle()
+
+        if (currentQuestionSet.value?.id) {
+          fetchLatestResultsForQS(currentQuestionSet.value.id)
         }
     })
 })
@@ -2152,6 +2649,11 @@ defineExpose({
   border-top: 1px solid #e2e8f0;
 }
 
+.questions-list-view .question-evaluation .response-text {
+  border-left-color: #10b981;
+  background: #f0fdf4;
+}
+
 .questions-list-view .response-label {
   font-size: 0.7rem;
   font-weight: 600;
@@ -2172,14 +2674,64 @@ defineExpose({
   word-wrap: break-word;
 }
 
-.questions-list-view .response-text ul,
-.questions-list-view .response-text ol {
-  padding-left: 1.25rem;
-  margin-left: 0.25rem;
+.questions-list-view .response-text :deep(p) {
+  margin: 0 0 0.5rem 0;
 }
 
-.questions-list-view .response-text > * {
-  margin-left: 13px;
+.questions-list-view .response-text :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.questions-list-view .response-text :deep(ul),
+.questions-list-view .response-text :deep(ol) {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+  list-style-position: outside;
+}
+
+.questions-list-view .response-text :deep(li) {
+  margin: 0.25rem 0;
+}
+
+.questions-list-view .response-text :deep(code) {
+  background: #f5f5f5;
+  padding: 0.125rem 0.35rem;
+  border-radius: 3px;
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 0.875em;
+  color: #d63384;
+}
+
+.questions-list-view .response-text :deep(pre) {
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 0.75rem;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+
+.questions-list-view .response-text :deep(pre code) {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+.questions-list-view .response-text :deep(blockquote) {
+  border-left: 3px solid #cbd5e1;
+  padding-left: 0.9rem;
+  margin: 0.5rem 0;
+  color: #64748b;
+  font-style: italic;
+}
+
+.questions-list-view .response-text :deep(a) {
+  color: #49399d;
+  text-decoration: none;
+}
+
+.questions-list-view .response-text :deep(a:hover) {
+  text-decoration: underline;
 }
 
 .questions-list-view .response-image {
@@ -2656,6 +3208,22 @@ defineExpose({
   position: relative;
 }
 
+.btn-eval {
+  background: #ecfdf3;
+  border: 1px solid #86efac;
+  color: #166534;
+}
+
+.btn-eval:hover:not(:disabled) {
+  background: #dcfce7;
+  border-color: #4ade80;
+}
+
+.btn-eval:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .pdf-loading-spinner {
   display: inline-block;
   width: 14px;
@@ -2682,6 +3250,82 @@ defineExpose({
   display: flex;
   flex-direction: column;
   min-width: 0; /* Allow flex shrinking */
+}
+
+/* Layout normalization: keep question list + agent panels always visible side by side */
+.main-content-area {
+  display: grid;
+  grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
+  gap: 16px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  align-items: stretch;
+}
+
+.main-content-area.single-panel {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.questions-list-view {
+  width: auto;
+  flex: 0 0 auto;
+  height: 100%;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid #e5e7eb;
+  padding-left: 12px;
+}
+
+.chat-panels-bar {
+  display: flex;
+  align-items: stretch;
+  gap: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex: 1;
+  height: 100%;
+  min-width: 0;
+}
+
+.chat-panel-wrapper {
+  display: flex;
+  flex: 0 0 min(560px, 100%);
+  height: 100%;
+  min-height: 0;
+  min-width: 380px;
+}
+
+.chat-panel-wrapper > * {
+  flex: 1;
+  min-height: 0;
+}
+
+@media (max-width: 980px) {
+  .main-content-area {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+    height: auto;
+  }
+
+  .chat-container {
+    border-left: 0;
+    padding-left: 0;
+    min-height: 380px;
+  }
+
+  .chat-panel-wrapper {
+    min-width: 320px;
+  }
 }
 
 </style>
