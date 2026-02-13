@@ -24,10 +24,12 @@ marked.setOptions({
 const ALLOWED_URIS = /^(?:(?:https?|mailto|ftp|tel|file|blob|data):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
 
 /**
- * Regex pattern to detect base64 images in format: (data:image/TYPE;base64,DATA)
+ * Base64 image matcher source in format: (data:image/TYPE;base64,DATA)
  * Supports: png, jpg, jpeg, gif, webp, svg+xml
  */
-const BASE64_IMAGE_PATTERN = /\(data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,([A-Za-z0-9+/=]+)\)/g
+const BASE64_IMAGE_SOURCE = '\\(data:image\\/(png|jpe?g|gif|webp|svg\\+xml);base64,([A-Za-z0-9+/=\\s]+)\\)'
+
+const base64ImageRegex = (flags = 'g') => new RegExp(BASE64_IMAGE_SOURCE, flags)
 
 /**
  * Detects if string contains markdown formatting
@@ -59,7 +61,7 @@ export const hasMarkdown = (text) => {
  */
 export const hasBase64Images = (text) => {
   if (!text || typeof text !== 'string') return false
-  return BASE64_IMAGE_PATTERN.test(text)
+  return base64ImageRegex('i').test(text)
 }
 
 /**
@@ -70,14 +72,15 @@ export const extractBase64Images = (text) => {
   if (!text || typeof text !== 'string') return []
 
   const images = []
-  const regex = new RegExp(BASE64_IMAGE_PATTERN.source, 'g')
+  const regex = base64ImageRegex('gi')
   let match
 
   while ((match = regex.exec(text)) !== null) {
+    const normalizedData = String(match[2] || '').replace(/\s+/g, '')
     images.push({
       fullMatch: match[0],
       type: match[1],
-      data: match[2],
+      data: normalizedData,
       index: match.index
     })
   }
@@ -93,13 +96,14 @@ export const convertBase64ImagesToMarkdown = (text) => {
   if (!text || typeof text !== 'string') return text
 
   // Use a replacer function to check context
-  return text.replace(BASE64_IMAGE_PATTERN, (match, type, data, offset, string) => {
+  return text.replace(base64ImageRegex('gi'), (match, type, data, offset, string) => {
     // Check if preceded by ']' which implies it's already a markdown image: ![alt](data...)
     if (offset > 0 && string[offset - 1] === ']') {
       return match // Return original string unchanged
     }
     // Otherwise wrap it
-    return `![image](data:image/${type};base64,${data})`
+    const normalizedData = String(data || '').replace(/\s+/g, '')
+    return `![image](data:image/${type};base64,${normalizedData})`
   })
 }
 
@@ -174,7 +178,7 @@ export const processContent = (rawString) => {
   // Plain text version (remove markdown syntax and images)
   let plainText = working
   if (detectedImages) {
-    plainText = plainText.replace(BASE64_IMAGE_PATTERN, '[image]')
+    plainText = plainText.replace(base64ImageRegex('gi'), '[image]')
   }
   if (detectedMarkdown) {
     // Simple markdown removal (basic patterns)

@@ -455,8 +455,8 @@ class WebSocketService {
         return this.request('CMD_CANCEL_RUN', { run_id: runId })
     }
 
-    runEvaluators(runId) {
-        return this.request('CMD_RUN_EVALUATORS', { run_id: runId })
+    runEvaluators(runId, evaluatorAgentIds = []) {
+        return this.request('CMD_RUN_EVALUATORS', { run_id: runId, evaluator_agent_ids: evaluatorAgentIds })
     }
 
     updateAgent(agentId, data) {
