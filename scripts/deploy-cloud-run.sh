@@ -54,10 +54,6 @@ echo "🛠️ Building images with Cloud Build..."
 IMAGE_REPO_BASE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}"
 RELEASE_TAG="latest"
 
-gcloud builds submit --config infra/agenteval-runner/cloudbuild.yaml \
-    --substitutions="_IMAGE_REPO_BASE=$IMAGE_REPO_BASE,_SERVICE_NAME=agenteval-runner,_RELEASE_TAG=$RELEASE_TAG" . &
-PY_BUILD_PID=$!
-
 gcloud builds submit --config infra/agenteval-api/cloudbuild.yaml \
     --substitutions="_IMAGE_REPO_BASE=$IMAGE_REPO_BASE,_SERVICE_NAME=agenteval-api,_RELEASE_TAG=$RELEASE_TAG" . &
 GO_BUILD_PID=$!
@@ -67,31 +63,9 @@ gcloud builds submit --config infra/agenteval-web/cloudbuild.yaml \
     --substitutions="_IMAGE_REPO_BASE=$IMAGE_REPO_BASE,_SERVICE_NAME=agenteval-web,_RELEASE_TAG=$RELEASE_TAG" . &
 FE_BUILD_PID=$!
 
-wait $PY_BUILD_PID $GO_BUILD_PID $FE_BUILD_PID
+wait $GO_BUILD_PID $FE_BUILD_PID
 
-# 3. Deploy Python Runner (Internal Only)
-echo "Deploying Python Runner..."
-gcloud run deploy "$APP_NAME-python-runner" \
-  --image "$IMAGE_REPO_BASE/agenteval-runner:$RELEASE_TAG" \
-  --platform managed \
-  --region "$REGION" \
-  --no-allow-unauthenticated \
-  --ingress internal \
-  --set-env-vars="PYTHONUNBUFFERED=1"
-
-PYTHON_RUNNER_URL=$(gcloud run services describe "$APP_NAME-python-runner" --region "$REGION" --format='value(status.url)')
-
-# 3.1 Grant Invoker permission to the default compute service account
-PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
-SERVICE_ACCOUNT="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
-
-echo "Granting invoker permission to $SERVICE_ACCOUNT..."
-gcloud run services add-iam-policy-binding "$APP_NAME-python-runner" \
-  --member="serviceAccount:${SERVICE_ACCOUNT}" \
-  --role="roles/run.invoker" \
-  --region="$REGION" --quiet
-
-# 4. Deploy Go API
+# 3. Deploy Go API
 echo "Deploying Go API..."
 # We use Secret Manager for DATABASE_URL and JWT_SECRET
 # Assumes secrets exist: DB_URL_SECRET, JWT_SECRET_SECRET
@@ -100,12 +74,12 @@ gcloud run deploy "$APP_NAME-go-api" \
   --platform managed \
   --region "$REGION" \
   --allow-unauthenticated \
-  --set-env-vars="PYTHON_RUNNER_URL=$PYTHON_RUNNER_URL,APP_ENV=production" \
+  --set-env-vars="APP_ENV=production" \
   --set-secrets="DATABASE_URL=DB_URL_SECRET:latest,JWT_SECRET=JWT_SECRET_SECRET:latest,ENCRYPTION_KEY=ENCRYPTION_KEY:latest"
 
 GO_API_URL=$(gcloud run services describe "$APP_NAME-go-api" --region "$REGION" --format='value(status.url)')
 
-# 5. Deploy Frontend
+# 4. Deploy Frontend
 echo "Deploying Frontend..."
 gcloud run deploy "$APP_NAME-frontend" \
   --image "$IMAGE_REPO_BASE/agenteval-web:$RELEASE_TAG" \
@@ -120,7 +94,7 @@ VITE_FIREBASE_STORAGE_BUCKET=$VITE_FIREBASE_STORAGE_BUCKET,\
 VITE_FIREBASE_MESSAGING_SENDER_ID=$VITE_FIREBASE_MESSAGING_SENDER_ID,\
 VITE_FIREBASE_APP_ID=$VITE_FIREBASE_APP_ID"
 
-# 6. Admin Bootstrap Logic
+# 5. Admin Bootstrap Logic
 echo "Checking Admin status at $GO_API_URL..."
 # Wait a few seconds for the service to be fully up
 sleep 5

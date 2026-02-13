@@ -246,7 +246,8 @@ type RetryStatusResponse struct {
 }
 
 type RunEvaluatorsPayload struct {
-	RunID string `json:"run_id"`
+	RunID             string   `json:"run_id"`
+	EvaluatorAgentIDs []string `json:"evaluator_agent_ids,omitempty"`
 }
 
 type GetSpyPayload struct {

@@ -335,6 +335,22 @@ func ensureDockerNetwork(name string) error {
 	return nil
 }
 
+func cleanupNamedContainers(containerNames ...string) {
+	for _, name := range containerNames {
+		inspect := exec.Command("docker", "container", "inspect", name)
+		if err := inspect.Run(); err != nil {
+			continue
+		}
+
+		log.Printf("  ⚠ Removing stale container %q to avoid compose name conflicts...", name)
+		if err := runCommand("docker", "rm", "-f", name); err != nil {
+			log.Printf("  ⚠ Failed to remove stale container %q: %v", name, err)
+			continue
+		}
+		log.Printf("  ✓ Removed stale container %q", name)
+	}
+}
+
 func findProjectRoot() string {
 	// Try to find docker-compose.yml by walking up directories
 	dir, _ := os.Getwd()
@@ -454,6 +470,19 @@ func main() {
 	// Soft reset: docker compose down (preserves volumes) && up -d --build
 	if *softReset {
 		log.Println("\n== Soft Reset (containers rebuild, data preserved) ==")
+		staleAppContainers := []string{
+			"AgenteEval-api",
+			"benchmarking-db",
+			"AgenteEval-frontend",
+			"AgenteEval-frontend-dev",
+			"python-runner",
+		}
+		staleNoDbContainers := []string{
+			"AgenteEval-api",
+			"AgenteEval-frontend",
+			"AgenteEval-frontend-dev",
+			"python-runner",
+		}
 
 		if projDir == "" {
 			log.Fatalf("  ❌ Cannot find docker-compose.yml. Use --project-dir flag.")
@@ -464,7 +493,7 @@ func main() {
 		if *noDb {
 			log.Println("  ⏳ Stopping app containers EXCEPT DB...")
 			// Create list of services to restart (excluding db)
-			services := []string{"go-api", "python-runner", "frontend-dev", "frontend"}
+			services := []string{"go-api", "frontend-dev", "frontend"}
 
 			// We stop them specifically instead of 'down'
 			args := append([]string{"compose", "stop"}, services...)
@@ -473,21 +502,23 @@ func main() {
 			}
 
 			log.Println("  ⏳ Starting Services (excluding db)...")
+			cleanupNamedContainers(staleNoDbContainers...)
 			// We explicitly bring up the non-db services
 			// Note: We use the same services list as stop + ensure we target what we need
-			upArgs := []string{"compose", "up", "-d", "--build", "go-api", "python-runner", "frontend-dev"}
+			upArgs := []string{"compose", "up", "-d", "--build", "go-api", "frontend-dev"}
 			if err := runCommand("docker", upArgs...); err != nil {
 				log.Fatalf("  ❌ docker compose up (services) failed: %v", err)
 			}
 		} else {
 			log.Println("  ⏳ Stopping app containers...")
-			if err := runCommand("docker", "compose", "down"); err != nil {
+			if err := runCommand("docker", "compose", "down", "--remove-orphans"); err != nil {
 				log.Fatalf("  ❌ docker compose down failed: %v", err)
 			}
 			log.Println("  ✓ Application services stopped")
 
-			log.Println("  ⏳ Starting Backend (db, api, runner)...")
-			if err := runCommand("docker", "compose", "up", "-d", "--build", "db", "go-api", "python-runner"); err != nil {
+			log.Println("  ⏳ Starting Backend (db, api)...")
+			cleanupNamedContainers(staleAppContainers...)
+			if err := runCommand("docker", "compose", "up", "-d", "--build", "db", "go-api"); err != nil {
 				log.Fatalf("  ❌ docker compose up (backend) failed: %v", err)
 			}
 			log.Println("  ✓ Backend started")
@@ -506,6 +537,13 @@ func main() {
 	// Hard reset: docker compose down -v && up -d (all containers)
 	if *hardReset {
 		log.Println("\n== Hard Reset (all application services) ==")
+		staleAppContainers := []string{
+			"AgenteEval-api",
+			"benchmarking-db",
+			"AgenteEval-frontend",
+			"AgenteEval-frontend-dev",
+			"python-runner",
+		}
 
 		if projDir == "" {
 			log.Fatalf("  ❌ Cannot find docker-compose.yml. Use --project-dir flag.")
@@ -514,13 +552,14 @@ func main() {
 		log.Printf("  📁 Project dir: %s", projDir)
 
 		log.Println("  ⏳ Stopping app containers and removing volumes...")
-		if err := runCommand("docker", "compose", "down", "-v"); err != nil {
+		if err := runCommand("docker", "compose", "down", "-v", "--remove-orphans"); err != nil {
 			log.Fatalf("  ❌ docker compose down failed: %v", err)
 		}
 		log.Println("  ✓ App services stopped, volumes removed")
 
-		log.Println("  ⏳ Starting Backend (db, api, runner)...")
-		if err := runCommand("docker", "compose", "up", "-d", "--build", "db", "go-api", "python-runner"); err != nil {
+		log.Println("  ⏳ Starting Backend (db, api)...")
+		cleanupNamedContainers(staleAppContainers...)
+		if err := runCommand("docker", "compose", "up", "-d", "--build", "db", "go-api"); err != nil {
 			log.Fatalf("  ❌ docker compose up (backend) failed: %v", err)
 		}
 		log.Println("  ✓ Backend started")

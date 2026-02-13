@@ -18,19 +18,6 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # Production Python Runner
-  python-runner-prod:
-    build:
-      context: ./server_python
-      dockerfile: Dockerfile
-    container_name: AgenteEval-python-prod
-    environment:
-      - PYTHONUNBUFFERED=1
-    networks:
-      - benchmarking-net-prod
-      - benchmarking-public
-    restart: unless-stopped
-
   # Production Go API
   go-api-prod:
     build:
@@ -39,7 +26,6 @@ services:
     container_name: AgenteEval-api-prod
     environment:
       - DATABASE_URL=host=db-prod user=postgres password=${POSTGRES_PASSWORD} dbname=benchmarking_prod port=5432 sslmode=disable
-      - PYTHON_RUNNER_URL=http://python-runner-prod:3003
       - PORT=8080
       - APP_ENV=production
       - JWT_SECRET=${JWT_SECRET}
@@ -47,8 +33,6 @@ services:
     depends_on:
       db-prod:
         condition: service_healthy
-      python-runner-prod:
-        condition: service_started
     networks:
       - benchmarking-net-prod
       - benchmarking-public

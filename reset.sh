@@ -47,22 +47,16 @@ ensure_encryption_key() {
 ensure_encryption_key
 echo "ℹ️ Running reset with args: $*"
 
-# Check if reset binary exists, if not build it
-if [ ! -f "./reset" ]; then
-    echo "⚠️  Reset tool not found. Building..."
-    (cd server_go && go build -o ../reset ./cmd/reset)
-    if [ $? -ne 0 ]; then
-        echo "❌ Failed to build reset tool."
-        exit 1
-    fi
-    echo "✅ Reset tool built."
-fi
+# Always rebuild reset tool to avoid stale binary behavior after backend changes.
+echo "🔧 Building reset tool..."
+(cd server_go && go build -o ../reset ./cmd/reset)
+echo "✅ Reset tool built."
 
 # Check for --prod flag
 if [[ "${1:-}" == "--prod" ]]; then
     echo "🚀 Updating Production (App & Proxy)..."
     (cd frontend && npm run build) && \
-    docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build go-api-prod python-runner-prod && \
+    docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build go-api-prod && \
     docker compose --env-file .env.prod -f docker-compose.proxy.prod.yml up -d && \
     docker compose --env-file .env.prod -f docker-compose.proxy.prod.yml restart nginx
     exit 0

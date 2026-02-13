@@ -130,7 +130,7 @@ func (r *goRunner) executeMCP(ctx context.Context, req ExecutionRequest) Executi
 }
 
 func (r *goRunner) callMCP(ctx context.Context, endpoint, token, question string, retry int) (ExecutionResponse, map[string]any, error) {
-	client := mcp.NewClient(&mcp.Implementation{Name: "agenteval-runner", Version: "v1.0.0"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "agenteval-go-runner", Version: "v1.0.0"}, nil)
 
 	httpClient := &http.Client{
 		Timeout: runnerTaskTimeout,

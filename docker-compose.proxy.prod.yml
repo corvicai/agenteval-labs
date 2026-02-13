@@ -17,7 +17,6 @@ services:
         aliases:
           - docker
           - go-api
-          - python-runner
     restart: unless-stopped
 
 networks:

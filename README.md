@@ -16,7 +16,6 @@ docker-compose up -d --build
 
 This will start:
 - **PostgreSQL** on port `5432`
-- **Python Runner** on port `3003`
 - **Go API** on port `8080`
 
 ### Verify Services
@@ -24,9 +23,6 @@ This will start:
 ```bash
 # Check Go API health
 curl http://localhost:8080/health
-
-# Check Python Runner health
-curl http://localhost:3003/health
 ```
 
 ### Database Migrations
@@ -141,7 +137,6 @@ Compatibility note:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DATABASE_URL` | `host=localhost...` | Postgres connection |
-| `PYTHON_RUNNER_URL` | `http://localhost:3003` | Python runner URL |
 | `JWT_SECRET` | `dev-secret...` | JWT signing secret |
 | `PORT` | `8080` | API port |
 | `FIREBASE_CREDENTIALS` | Path to JSON | Firebase Service Account file |
@@ -166,12 +161,7 @@ npm run test
 # Terminal 1: Start Postgres
 docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=benchmarking postgres:15
 
-# Terminal 2: Start Python Runner
-cd server_python
-pip install -r requirements.txt
-python server.py
-
-# Terminal 3: Start Go API
+# Terminal 2: Start Go API
 cd server_go
 export DATABASE_URL="host=localhost user=postgres password=postgres dbname=benchmarking port=5432 sslmode=disable"
 go run .
@@ -186,8 +176,8 @@ go run .
                            │
                            ▼
                     ┌─────────────┐
-                    │   Python    │
-                    │   Runner    │
+                    │   Go Runner │
+                    │ (in-process)│
                     └──────┬──────┘
                            │
               ┌────────────┴────────────┐

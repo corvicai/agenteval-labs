@@ -21,21 +21,6 @@ services:
       - benchmarking-net
       - benchmarking-public
 
-  # Python MCP/OpenAI Runner
-  python-runner:
-    build:
-      context: ./server_python
-      dockerfile: Dockerfile
-    container_name: AgenteEval-python
-    ports:
-      - "3003:3003"
-    environment:
-      - PYTHONUNBUFFERED=1
-    networks:
-      - benchmarking-net
-      - benchmarking-public
-    restart: unless-stopped
-
   # Go API Server
   go-api:
     build:
@@ -49,14 +34,8 @@ services:
     env_file: .env
     environment:
       - DATABASE_URL=host=benchmarking-db user=postgres password=dev_secure_827361 dbname=benchmarking port=5432 sslmode=disable
-      - PYTHON_RUNNER_URL=http://python-runner:3003
       - PORT=8080
       - FIREBASE_SERVICE_ACCOUNT=/app/firebase-service-account.json
-    depends_on:
-      # db:
-      #   condition: service_healthy
-      python-runner:
-        condition: service_started
     networks:
       - benchmarking-net
       - benchmarking-public

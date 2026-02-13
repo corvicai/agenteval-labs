@@ -155,16 +155,7 @@ func main() {
 			log.Printf("[WARN] AutoMigrate failed: %v", err)
 		}
 	}
-	// Initialize orchestration engine
-	runnerMode := strings.ToLower(strings.TrimSpace(os.Getenv("RUNNER_MODE")))
-	if runnerMode == "" {
-		runnerMode = "go"
-	}
-	pythonURL := strings.TrimSpace(os.Getenv("PYTHON_RUNNER_URL"))
-	if (runnerMode == "http" || runnerMode == "python" || runnerMode == "external") && pythonURL == "" {
-		pythonURL = "http://localhost:3003"
-	}
-
+	// Initialize orchestration engine (Go runner only)
 	workerCount := 50
 	if wcStr := os.Getenv("ENGINE_WORKERS"); wcStr != "" {
 		if wc, err := strconv.Atoi(wcStr); err == nil {
@@ -208,7 +199,7 @@ func main() {
 		}
 	}
 
-	engine := orchestrator.NewEngine(database, pythonURL, workerCount)
+	engine := orchestrator.NewEngine(database, workerCount)
 	if database != nil {
 		res := database.Model(&models.Run{}).Where("status = ?", "running").Update("status", "cancelled")
 		if res.Error != nil {
@@ -388,13 +379,7 @@ func main() {
 	log.Printf("=======================================================")
 	log.Printf("BENCHMARKING PLATFORM - Go Server")
 	log.Printf("Starting on port %s", port)
-	if runnerMode == "http" || runnerMode == "python" || runnerMode == "external" {
-		log.Printf("Runner Mode: http (%s)", pythonURL)
-	} else if pythonURL != "" {
-		log.Printf("Runner Mode: go (fallback http: %s)", pythonURL)
-	} else {
-		log.Printf("Runner Mode: go (in-process)")
-	}
+	log.Printf("Runner Mode: go (in-process)")
 	log.Printf("=======================================================")
 	e.Logger.Fatal(e.Start(":" + port))
 }
