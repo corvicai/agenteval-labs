@@ -1688,11 +1688,6 @@ async function handleStartRun(payload) {
       totalTasks.value = backendTotalTasks
     }
 
-    if (evaluatorAgentIds.length > 0 && runId) {
-      queuePendingEvaluators(runId, evaluatorAgentIds)
-      void maybeTriggerQueuedEvaluatorsIfRunAlreadyFinished(runId, questionSetId)
-    }
-
     localStorage.setItem('activeRunId', currentRun.value.id)
     saveRunProgress(currentRun.value.id)
     
@@ -2255,8 +2250,43 @@ onMounted(async () => {
     ensureResultsLoaded()
 
     wsService.on('EVT_TASK_QUEUED', (data) => {
+        const runId = String(data.run_id || '')
+        const currentRunId = String(currentRun.value?.id || '')
+        if (currentRunId && runId && runId !== currentRunId) return
+
         const agentId = data.agent_id
         const qIdStr = String(data.question_id)
+        const isEvaluatorTask = qIdStr.startsWith('eval-')
+
+        // Backend can auto-queue evaluator tasks when primary tasks finish.
+        // Keep progress counters in sync and avoid finishing the run early on UI.
+        if (isEvaluatorTask && currentRunId && runId === currentRunId) {
+          if (!runResults.value[agentId]) runResults.value[agentId] = {}
+
+          if (!runResults.value[agentId][qIdStr]) {
+            runResults.value[agentId][qIdStr] = {
+              id: null,
+              loading: true,
+              queued: true,
+              success: false,
+              answer: '',
+              error: null,
+              duration: null,
+              timestamp: new Date().toISOString(),
+              evaluations: [],
+              metadata: null
+            }
+            totalTasks.value++
+          }
+
+          if (!isRunning.value) {
+            const targetQuestionSetID = resolveQuestionSetIdForRun(currentRunId)
+            isRunning.value = true
+            activeRunQuestionSetId.value = targetQuestionSetID
+            wsStore.setRunningQuestionSetId(targetQuestionSetID || null)
+          }
+        }
+
         if (data.retry_id) {
           markRetryStarted(qIdStr, data.retry_id, {
             runId: data.run_id,

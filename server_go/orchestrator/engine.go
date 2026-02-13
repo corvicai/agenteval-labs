@@ -464,6 +464,32 @@ func (e *Engine) checkRunCompletion(runID uuid.UUID) {
 	e.db.Model(&models.RunResult{}).Where("run_id = ?", runID).Count(&count)
 
 	if int(count) >= run.TotalTasks {
+		// Auto-run evaluators once, right after primary tasks complete.
+		// We only do this while run is in "running" state and before any evaluator
+		// result exists, so retries/manual evaluator runs won't loop re-queueing.
+		if strings.EqualFold(strings.TrimSpace(run.Status), "running") {
+			var evalResultCount int64
+			if err := e.db.Model(&models.RunResult{}).
+				Where("run_id = ? AND question_id LIKE ?", runID, "eval-%").
+				Count(&evalResultCount).Error; err == nil && evalResultCount == 0 {
+				previousTotalTasks := run.TotalTasks
+				if err := e.RunEvaluators(runID, nil); err != nil {
+					if !strings.Contains(strings.ToLower(err.Error()), "no evaluator agents available") {
+						log.Printf("[EVAL] Auto-run failed for run %s: %v", runID, err)
+					}
+				} else {
+					var refreshed models.Run
+					if refreshErr := e.db.First(&refreshed, "id = ?", runID).Error; refreshErr == nil {
+						if refreshed.TotalTasks > previousTotalTasks {
+							log.Printf("[EVAL] Auto-run queued for run %s (%d -> %d total tasks)", runID, previousTotalTasks, refreshed.TotalTasks)
+							return
+						}
+						run = refreshed
+					}
+				}
+			}
+		}
+
 		// Check for any errors
 		var errorCount int64
 		e.db.Model(&models.RunResult{}).Where("run_id = ? AND status = ?", runID, "error").Count(&errorCount)

@@ -335,6 +335,46 @@ func TestEngine_RetryPrimaryAutoRunsEvaluatorForSameQuestion(t *testing.T) {
 	assert.Equal(t, int64(1), evalCount)
 }
 
+func TestEngine_StartRun_AutoRunsEvaluatorsAfterPrimaryCompletion(t *testing.T) {
+	t.Setenv("ENCRYPTION_KEY", "12345678901234567890123456789012")
+
+	db := setupOrchestratorTestDB(t)
+	_, workspaceID, qsID := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	primaryAgent := createTestAgent(t, db, workspaceID, "Primary", "openai", mockOpenAIConfig())
+	evaluatorAgent := createTestAgent(t, db, workspaceID, "Evaluator", "evaluator", map[string]any{
+		"api_key":         "MOCK",
+		"model":           "gpt-4o-mini",
+		"openai_mode":     "standard",
+		"target_agent_id": primaryAgent.ID.String(),
+	})
+
+	engine := NewEngine(db, 2)
+	engine.Start()
+
+	run, err := engine.StartRun(workspaceID, qsID, []uuid.UUID{primaryAgent.ID})
+	require.NoError(t, err)
+	require.NotNil(t, run)
+
+	evalQuestionID := fmt.Sprintf("eval-%s-%s", primaryAgent.ID, "q-1")
+
+	assert.Eventually(t, func() bool {
+		var count int64
+		err := db.Model(&models.RunResult{}).
+			Where("run_id = ? AND agent_id = ? AND question_id = ? AND status = ?", run.ID, evaluatorAgent.ID, evalQuestionID, "success").
+			Count(&count).Error
+		return err == nil && count >= 1
+	}, 8*time.Second, 100*time.Millisecond, "expected evaluator result after primary run completion")
+
+	assert.Eventually(t, func() bool {
+		var refreshed models.Run
+		if err := db.First(&refreshed, "id = ?", run.ID).Error; err != nil {
+			return false
+		}
+		return refreshed.Status == "completed" && refreshed.TotalTasks == 2
+	}, 8*time.Second, 100*time.Millisecond, "expected run to finish with evaluator task included")
+}
+
 func TestEngine_StartRun_UsesGlobalCredentialsWhenOverrideConfigIsEmpty(t *testing.T) {
 	t.Setenv("ENCRYPTION_KEY", "12345678901234567890123456789012")
 
