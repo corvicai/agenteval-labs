@@ -375,6 +375,64 @@ func TestEngine_StartRun_AutoRunsEvaluatorsAfterPrimaryCompletion(t *testing.T) 
 	}, 8*time.Second, 100*time.Millisecond, "expected run to finish with evaluator task included")
 }
 
+func TestEngine_PersistEvaluatorScore_UpsertsByEvaluator(t *testing.T) {
+	t.Setenv("ENCRYPTION_KEY", "12345678901234567890123456789012")
+
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, _ := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	primaryAgent := createTestAgent(t, db, workspaceID, "Primary", "openai", mockOpenAIConfig())
+	evaluatorAgent := createTestAgent(t, db, workspaceID, "Evaluator", "evaluator", map[string]any{
+		"api_key": "MOCK",
+	})
+
+	targetResult := models.RunResult{
+		ID:         uuid.New(),
+		RunID:      runID,
+		AgentID:    primaryAgent.ID,
+		QuestionID: "q-1",
+		Status:     "success",
+		Answer:     "Primary answer",
+	}
+	require.NoError(t, db.Create(&targetResult).Error)
+
+	engine := NewEngine(db, 1)
+	task := &Task{
+		RunID:             runID,
+		AgentID:           evaluatorAgent.ID,
+		QuestionID:        fmt.Sprintf("eval-%s-%s", primaryAgent.ID, "q-1"),
+		ProviderType:      "evaluator",
+		TargetRunResultID: targetResult.ID,
+	}
+
+	require.NoError(t, engine.persistEvaluatorScore(task, "Good response. 7/10"))
+
+	var evals []models.Evaluation
+	require.NoError(t, db.Where("run_result_id = ? AND rater_type = ?", targetResult.ID, "agent").Find(&evals).Error)
+	require.Len(t, evals, 1)
+	assert.Equal(t, evaluatorAgent.ID, evals[0].RaterID)
+	assert.Equal(t, "valid", evals[0].Rating)
+	if assert.NotNil(t, evals[0].RatingCode) {
+		assert.Equal(t, 2, *evals[0].RatingCode)
+	}
+	if assert.NotNil(t, evals[0].Score) {
+		assert.Equal(t, 70, *evals[0].Score)
+	}
+
+	require.NoError(t, engine.persistEvaluatorScore(task, "Incorrect response. 2/10"))
+
+	evals = nil
+	require.NoError(t, db.Where("run_result_id = ? AND rater_type = ?", targetResult.ID, "agent").Find(&evals).Error)
+	require.Len(t, evals, 1)
+	assert.Equal(t, "dislike", evals[0].Rating)
+	if assert.NotNil(t, evals[0].RatingCode) {
+		assert.Equal(t, 3, *evals[0].RatingCode)
+	}
+	if assert.NotNil(t, evals[0].Score) {
+		assert.Equal(t, 20, *evals[0].Score)
+	}
+}
+
 func TestEngine_StartRun_UsesGlobalCredentialsWhenOverrideConfigIsEmpty(t *testing.T) {
 	t.Setenv("ENCRYPTION_KEY", "12345678901234567890123456789012")
 

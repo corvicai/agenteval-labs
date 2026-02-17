@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,19 +34,25 @@ type Engine struct {
 }
 
 type Task struct {
-	RunID            uuid.UUID
-	WorkspaceID      uuid.UUID // Needed for broadcasting queued event
-	AgentID          uuid.UUID
-	QuestionID       string
-	QuestionText     string
-	ExpectedAnswer   string
-	OriginalQuestion string
-	AgentAnswer      string // For evaluators: the agent's response to evaluate
-	AgentConfig      map[string]any
-	ProviderType     string
-	MaxConcurrency   int // Max parallel requests for this agent
-	RetryID          string
+	RunID             uuid.UUID
+	WorkspaceID       uuid.UUID // Needed for broadcasting queued event
+	AgentID           uuid.UUID
+	QuestionID        string
+	QuestionText      string
+	ExpectedAnswer    string
+	OriginalQuestion  string
+	AgentAnswer       string // For evaluators: the agent's response to evaluate
+	AgentConfig       map[string]any
+	ProviderType      string
+	MaxConcurrency    int // Max parallel requests for this agent
+	RetryID           string
+	TargetRunResultID uuid.UUID // For evaluator tasks: run_result being evaluated
 }
+
+var (
+	evaluatorScoreAtEndRegex = regexp.MustCompile(`(\d{1,2})\s*/\s*10$`)
+	evaluatorScoreAnyRegex   = regexp.MustCompile(`(^|[^0-9])(\d{1,2})\s*/\s*10($|[^0-9])`)
+)
 
 func decodeConfigJSON(raw []byte) map[string]any {
 	cfg := make(map[string]any)
@@ -386,6 +394,12 @@ func (e *Engine) executeTask(task *Task) {
 			log.Printf("[ENGINE] Failed to save result: %v", err)
 		}
 
+		if status == "success" && strings.TrimSpace(result.Answer) != "" {
+			if err := e.persistEvaluatorScore(task, result.Answer); err != nil {
+				log.Printf("[EVAL] Failed to persist automatic evaluator score for run %s, question %s: %v", task.RunID, task.QuestionID, err)
+			}
+		}
+
 		// Auto-run evaluators for primary-agent retries only, scoped to the fresh result.
 		// This avoids re-evaluating the whole run after a single answer retry.
 		isPrimaryRetry := task.RetryID != "" &&
@@ -434,6 +448,9 @@ func (e *Engine) executeTask(task *Task) {
 			"error":         executionResult.Error,
 			"metadata":      executionResult.Metadata,
 			"duration_ms":   durationMs,
+		}
+		if task.TargetRunResultID != uuid.Nil {
+			payload["target_run_result_id"] = task.TargetRunResultID.String()
 		}
 		if task.RetryID != "" {
 			payload["retry_id"] = task.RetryID
@@ -566,6 +583,131 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+func extractEvaluatorScore(answer string) (int, bool) {
+	text := strings.TrimSpace(answer)
+	if text == "" {
+		return 0, false
+	}
+
+	if m := evaluatorScoreAtEndRegex.FindStringSubmatch(text); len(m) == 2 {
+		if n, err := strconv.Atoi(m[1]); err == nil && n >= 0 && n <= 10 {
+			return n, true
+		}
+	}
+
+	all := evaluatorScoreAnyRegex.FindAllStringSubmatch(text, -1)
+	for i := len(all) - 1; i >= 0; i-- {
+		if len(all[i]) < 3 {
+			continue
+		}
+		n, err := strconv.Atoi(all[i][2])
+		if err != nil {
+			continue
+		}
+		if n >= 0 && n <= 10 {
+			return n, true
+		}
+	}
+
+	return 0, false
+}
+
+func mapEvaluatorScore(score10 int) (rating string, ratingCode int, score100 int) {
+	if score10 < 0 {
+		score10 = 0
+	}
+	if score10 > 10 {
+		score10 = 10
+	}
+
+	score100 = score10 * 10
+
+	switch {
+	case score10 >= 8:
+		return "like", 1, score100
+	case score10 >= 6:
+		return "valid", 2, score100
+	default:
+		return "dislike", 3, score100
+	}
+}
+
+func isEvaluatorExecutionTask(task *Task) bool {
+	if task == nil {
+		return false
+	}
+	if task.TargetRunResultID != uuid.Nil {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(task.ProviderType), "evaluator") {
+		return true
+	}
+	return strings.HasPrefix(strings.TrimSpace(task.QuestionID), "eval-")
+}
+
+func (e *Engine) resolveEvaluatorTargetRunResultID(task *Task) uuid.UUID {
+	if e.db == nil || task == nil {
+		return uuid.Nil
+	}
+	if task.TargetRunResultID != uuid.Nil {
+		return task.TargetRunResultID
+	}
+
+	targetAgentID, targetQuestionID := extractTargetAgentID(strings.TrimSpace(task.QuestionID))
+	if targetAgentID == uuid.Nil || strings.TrimSpace(targetQuestionID) == "" {
+		return uuid.Nil
+	}
+
+	var target models.RunResult
+	if err := e.db.
+		Where("run_id = ? AND agent_id = ? AND question_id = ? AND status = ?",
+			task.RunID, targetAgentID, targetQuestionID, "success").
+		Order("created_at DESC").
+		Order("id DESC").
+		First(&target).Error; err != nil {
+		return uuid.Nil
+	}
+
+	return target.ID
+}
+
+func (e *Engine) persistEvaluatorScore(task *Task, evaluatorAnswer string) error {
+	if !isEvaluatorExecutionTask(task) || e.db == nil || task == nil {
+		return nil
+	}
+
+	targetResultID := e.resolveEvaluatorTargetRunResultID(task)
+	if targetResultID == uuid.Nil {
+		return nil
+	}
+
+	score10, ok := extractEvaluatorScore(evaluatorAnswer)
+	if !ok {
+		return nil
+	}
+
+	rating, ratingCode, score100 := mapEvaluatorScore(score10)
+
+	if err := e.db.
+		Where("run_result_id = ? AND rater_type = ? AND rater_id = ?", targetResultID, "agent", task.AgentID).
+		Delete(&models.Evaluation{}).Error; err != nil {
+		return err
+	}
+
+	eval := models.Evaluation{
+		ID:          uuid.New(),
+		RunResultID: targetResultID,
+		RaterType:   "agent",
+		RaterID:     task.AgentID,
+		Rating:      rating,
+		RatingCode:  &ratingCode,
+		Score:       &score100,
+		Comments:    strings.TrimSpace(evaluatorAnswer),
+	}
+
+	return e.db.Create(&eval).Error
 }
 
 func extractTargetAgentID(questionID string) (uuid.UUID, string) {
@@ -796,17 +938,18 @@ func (e *Engine) queueEvaluatorTasksForResults(run models.Run, results []models.
 			evalQuestion := result.Answer // The answer we are evaluating
 
 			task := &Task{
-				RunID:            run.ID,
-				WorkspaceID:      run.WorkspaceID,
-				AgentID:          evaluator.ID,
-				QuestionID:       fmt.Sprintf("eval-%s-%s", result.AgentID, questionID),
-				QuestionText:     evalQuestion,
-				ExpectedAnswer:   expectedAnswer,
-				OriginalQuestion: originalQuestion,
-				AgentAnswer:      result.Answer, // Explicit agent answer for Python server
-				AgentConfig:      evalConfig,
-				ProviderType:     evaluator.ProviderType,
-				MaxConcurrency:   evaluator.MaxConcurrency,
+				RunID:             run.ID,
+				WorkspaceID:       run.WorkspaceID,
+				AgentID:           evaluator.ID,
+				QuestionID:        fmt.Sprintf("eval-%s-%s", result.AgentID, questionID),
+				QuestionText:      evalQuestion,
+				ExpectedAnswer:    expectedAnswer,
+				OriginalQuestion:  originalQuestion,
+				AgentAnswer:       result.Answer, // Explicit agent answer for Python server
+				AgentConfig:       evalConfig,
+				ProviderType:      evaluator.ProviderType,
+				MaxConcurrency:    evaluator.MaxConcurrency,
+				TargetRunResultID: result.ID,
 			}
 			tasksToQueue = append(tasksToQueue, task)
 		}
@@ -1121,6 +1264,7 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 	taskQuestionText := questionText
 	taskOriginalQuestion := questionText
 	taskAgentAnswer := "" // For evaluators: the agent response to evaluate
+	taskTargetRunResultID := uuid.Nil
 
 	// SPECIAL HANDLING FOR EVALUATOR AGENTS
 	if agent.ProviderType == "evaluator" {
@@ -1169,6 +1313,7 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 			if err := query.First(&targetResult).Error; err == nil {
 				taskAgentAnswer = targetResult.Answer
 				taskQuestionText = targetResult.Answer
+				taskTargetRunResultID = targetResult.ID
 				log.Printf("[RERUN] Found specific result: %s (Ans len: %d)", targetResult.ID, len(taskAgentAnswer))
 			} else {
 				log.Printf("[RERUN] Could not find specific result: %v", err)
@@ -1193,6 +1338,7 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 						if !isEvaluatorAgent(rAgent) {
 							taskAgentAnswer = r.Answer
 							taskQuestionText = r.Answer
+							taskTargetRunResultID = r.ID
 							log.Printf("[RERUN] HEURISTIC SUCCESS! Selected result %s from Agent %s", r.ID, r.AgentID)
 							break
 						}
@@ -1210,18 +1356,19 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 	}
 
 	task := &Task{
-		RunID:            run.ID,
-		WorkspaceID:      run.WorkspaceID,
-		AgentID:          agent.ID,
-		QuestionID:       questionID,
-		QuestionText:     taskQuestionText,
-		OriginalQuestion: taskOriginalQuestion,
-		ExpectedAnswer:   expectedAnswer,
-		AgentAnswer:      taskAgentAnswer,
-		AgentConfig:      agentConfig,
-		ProviderType:     agent.ProviderType,
-		MaxConcurrency:   agent.MaxConcurrency,
-		RetryID:          retryID,
+		RunID:             run.ID,
+		WorkspaceID:       run.WorkspaceID,
+		AgentID:           agent.ID,
+		QuestionID:        questionID,
+		QuestionText:      taskQuestionText,
+		OriginalQuestion:  taskOriginalQuestion,
+		ExpectedAnswer:    expectedAnswer,
+		AgentAnswer:       taskAgentAnswer,
+		AgentConfig:       agentConfig,
+		ProviderType:      agent.ProviderType,
+		MaxConcurrency:    agent.MaxConcurrency,
+		RetryID:           retryID,
+		TargetRunResultID: taskTargetRunResultID,
 	}
 
 	log.Printf("[RERUN] Queuing task: run=%s, agent=%s, qid=%s, ans_len=%d", task.RunID, task.AgentID, task.QuestionID, len(task.AgentAnswer))

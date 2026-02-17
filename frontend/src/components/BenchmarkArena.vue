@@ -123,7 +123,13 @@
               <div class="agent-stat-header">
                 <h4>{{ agentStat.name }}</h4>
                 <div v-if="agentStat.isEvaluator" class="evaluator-badge-small">Evaluator</div>
-                <div v-else class="quality-score-badge">{{ agentStat.qualityScore }}%</div>
+                <div
+                  v-else
+                  class="quality-score-badge"
+                  :title="'Quality Index (weighted labels): positive=100, alternative=80, partial=50, negative=0'"
+                >
+                  Quality {{ agentStat.qualityScore }}%
+                </div>
               </div>
               <div class="agent-stat-metrics">
                 <div class="metric">
@@ -135,8 +141,8 @@
                   <span class="metric-label">Avg Speed</span>
                 </div>
                 <div class="metric">
-                  <span class="metric-value">{{ agentStat.isEvaluator ? agentStat.stats.answered : (agentStat.stats.percentages.positive || 0) + '%' }}</span>
-                  <span class="metric-label">{{ agentStat.isEvaluator ? 'Evaluations' : 'Precision' }}</span>
+                  <span class="metric-value">{{ agentStat.isEvaluator ? agentStat.stats.answered : agentStat.avgEvalScoreLabel }}</span>
+                  <span class="metric-label">{{ agentStat.isEvaluator ? 'Evaluations' : 'Avg Eval' }}</span>
                 </div>
               </div>
               <div v-if="!agentStat.isEvaluator && agentStat.stats.percentages" class="validations-bar-small">
@@ -144,6 +150,12 @@
                 <div class="v-segment-small alt" :style="{ width: agentStat.stats.percentages.alternative + '%' }"></div>
                 <div class="v-segment-small par" :style="{ width: agentStat.stats.percentages.partial + '%' }"></div>
                 <div class="v-segment-small neg" :style="{ width: agentStat.stats.percentages.negative + '%' }"></div>
+              </div>
+              <div v-if="!agentStat.isEvaluator && agentStat.stats.percentages" class="validations-legend-small">
+                <span class="legend-item-small pos">Positive {{ agentStat.stats.percentages.positive }}%</span>
+                <span class="legend-item-small alt">Alternative {{ agentStat.stats.percentages.alternative }}%</span>
+                <span class="legend-item-small par">Partial {{ agentStat.stats.percentages.partial }}%</span>
+                <span class="legend-item-small neg">Negative {{ agentStat.stats.percentages.negative }}%</span>
               </div>
             </div>
           </div>
@@ -181,7 +193,12 @@
                   </div>
                 </div>
                 <div v-if="getQuestionEvaluation(question.id)" class="question-response question-evaluation">
-                  <div class="response-label">Evaluation:</div>
+                  <div class="response-label">
+                    Evaluation:
+                    <span v-if="getQuestionEvaluationScore(question.id)" class="evaluation-score-chip">
+                      {{ getQuestionEvaluationScore(question.id) }}
+                    </span>
+                  </div>
                   <div class="response-text">
                     <div
                       v-if="!expandedEvaluations[question.id]"
@@ -366,6 +383,7 @@ const retryRegistry = ref({})
 const RETRY_TRACK_TTL_MS = 20 * 60 * 1000
 const runProgressStorageKey = (runId) => `run_progress_${runId}`
 const retryStorageKey = () => `retry_tracking_${props.workspaceId || 'global'}`
+const scoreOutOfTenRegex = /(^|[^0-9])(\d{1,2})\s*\/\s*10($|[^0-9])/g
 
 function getQuestionSetAgents(questionSet) {
   return Array.isArray(questionSet?.agents) ? questionSet.agents : []
@@ -771,6 +789,7 @@ const agentStats = computed(() => {
     const results = getAgentResults(agent.id, true)
     const stats = calculateStats(results)
     const isEvaluator = isEvaluatorAgentObject(agent)
+    const evalSummary = calculateAverageEvaluationScore(results)
     
     // Calculate quality score (same logic as PDF export)
     const totalValidations = stats.validations.positive + 
@@ -791,7 +810,8 @@ const agentStats = computed(() => {
       provider: agent.provider_type,
       isEvaluator,
       stats,
-      qualityScore
+      qualityScore,
+      avgEvalScoreLabel: evalSummary.count > 0 ? `${evalSummary.avgScore10.toFixed(1)}/10` : '—'
     }
   })
 })
@@ -1149,6 +1169,43 @@ function getQuestionEvaluation(questionId, truncated = true) {
   }
 
   return null
+}
+
+function parseEvaluatorTaskQuestionID(questionId) {
+  if (!questionId || typeof questionId !== 'string') return null
+  if (!questionId.startsWith('eval-')) return null
+
+  const rest = questionId.slice(5)
+  if (rest.length < 38) return null
+  if (rest[36] !== '-') return null
+
+  const targetAgentId = rest.slice(0, 36)
+  const originalQuestionId = rest.slice(37)
+  if (!targetAgentId || !originalQuestionId) return null
+
+  return {
+    targetAgentId,
+    questionId: originalQuestionId
+  }
+}
+
+function extractScoreOutOfTen(text) {
+  if (!text || typeof text !== 'string') return null
+  scoreOutOfTenRegex.lastIndex = 0
+  const matches = [...text.matchAll(scoreOutOfTenRegex)]
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const raw = Number.parseInt(matches[i][2], 10)
+    if (Number.isNaN(raw)) continue
+    if (raw < 0 || raw > 10) continue
+    return raw
+  }
+  return null
+}
+
+function getQuestionEvaluationScore(questionId) {
+  const fullText = getQuestionEvaluation(questionId, false)
+  const score = extractScoreOutOfTen(fullText)
+  return score == null ? '' : `${score}/10`
 }
 
 function isResponseLong(questionId) {
@@ -1786,6 +1843,21 @@ function processTaskCompleted(data) {
     const qIdStr = String(data.question_id)
     if (data.retry_id) {
       markRetryFinished(qIdStr, data.retry_id)
+    }
+
+    if (qIdStr.startsWith('eval-')) {
+      let targetResultId = String(data.target_run_result_id || data.targetRunResultID || '')
+      if (!targetResultId) {
+        const parsed = parseEvaluatorTaskQuestionID(qIdStr)
+        if (parsed) {
+          targetResultId = String(runResults.value?.[parsed.targetAgentId]?.[parsed.questionId]?.id || '')
+        }
+      }
+      if (targetResultId) {
+        void wsService.getResultDetails([targetResultId]).catch((err) => {
+          console.warn('[Arena] Failed to refresh target result after evaluator completion:', err)
+        })
+      }
     }
 
     // Check if run completed for this question set.
@@ -2682,6 +2754,34 @@ function calculateStats(results) {
   }
 }
 
+function calculateAverageEvaluationScore(results) {
+  if (!Array.isArray(results) || results.length === 0) {
+    return { count: 0, avgScore10: 0 }
+  }
+
+  let total = 0
+  let count = 0
+
+  results.forEach((item) => {
+    const evals = Array.isArray(item?.evaluations) ? item.evaluations : []
+    if (evals.length === 0) return
+
+    const userEval = evals.find((ev) => ev?.rater_type === 'user' && ev?.score !== null && ev?.score !== undefined)
+    const agentEval = evals.find((ev) => ev?.rater_type === 'agent' && ev?.score !== null && ev?.score !== undefined)
+    const selected = userEval || agentEval
+    if (!selected) return
+
+    const score = Number(selected.score)
+    if (!Number.isFinite(score)) return
+
+    total += score
+    count += 1
+  })
+
+  if (count === 0) return { count: 0, avgScore10: 0 }
+  return { count, avgScore10: (total / count) / 10 }
+}
+
 // Format duration for display (same as PDF)
 function formatDuration(value) {
   const seconds = parseFloat(value)
@@ -2807,6 +2907,20 @@ defineExpose({
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 0.5rem;
+}
+
+.evaluation-score-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #d1fae5;
+  color: #065f46;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .questions-list-view .response-text {
@@ -3216,6 +3330,7 @@ defineExpose({
   background: #e7f3ff;
   padding: 4px 8px;
   border-radius: 4px;
+  cursor: help;
 }
 
 .agent-stat-metrics {
@@ -3251,6 +3366,40 @@ defineExpose({
   border-radius: 3px;
   overflow: hidden;
   background: #f0f0f0;
+}
+
+.validations-legend-small {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.legend-item-small {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+
+.legend-item-small.pos {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.legend-item-small.alt {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.legend-item-small.par {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.legend-item-small.neg {
+  background: #fee2e2;
+  color: #b91c1c;
 }
 
 .v-segment-small {

@@ -16,6 +16,55 @@ import (
 	"gorm.io/gorm"
 )
 
+func normalizeResultEvaluationsForDisplay(result *models.RunResult) {
+	if result == nil || len(result.Evaluations) == 0 {
+		return
+	}
+
+	hasUserEval := false
+	var latestAgentEval *models.Evaluation
+
+	for i := range result.Evaluations {
+		ev := result.Evaluations[i]
+		raterType := strings.ToLower(strings.TrimSpace(ev.RaterType))
+		if raterType == "user" {
+			hasUserEval = true
+			break
+		}
+		if raterType != "agent" {
+			continue
+		}
+		if latestAgentEval == nil || ev.CreatedAt.After(latestAgentEval.CreatedAt) {
+			cloned := ev
+			latestAgentEval = &cloned
+		}
+	}
+
+	if hasUserEval || latestAgentEval == nil {
+		return
+	}
+
+	// Backward-compatibility bridge for clients that only read rater_type=user.
+	synthetic := *latestAgentEval
+	// Legacy auto-evaluator runs stored low scores as "wrong", which the UI
+	// interprets as partial. Normalize those to negative for display.
+	if strings.EqualFold(strings.TrimSpace(synthetic.Rating), "wrong") && synthetic.Score != nil && *synthetic.Score <= 50 {
+		ratingCode := 3
+		synthetic.Rating = "dislike"
+		synthetic.RatingCode = &ratingCode
+	}
+	synthetic.ID = uuid.New()
+	synthetic.RaterType = "user"
+	synthetic.RaterID = uuid.Nil
+	result.Evaluations = append(result.Evaluations, synthetic)
+}
+
+func normalizeResultsEvaluationsForDisplay(results []models.RunResult) {
+	for i := range results {
+		normalizeResultEvaluationsForDisplay(&results[i])
+	}
+}
+
 func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 	var payload models.StartRunPayload
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
@@ -246,6 +295,7 @@ func (h *Hub) handleGetRunDetails(c *Connection, env models.Envelope) {
 		c.SendError(env.CorrelationID, "failed to load results: "+err.Error())
 		return
 	}
+	normalizeResultsEvaluationsForDisplay(response.Results)
 
 	// 4. Collect Agent info
 	response.Agents = make(map[string]models.Agent)
@@ -563,6 +613,7 @@ func (h *Hub) handleGetResultDetails(c *Connection, env models.Envelope) {
 		c.SendError(env.CorrelationID, "failed to fetch details")
 		return
 	}
+	normalizeResultsEvaluationsForDisplay(results)
 
 	c.SendResponse(DataResultDetails, env.CorrelationID, models.ResultDetailsResponse{Results: results})
 }
