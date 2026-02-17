@@ -330,11 +330,15 @@ import { parseEvaluatorTaskQuestionID, extractScoreOutOfTen, truncatePreviewText
 import { calculateStats, calculateAverageEvaluationScore, formatDuration } from '../utils/arena/stats.js'
 import { flattenQuestionSetQuestions, hasQuestionBeenRun as hasQuestionBeenRunUtil, getQuestionStatus as getQuestionStatusUtil, isQuestionLoading as isQuestionLoadingUtil, getQuestionStatusText as getQuestionStatusTextUtil, getQuestionStatusTooltip as getQuestionStatusTooltipUtil } from '../utils/arena/questions.js'
 import { getPrimaryResponseEntry as getPrimaryResponseEntryUtil, getQuestionResponse as getQuestionResponseUtil, getQuestionEvaluation as getQuestionEvaluationUtil } from '../utils/arena/responses.js'
-import { splitSelectedAgents as splitSelectedAgentsUtil, getEvaluatorIdsForRun as getEvaluatorIdsForRunUtil, hasEvaluatorResultsLoaded as hasEvaluatorResultsLoadedUtil, resolveRunAgentIds as resolveRunAgentIdsUtil, resolveRetryStatusItems as resolveRetryStatusItemsUtil } from '../utils/arena/runs.js'
+import { splitSelectedAgents as splitSelectedAgentsUtil, getEvaluatorIdsForRun as getEvaluatorIdsForRunUtil, hasEvaluatorResultsLoaded as hasEvaluatorResultsLoadedUtil, resolveRunAgentIds as resolveRunAgentIdsUtil } from '../utils/arena/runs.js'
 import { saveRunProgress as saveRunProgressUtil, loadRunProgress as loadRunProgressUtil, clearRunProgress as clearRunProgressUtil, hasLoadingResults as hasLoadingResultsUtil, waitForResultsToLoad as waitForResultsToLoadUtil } from '../utils/arena/progress.js'
 import { getAgentResults as getAgentResultsUtil, collectResultIDsForQuestion } from '../utils/arena/results.js'
 import { getRecentRunIdForQuestionSet, getCachedRunForQuestionSet, setCachedRunForQuestionSet } from '../utils/arena/cache.js'
+import { registerArenaWsEvents } from '../utils/arena/wsBindings.js'
 import { useArenaRetryTracking } from '../composables/useArenaRetryTracking.js'
+import { useArenaEvaluatorRuns } from '../composables/useArenaEvaluatorRuns.js'
+import { useArenaRetryReconciliation } from '../composables/useArenaRetryReconciliation.js'
+import { useArenaRunRestoration } from '../composables/useArenaRunRestoration.js'
 
 const props = defineProps({
   workspaceId: String,
@@ -386,6 +390,7 @@ const showLegacyAgentPanels = false
 const latestRunCache = new Map()
 const pendingResultsBuffer = ref([])
 const pendingEvaluatorRuns = ref({})
+let arenaWsCleanup = null
 const startRunError = ref(null)
 const isExportingPdf = ref(false)
 const isRestoringRun = ref(false)
@@ -403,6 +408,82 @@ const {
   workspaceId: () => props.workspaceId,
   getRunId: () => currentRun.value?.id || '',
   getQuestionSetId: () => currentQuestionSet.value?.id || ''
+})
+
+const {
+  resolveQuestionSetIdForRun,
+  popPendingEvaluators,
+  getPendingEvaluatorIds,
+  resolveLatestRunIDForQuestionSet,
+  triggerEvaluatorRun,
+  setRunError
+} = useArenaEvaluatorRuns({
+  wsService,
+  wsStore,
+  wsState,
+  currentRun,
+  currentQuestionSet,
+  activeRunQuestionSetId,
+  pendingEvaluatorRuns,
+  isRunning,
+  completedTasks,
+  totalTasks,
+  getFlatQuestions: () => flatQuestions.value,
+  startRunError,
+  uniqueStringIDs,
+  mergeAgentIDs,
+  getRunQuestionSetID,
+  applyRunLiteData
+})
+
+const {
+  reconcileRetriesFromServer
+} = useArenaRetryReconciliation({
+  wsService,
+  wsState,
+  wsStore,
+  retryRegistry,
+  loadRetryRegistry,
+  markRetryStarted,
+  markRetryFinished,
+  persistRetryRegistry,
+  hasActiveRetryEntries,
+  runResults,
+  isRunning,
+  activeRunQuestionSetId,
+  currentQuestionSet,
+  currentRun,
+  getDisplayAgents: () => displayAgents.value,
+  maybeStopRunningWhenIdle,
+  fetchLatestResultsForQS
+})
+
+const {
+  getRunningRunForCurrentQS,
+  restoreActiveRun
+} = useArenaRunRestoration({
+  wsService,
+  wsStore,
+  wsState,
+  currentQuestionSet,
+  currentRun,
+  runResults,
+  taskProgress,
+  isRunning,
+  activeRunQuestionSetId,
+  isRestoringRun,
+  startedTasks,
+  completedTasks,
+  totalTasks,
+  latestRunCache,
+  getFlatQuestions: () => flatQuestions.value,
+  clearRunProgress,
+  loadRunProgress,
+  saveRunProgress,
+  fetchLatestResultsForQS,
+  mergeQuestionSetForUI,
+  resolveRunAgentIds: resolveRunAgentIdsUtil,
+  extractQuestionIdsFromQuestionSet
 })
 
 function clearQuestionLoadingState(questionId) {
@@ -1128,116 +1209,6 @@ function hasEvaluatorResultsLoaded() {
   return hasEvaluatorResultsLoadedUtil(runResults.value, isEvaluatorAgentID)
 }
 
-function resolveQuestionSetIdForRun(runId = '') {
-  const targetRunId = String(runId || '')
-  if (targetRunId) {
-    const recentRuns = wsState.recentRuns || []
-    const recent = recentRuns.find((r) => String(r.id) === targetRunId)
-    if (recent?.question_set_id) {
-      return String(recent.question_set_id)
-    }
-  }
-
-  return String(
-    getRunQuestionSetID(currentRun.value) ||
-    activeRunQuestionSetId.value ||
-    currentQuestionSet.value?.id ||
-    ''
-  )
-}
-
-function queuePendingEvaluators(runId, evaluatorIds) {
-  if (!runId) return
-  const ids = uniqueStringIDs(evaluatorIds)
-  if (ids.length === 0) return
-  pendingEvaluatorRuns.value[String(runId)] = ids
-}
-
-function popPendingEvaluators(runId) {
-  if (!runId) return []
-  const key = String(runId)
-  const ids = uniqueStringIDs(pendingEvaluatorRuns.value[key] || [])
-  delete pendingEvaluatorRuns.value[key]
-  return ids
-}
-
-async function resolveLatestRunIDForQuestionSet(questionSetId) {
-  const targetQuestionSetID = String(questionSetId || '')
-  const currentRunQuestionSetID = getRunQuestionSetID(currentRun.value)
-
-  if (currentRun.value?.id && currentRunQuestionSetID === targetQuestionSetID) {
-    return String(currentRun.value.id)
-  }
-
-  const latest = await wsService.getLatestRunByQuestionSet(targetQuestionSetID)
-  if (!latest?.run?.id) return ''
-
-  applyRunLiteData(latest)
-  return String(latest.run.id)
-}
-
-async function maybeTriggerQueuedEvaluatorsIfRunAlreadyFinished(runId, questionSetId = '') {
-  const targetRunId = String(runId || '')
-  if (!targetRunId) return
-
-  const pendingIDs = uniqueStringIDs(pendingEvaluatorRuns.value[targetRunId] || [])
-  if (pendingIDs.length === 0) return
-
-  try {
-    const runLite = await wsService.getRunLite(targetRunId)
-    const status = String(runLite?.run?.status || runLite?.status || '').toLowerCase()
-    if (!status || status === 'running') return
-
-    const queuedEvaluatorIDs = popPendingEvaluators(targetRunId)
-    if (queuedEvaluatorIDs.length === 0) return
-
-    const targetQuestionSetID = String(questionSetId || resolveQuestionSetIdForRun(targetRunId))
-    void triggerEvaluatorRun(targetRunId, targetQuestionSetID, queuedEvaluatorIDs)
-  } catch (e) {
-    console.warn('[Arena] Failed to verify run status for evaluator trigger:', e)
-  }
-}
-
-async function triggerEvaluatorRun(runId, questionSetId, evaluatorAgentIds) {
-  const evalIDs = uniqueStringIDs(evaluatorAgentIds)
-  if (!runId || evalIDs.length === 0) return false
-
-  const estimatedEvalTasks = evalIDs.length * flatQuestions.value.length
-  const baseDone = Math.max(completedTasks.value, totalTasks.value)
-  if (estimatedEvalTasks > 0) {
-    totalTasks.value = baseDone + estimatedEvalTasks
-    if (completedTasks.value > totalTasks.value) {
-      completedTasks.value = totalTasks.value
-    }
-  }
-
-  isRunning.value = true
-  activeRunQuestionSetId.value = questionSetId
-  wsStore.setRunningQuestionSetId(questionSetId)
-  currentRun.value = {
-    ...(currentRun.value || {}),
-    id: String(runId),
-    question_set_id: questionSetId || getRunQuestionSetID(currentRun.value),
-    status: 'running',
-    agentIds: mergeAgentIDs(currentRun.value?.agentIds || [], evalIDs)
-  }
-
-  try {
-    await wsService.runEvaluators(String(runId), evalIDs)
-    return true
-  } catch (e) {
-    console.error('[Arena] Failed to run evaluators:', e)
-    startRunError.value = e.message || 'Failed to run evaluators.'
-    setTimeout(() => {
-      if (startRunError.value) startRunError.value = null
-    }, 5000)
-    isRunning.value = false
-    activeRunQuestionSetId.value = null
-    wsStore.setRunningQuestionSetId(null)
-    return false
-  }
-}
-
 async function startEvaluationNow() {
   if (!canStartEvaluation.value) {
     if (startEvaluationDisabledReason.value) {
@@ -1259,10 +1230,7 @@ async function startEvaluationNow() {
     await triggerEvaluatorRun(runId, questionSetId, evaluatorIds)
   } catch (e) {
     console.error('[Arena] Manual evaluator run failed:', e)
-    startRunError.value = e.message || 'Failed to run evaluators.'
-    setTimeout(() => {
-      if (startRunError.value) startRunError.value = null
-    }, 5000)
+    setRunError(e?.message || 'Failed to run evaluators.')
   }
 }
 
@@ -1292,10 +1260,7 @@ async function handleStartRun(payload) {
       await triggerEvaluatorRun(baseRunID, questionSetId, evaluatorAgentIds)
     } catch (e) {
       console.error('[Arena] Evaluator-only run failed:', e)
-      startRunError.value = e.message || 'Failed to run evaluators.'
-      setTimeout(() => {
-        if (startRunError.value) startRunError.value = null
-      }, 5000)
+      setRunError(e?.message || 'Failed to run evaluators.')
     }
     return
   }
@@ -1407,7 +1372,7 @@ function processTaskCompleted(data) {
     const completedRunId = String(currentRun.value?.id || data.run_id || '')
     const hasQueuedEvaluators =
       !!completedRunId &&
-      uniqueStringIDs(pendingEvaluatorRuns.value[completedRunId] || []).length > 0
+      getPendingEvaluatorIds(completedRunId).length > 0
     if (totalTasks.value > 0 && completedTasks.value >= totalTasks.value && (isRunning.value || hasQueuedEvaluators)) {
        const queuedEvaluatorIDs = popPendingEvaluators(completedRunId)
        if (completedRunId && queuedEvaluatorIDs.length > 0) {
@@ -1607,498 +1572,51 @@ function clearRunProgress(runId) {
   clearRunProgressUtil(runId)
 }
 
-function resolveRunAgentIds(data) {
-  return resolveRunAgentIdsUtil(data)
-}
-
-function getRunningRunForCurrentQS() {
-  if (!currentQuestionSet.value) return null
-  const runs = wsState.recentRuns || []
-  const matches = runs.filter(r => r.status === 'running' && r.question_set_id === currentQuestionSet.value.id)
-  if (matches.length === 0) return null
-  matches.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
-  return matches[0]
-}
-
-async function restoreActiveRun(runId) {
-  if (!runId || isRestoringRun.value || !wsState.isConnected) return
-  isRestoringRun.value = true
-  try {
-    const data = await wsService.getRunDetails(runId)
-    if (!data || !data.run) return
-
-    if (data.run.status === 'running') {
-      if (data.question_set && (!currentQuestionSet.value || currentQuestionSet.value.id !== data.question_set.id)) {
-        currentQuestionSet.value = mergeQuestionSetForUI(data.question_set, currentQuestionSet.value)
-      }
-      const runAgentIds = resolveRunAgentIds(data)
-      currentRun.value = { ...data.run, agentIds: runAgentIds }
-      console.log('Restored active run:', runId, 'with agents:', runAgentIds)
-      isRunning.value = true
-      activeRunQuestionSetId.value = data.run.question_set_id || data.question_set?.id || null
-      wsStore.setRunningQuestionSetId(activeRunQuestionSetId.value)
-      localStorage.setItem('activeRunId', runId)
-
-      const storedProgress = loadRunProgress(runId)
-      const questionIds = extractQuestionIdsFromQuestionSet(data.question_set)
-      const fallbackTotal = runAgentIds.length * (questionIds.length || flatQuestions.value?.length || 0)
-      totalTasks.value = data.run.total_tasks || storedProgress?.total || fallbackTotal
-
-      const baseResults = {}
-      if (questionIds.length > 0 && runAgentIds.length > 0) {
-        runAgentIds.forEach(agentId => {
-          baseResults[agentId] = {}
-          questionIds.forEach(qId => {
-            baseResults[agentId][qId] = {
-              id: null,
-              loading: true,
-              success: null,
-              answer: '',
-              error: null,
-              duration: null,
-              timestamp: null,
-              evaluations: [],
-              metadata: null,
-              queued: false
-            }
-          })
-        })
-      }
-
-      if (data.results) {
-        const restored = { ...baseResults }
-        data.results.forEach(res => {
-          const agentId = res.agent_id
-          const qIdStr = String(res.question_id)
-          if (!restored[agentId]) restored[agentId] = {}
-          restored[agentId][qIdStr] = {
-            id: res.id,
-            loading: false,
-            success: res.status === 'success',
-            answer: res.answer,
-            error: res.status === 'error' ? (res.error || 'Error') : null,
-            duration: res.duration_ms / 1000,
-            timestamp: res.created_at,
-            evaluations: res.evaluations || [],
-            metadata: res.metadata || null,
-            humanValidation: res.evaluations?.find(e => e.rater_type === 'user')?.rating
-          }
-        })
-        runResults.value = restored
-        completedTasks.value = Math.max(data.results.length, storedProgress?.completed || 0)
-      } else {
-        runResults.value = baseResults
-        completedTasks.value = storedProgress?.completed || 0
-      }
-
-      startedTasks.value = Math.max(completedTasks.value, storedProgress?.started || completedTasks.value)
-      saveRunProgress(runId)
-    } else if (runId) {
-      if (data.question_set && (!currentQuestionSet.value || currentQuestionSet.value.id !== data.question_set.id)) {
-        currentQuestionSet.value = mergeQuestionSetForUI(data.question_set, currentQuestionSet.value)
-      }
-
-      const runAgentIds = resolveRunAgentIds(data)
-      const questionIds = extractQuestionIdsFromQuestionSet(data.question_set)
-      const restored = {}
-
-      if (questionIds.length > 0 && runAgentIds.length > 0) {
-        runAgentIds.forEach(agentId => {
-          restored[agentId] = {}
-          questionIds.forEach(qId => {
-            restored[agentId][qId] = {
-              id: null,
-              loading: false,
-              queued: false,
-              success: null,
-              answer: '',
-              error: null,
-              duration: null,
-              timestamp: null,
-              evaluations: [],
-              metadata: null
-            }
-          })
-        })
-      }
-
-      if (Array.isArray(data.results)) {
-        data.results.forEach(res => {
-          const agentId = res.agent_id
-          const qIdStr = String(res.question_id)
-          if (!restored[agentId]) restored[agentId] = {}
-          restored[agentId][qIdStr] = {
-            id: res.id,
-            loading: false,
-            queued: false,
-            success: res.status === 'success',
-            answer: res.answer,
-            error: res.status === 'error' ? (res.error || 'Error') : null,
-            duration: res.duration_ms / 1000,
-            timestamp: res.created_at,
-            evaluations: res.evaluations || [],
-            metadata: res.metadata || null,
-            humanValidation: res.evaluations?.find(e => e.rater_type === 'user')?.rating
-          }
-        })
-      }
-
-      localStorage.removeItem('activeRunId')
-      clearRunProgress(runId)
-      isRunning.value = false
-      activeRunQuestionSetId.value = null
-      wsStore.setRunningQuestionSetId(null)
-      taskProgress.value = {}
-
-      currentRun.value = { ...data.run, agentIds: runAgentIds }
-      runResults.value = restored
-      totalTasks.value = data.run.total_tasks || (Array.isArray(data.results) ? data.results.length : 0)
-      completedTasks.value = Array.isArray(data.results) ? data.results.length : 0
-      startedTasks.value = completedTasks.value
-
-      const finishedQuestionSetID = String(data.run.question_set_id || data.question_set?.id || '')
-      if (finishedQuestionSetID) {
-        latestRunCache.delete(finishedQuestionSetID)
-      }
-
-      if (completedTasks.value === 0 && currentQuestionSet.value?.id) {
-        await fetchLatestResultsForQS(currentQuestionSet.value.id)
-      }
-    }
-  } catch (e) {
-    console.error('Failed to restore active run:', e)
-  } finally {
-    isRestoringRun.value = false
-  }
-}
-
-function applyRetryLoadingState(item) {
-  const agentId = item?.agent_id
-  const questionId = item?.question_id != null ? String(item.question_id) : ''
-  if (!agentId || !questionId) return
-
-  if (!runResults.value[agentId]) {
-    runResults.value[agentId] = {}
-  }
-
-  runResults.value[agentId][questionId] = {
-    ...(runResults.value[agentId][questionId] || {}),
-    loading: true,
-    queued: item?.status === 'queued',
-    error: null
-  }
-}
-
-function resolveRetryStatusItems(response) {
-  return resolveRetryStatusItemsUtil(response)
-}
-
-async function reconcileRetriesFromServer() {
-  if (!wsState.isConnected) return
-  loadRetryRegistry()
-
-  const retryIds = Object.keys(retryRegistry.value)
-  if (retryIds.length === 0) return
-
-  retryIds.forEach((retryId) => {
-    const item = retryRegistry.value[retryId]
-    if (item?.status === 'queued' || item?.status === 'running') {
-      markRetryStarted(item.question_id, retryId, {
-        runId: item.run_id,
-        agentId: item.agent_id,
-        questionSetId: item.question_set_id,
-        status: item.status
-      })
-      applyRetryLoadingState(item)
-    }
-  })
-
-  try {
-    const response = await wsService.getRetryStatus(retryIds)
-    const items = resolveRetryStatusItems(response)
-    const known = new Set()
-    let shouldRefreshResults = false
-
-    for (const item of items) {
-      if (!item?.retry_id) continue
-      const retryId = item.retry_id
-      const qIdStr = item?.question_id != null ? String(item.question_id) : ''
-      known.add(retryId)
-
-      if (item.status === 'queued' || item.status === 'running') {
-        markRetryStarted(qIdStr, retryId, {
-          runId: item.run_id,
-          agentId: item.agent_id,
-          questionSetId: currentQuestionSet.value?.id,
-          status: item.status
-        })
-        applyRetryLoadingState(item)
-        if (!isRunning.value) {
-          isRunning.value = true
-        }
-        if (!activeRunQuestionSetId.value && currentQuestionSet.value?.id) {
-          activeRunQuestionSetId.value = currentQuestionSet.value.id
-          wsStore.setRunningQuestionSetId(currentQuestionSet.value.id)
-        }
-        if (!currentRun.value?.id && item.run_id) {
-          currentRun.value = {
-            id: item.run_id,
-            status: 'running',
-            agentIds: displayAgents.value.map(a => a.id).filter(Boolean)
-          }
-        }
-      } else {
-        if (qIdStr) {
-          markRetryFinished(qIdStr, retryId, item.status)
-        } else {
-          delete retryRegistry.value[retryId]
-        }
-        shouldRefreshResults = true
-      }
-    }
-
-    retryIds.forEach((retryId) => {
-      if (known.has(retryId)) return
-      const entry = retryRegistry.value[retryId]
-      if (entry?.question_id) {
-        markRetryFinished(entry.question_id, retryId, 'not_found')
-      } else {
-        delete retryRegistry.value[retryId]
-      }
-    })
-
-    persistRetryRegistry()
-
-    if (!hasActiveRetryEntries()) {
-      maybeStopRunningWhenIdle()
-    }
-
-    if (shouldRefreshResults && currentQuestionSet.value?.id) {
-      fetchLatestResultsForQS(currentQuestionSet.value.id)
-    }
-  } catch (e) {
-    console.warn('[Arena] Failed to reconcile retries:', e)
-  }
-}
-
 // Global Listeners for THIS component
 // We need to listen to WS events to update live results
 onMounted(async () => {
-    loadRetryRegistry()
-    const activeRunId = localStorage.getItem('activeRunId')
-    if (activeRunId) {
-        await restoreActiveRun(activeRunId)
-    }
+  loadRetryRegistry()
+  const activeRunId = localStorage.getItem('activeRunId')
+  if (activeRunId) {
+    await restoreActiveRun(activeRunId)
+  }
 
-    await reconcileRetriesFromServer()
-    
-    // Safety check for loaded results
-    ensureResultsLoaded()
+  await reconcileRetriesFromServer()
 
-    wsService.on('EVT_TASK_QUEUED', (data) => {
-        const runId = String(data.run_id || '')
-        const currentRunId = String(currentRun.value?.id || '')
-        if (currentRunId && runId && runId !== currentRunId) return
+  // Safety check for loaded results
+  ensureResultsLoaded()
 
-        const agentId = data.agent_id
-        const qIdStr = String(data.question_id)
-        const isEvaluatorTask = qIdStr.startsWith('eval-')
-
-        // Backend can auto-queue evaluator tasks when primary tasks finish.
-        // Keep progress counters in sync and avoid finishing the run early on UI.
-        if (isEvaluatorTask && currentRunId && runId === currentRunId) {
-          if (!runResults.value[agentId]) runResults.value[agentId] = {}
-
-          if (!runResults.value[agentId][qIdStr]) {
-            runResults.value[agentId][qIdStr] = {
-              id: null,
-              loading: true,
-              queued: true,
-              success: false,
-              answer: '',
-              error: null,
-              duration: null,
-              timestamp: new Date().toISOString(),
-              evaluations: [],
-              metadata: null
-            }
-            totalTasks.value++
-          }
-
-          if (!isRunning.value) {
-            const targetQuestionSetID = resolveQuestionSetIdForRun(currentRunId)
-            isRunning.value = true
-            activeRunQuestionSetId.value = targetQuestionSetID
-            wsStore.setRunningQuestionSetId(targetQuestionSetID || null)
-          }
-        }
-
-        if (data.retry_id) {
-          markRetryStarted(qIdStr, data.retry_id, {
-            runId: data.run_id,
-            agentId: data.agent_id,
-            questionSetId: currentQuestionSet.value?.id,
-            status: 'queued'
-          })
-        }
-        
-        if (runResults.value[agentId] && runResults.value[agentId][qIdStr]) {
-            runResults.value[agentId][qIdStr].queued = true
-            runResults.value[agentId][qIdStr].loading = true
-            runResults.value[agentId][qIdStr].error = null
-        }
-    })
-
-    wsService.on('EVT_TASK_STARTED', (data) => {
-        if (isRunning.value) {
-            startedTasks.value++
-            if (currentRun.value?.id) {
-              saveRunProgress(currentRun.value.id)
-            }
-        }
-        if (data.retry_id) {
-          const qIdStr = String(data.question_id)
-          markRetryStarted(qIdStr, data.retry_id, {
-            runId: data.run_id,
-            agentId: data.agent_id,
-            questionSetId: currentQuestionSet.value?.id,
-            status: 'running'
-          })
-        }
-        
-        // Update specific item status if it exists (for reruns)
-        // This should happen regardless of global isRunning state
-        const agentId = data.agent_id
-        const qIdStr = String(data.question_id)
-        
-        if (runResults.value[agentId] && runResults.value[agentId][qIdStr]) {
-            runResults.value[agentId][qIdStr].queued = false
-            runResults.value[agentId][qIdStr].loading = true
-            runResults.value[agentId][qIdStr].error = null
-        }
-    })
-
-    wsService.on('EVT_TASK_PROGRESS', (data) => {
-        if (!currentRun.value) return
-        if (data.run_id !== currentRun.value.id) return
-        const agentId = data.agent_id
-        const qIdStr = String(data.question_id)
-        if (data.retry_id) {
-          markRetryStarted(qIdStr, data.retry_id, {
-            runId: data.run_id,
-            agentId: data.agent_id,
-            questionSetId: currentQuestionSet.value?.id,
-            status: 'running'
-          })
-        }
-        if (!taskProgress.value[agentId]) taskProgress.value[agentId] = {}
-        taskProgress.value[agentId][qIdStr] = {
-            message: data.message || 'Runner still processing...',
-            elapsed_ms: data.elapsed_ms || null,
-            timestamp: new Date().toISOString()
-        }
-    })
-
-    wsService.on('EVT_TASK_COMPLETED', (data) => {
-        if (!currentRun.value) {
-            if (isRunning.value) {
-                console.log('[Arena] Buffering result for pending run:', data.run_id)
-                pendingResultsBuffer.value.push(data)
-            }
-            return
-        }
-        if (data.run_id !== currentRun.value.id) return
-        processTaskCompleted(data)
-    })
-
-    wsService.on('DATA_RESULT_DETAILS', (payload) => {
-        if (!payload.results || !currentRun.value?.id) return
-        const runId = String(currentRun.value.id)
-        payload.results.forEach(res => {
-            if (String(res.run_id) !== runId) return
-            const agentId = res.agent_id
-            const qIdStr = String(res.question_id)
-            if (!runResults.value[agentId]) return // Agent not in current results
-            
-            const skeleton = runResults.value[agentId][qIdStr]
-            // Only update if the skeleton exists and has the same result ID
-            // This prevents stale downloads from overwriting correct data
-            if (!skeleton || skeleton.id !== res.id) return
-            
-            if (skeleton.content_hash) {
-                contentCache.set(skeleton.content_hash, {
-                    answer: res.answer,
-                    evaluations: res.evaluations
-                })
-            }
-            runResults.value[agentId][qIdStr] = {
-                id: res.id,
-                content_hash: skeleton.content_hash,
-                loading: false,
-                success: res.status === 'success',
-                answer: res.answer,
-                error: res.status === 'error' ? (res.error || 'Error') : null,
-                duration: res.duration_ms / 1000,
-                timestamp: res.created_at,
-                evaluations: res.evaluations || [],
-                metadata: res.metadata || null,
-                humanValidation: res.evaluations?.find(e => e.rater_type === 'user')?.rating,
-            }
-        })
-    })
-
-    wsService.on('EVT_RUN_FINISHED', (data) => {
-        const finishedRunId = data?.run_id ? String(data.run_id) : ''
-        const runIdForPending = finishedRunId || String(currentRun.value?.id || '')
-        const queuedEvaluatorIDs = popPendingEvaluators(runIdForPending)
-        if (runIdForPending && queuedEvaluatorIDs.length > 0) {
-          const targetQuestionSetID = resolveQuestionSetIdForRun(runIdForPending)
-          void triggerEvaluatorRun(runIdForPending, targetQuestionSetID, queuedEvaluatorIDs)
-          return
-        }
-
-        if (finishedRunId && currentRun.value?.id && finishedRunId !== String(currentRun.value.id)) {
-          return
-        }
-
-        // Fallback for older backends that complete the run without auto-queuing evaluators.
-        // If selected evaluators exist but no evaluator result is present yet, trigger once here.
-        const fallbackRunId = finishedRunId || String(currentRun.value?.id || '')
-        const fallbackEvaluatorIDs = getEvaluatorIdsForRun(currentRun.value)
-        if (fallbackRunId && fallbackEvaluatorIDs.length > 0 && !hasEvaluatorResultsLoaded()) {
-          const targetQuestionSetID = resolveQuestionSetIdForRun(fallbackRunId)
-          console.warn('[Arena] Run finished without evaluator results; triggering evaluator fallback', {
-            runId: fallbackRunId,
-            evaluatorCount: fallbackEvaluatorIDs.length
-          })
-          void triggerEvaluatorRun(fallbackRunId, targetQuestionSetID, fallbackEvaluatorIDs)
-          return
-        }
-
-        isRunning.value = false
-        localStorage.removeItem('activeRunId')
-        taskProgress.value = {}
-        activeRunQuestionSetId.value = null
-        wsStore.setRunningQuestionSetId(null)
-
-        if (currentRun.value) {
-          currentRun.value.status = data?.status || 'completed'
-        }
-        if (currentRun.value?.id) {
-          clearRunProgress(currentRun.value.id)
-        }
-
-        if (finishedRunId) {
-          clearRetryTrackingForRun(finishedRunId)
-        }
-        retryingQuestions.value = {}
-        clearAllLoadingStates()
-        maybeStopRunningWhenIdle()
-
-        if (currentQuestionSet.value?.id) {
-          fetchLatestResultsForQS(currentQuestionSet.value.id)
-        }
-    })
+  if (typeof arenaWsCleanup === 'function') {
+    arenaWsCleanup()
+  }
+  arenaWsCleanup = registerArenaWsEvents({
+    wsService,
+    wsStore,
+    contentCache,
+    runResults,
+    taskProgress,
+    isRunning,
+    currentRun,
+    pendingResultsBuffer,
+    currentQuestionSet,
+    activeRunQuestionSetId,
+    startedTasks,
+    totalTasks,
+    retryingQuestions,
+    saveRunProgress,
+    markRetryStarted,
+    processTaskCompleted,
+    popPendingEvaluators,
+    resolveQuestionSetIdForRun,
+    triggerEvaluatorRun,
+    getEvaluatorIdsForRun,
+    hasEvaluatorResultsLoaded,
+    clearRunProgress,
+    clearRetryTrackingForRun,
+    clearAllLoadingStates,
+    maybeStopRunningWhenIdle,
+    fetchLatestResultsForQS
+  })
 })
 
 watch(() => wsState.isConnected, async (connected) => {
@@ -2171,12 +1689,10 @@ async function exportToPdf() {
 // Removing local triggerBrowserPrint as it's handled by parent App.vue
 
 onUnmounted(() => {
-    // Remove listeners? wsService might need off() or we just accept they pile up if not careful?
-    // wsService is global singleton, we MUST remove listeners to avoid duplication/memory leak
-    // Current wsService implemention might not support proper off() or ID based clear
-    // But let's assume standard behavior or add a way.
-    // Ideally we should use a composite subscription that cleans itself up.
-    // For now, doing nothing as App.vue didn't do it either except on logout.
+    if (typeof arenaWsCleanup === 'function') {
+      arenaWsCleanup()
+      arenaWsCleanup = null
+    }
 })
 
 // Expose methods that parent might need?
