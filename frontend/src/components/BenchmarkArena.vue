@@ -333,6 +333,7 @@ import { getPrimaryResponseEntry as getPrimaryResponseEntryUtil, getQuestionResp
 import { splitSelectedAgents as splitSelectedAgentsUtil, getEvaluatorIdsForRun as getEvaluatorIdsForRunUtil, hasEvaluatorResultsLoaded as hasEvaluatorResultsLoadedUtil, resolveRunAgentIds as resolveRunAgentIdsUtil, resolveRetryStatusItems as resolveRetryStatusItemsUtil } from '../utils/arena/runs.js'
 import { saveRunProgress as saveRunProgressUtil, loadRunProgress as loadRunProgressUtil, clearRunProgress as clearRunProgressUtil, hasLoadingResults as hasLoadingResultsUtil, waitForResultsToLoad as waitForResultsToLoadUtil } from '../utils/arena/progress.js'
 import { getAgentResults as getAgentResultsUtil, collectResultIDsForQuestion } from '../utils/arena/results.js'
+import { getRecentRunIdForQuestionSet, getCachedRunForQuestionSet, setCachedRunForQuestionSet } from '../utils/arena/cache.js'
 import { useArenaRetryTracking } from '../composables/useArenaRetryTracking.js'
 
 const props = defineProps({
@@ -992,23 +993,15 @@ async function fetchLatestResultsForQS(qsId) {
 }
 
 function getRecentRunIdForQS(qsId) {
-  const runs = wsState.recentRuns || []
-  const latest = runs.find(r => r.question_set_id === qsId && r.status !== 'running')
-  return latest ? latest.id : null
+  return getRecentRunIdForQuestionSet(wsState.recentRuns, qsId)
 }
 
 function getCachedRunForQS(qsId) {
-  const cached = latestRunCache.get(qsId)
-  if (!cached) return null
-
-  const recentRunId = getRecentRunIdForQS(qsId)
-  if (recentRunId && cached.runId !== recentRunId) return null
-
-  return cached.data
+  return getCachedRunForQuestionSet(latestRunCache, wsState.recentRuns, qsId)
 }
 
 function setCachedRunForQS(qsId, data) {
-  latestRunCache.set(qsId, { data, runId: data?.run?.id || null })
+  setCachedRunForQuestionSet(latestRunCache, qsId, data)
 }
 
 function reloadResults() {
