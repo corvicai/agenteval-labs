@@ -1340,6 +1340,12 @@ onMounted(async () => {
     }
   })
 
+  wsService.on('session_expired', (payload) => {
+    if (!isAuthenticated.value) return
+    console.warn('[App] Session expired while recovering WS connection; logging out', payload)
+    handleLogout()
+  })
+
   wsService.on('connected', () => {
     clearReconnectOverlayTimer()
     afkDebugLog('ws-connected', {})

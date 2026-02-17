@@ -127,8 +127,9 @@ class WebSocketService {
         return this._establishConnection()
     }
 
-    connect(workspaceId, token = null) {
+    connect(workspaceId, token = null, options = {}) {
         this.shouldReconnect = true
+        const skipStoredToken = options?.skipStoredToken === true
         const storedUser = localStorage.getItem('user')
         let userIsImpersonating = false
         if (storedUser) {
@@ -148,7 +149,7 @@ class WebSocketService {
             if (!localStorage.getItem('impersonation_token') && legacyToken) {
                 localStorage.setItem('impersonation_token', legacyToken)
             }
-        } else if (!newToken && legacyToken) {
+        } else if (!newToken && legacyToken && !skipStoredToken) {
             // Keep legacy token for Authorization header fallback in api.js
             newToken = legacyToken
         }
@@ -380,20 +381,114 @@ class WebSocketService {
         }
     }
 
+    _getStoredWorkspaceId() {
+        const raw = localStorage.getItem('workspace')
+        if (!raw) return null
+        try {
+            const parsed = JSON.parse(raw)
+            return parsed?.id || null
+        } catch (e) {
+            return null
+        }
+    }
+
+    _isLikelyAuthError(message) {
+        const text = String(message || '').toLowerCase()
+        return text.includes('401') ||
+            text.includes('not authenticated') ||
+            text.includes('unauthorized') ||
+            text.includes('invalid token') ||
+            text.includes('user not found')
+    }
+
+    async _checkSessionValidityViaRefresh() {
+        if (!localStorage.getItem('user')) return null
+
+        try {
+            const api = await import('./api.js')
+            await api.request('/auth/refresh', { method: 'POST' })
+            return true
+        } catch (e) {
+            if (this._isLikelyAuthError(e?.message || e)) {
+                return false
+            }
+            return null
+        }
+    }
+
+    async _ensureConnectionForRequest(type) {
+        if (this.isConnected()) return
+
+        if (this.connectionPromise) {
+            console.log(`[WS] Waiting for in-flight connection before request: ${type}`)
+            try {
+                await this.connectionPromise
+            } catch (e) {
+                console.warn('[WS] In-flight connection failed before request', {
+                    type,
+                    error: e?.message || String(e)
+                })
+            }
+            if (this.isConnected()) return
+        }
+
+        const targetWorkspaceId = this.workspaceId || this._getStoredWorkspaceId() || null
+        const hasLegacyToken = !!localStorage.getItem('token')
+        const isImpersonating = localStorage.getItem('is_impersonating') === '1'
+        let reconnectError = null
+
+        try {
+            console.warn('[WS] Auto-reconnecting before request', { type, workspaceId: targetWorkspaceId })
+            await this.connect(targetWorkspaceId)
+        } catch (e) {
+            reconnectError = e
+            console.warn('[WS] Auto-reconnect failed before request', {
+                type,
+                workspaceId: targetWorkspaceId,
+                error: e?.message || String(e)
+            })
+        }
+
+        // Legacy token can become stale while cookie session is still valid.
+        // Retry once without forcing token query parameter.
+        if (!this.isConnected() && hasLegacyToken && !isImpersonating) {
+            try {
+                console.warn('[WS] Retrying reconnect without legacy token', { type, workspaceId: targetWorkspaceId })
+                await this.connect(targetWorkspaceId, null, { skipStoredToken: true })
+            } catch (e) {
+                if (!reconnectError) reconnectError = e
+                console.warn('[WS] Cookie-only reconnect failed before request', {
+                    type,
+                    workspaceId: targetWorkspaceId,
+                    error: e?.message || String(e)
+                })
+            }
+        }
+
+        if (this.isConnected()) return
+
+        const sessionValidity = await this._checkSessionValidityViaRefresh()
+        if (sessionValidity === false) {
+            this._emit('session_expired', {
+                source: 'request',
+                requestType: type,
+                error: reconnectError?.message || 'session-refresh-401'
+            })
+            throw new Error('Session expired. Please log in again.')
+        }
+
+        if (reconnectError) {
+            throw new Error(`WebSocket not connected and failed to reconnect (${reconnectError?.message || 'unknown'})`)
+        }
+
+        throw new Error('WebSocket not connected')
+    }
+
     /**
      * Sends a request and waits for a response matched by correlation_id
      * @returns {Promise}
      */
-    async request(type, payload, timeoutMs = 10000) {
-        if (!this.isConnected()) {
-            console.log(`[WS] Waiting for connection before request: ${type}`)
-            try {
-                await this.connectionPromise
-            } catch (e) {
-                throw new Error('WebSocket not connected and failed to connect')
-            }
-        }
-
+    _sendRequest(type, payload, timeoutMs = 10000) {
         return new Promise((resolve, reject) => {
             if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
                 return reject(new Error('WebSocket not connected'))
@@ -416,6 +511,15 @@ class WebSocketService {
             this.pendingRequests.set(correlationId, { resolve, reject, timeout })
             this.ws.send(JSON.stringify(envelope))
         })
+    }
+
+    async request(type, payload, timeoutMs = 10000) {
+        if (this.isConnected()) {
+            return this._sendRequest(type, payload, timeoutMs)
+        }
+
+        await this._ensureConnectionForRequest(type)
+        return this._sendRequest(type, payload, timeoutMs)
     }
 
     send(type, payload, correlationId = null) {
