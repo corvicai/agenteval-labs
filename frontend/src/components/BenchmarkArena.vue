@@ -367,6 +367,23 @@ const RETRY_TRACK_TTL_MS = 20 * 60 * 1000
 const runProgressStorageKey = (runId) => `run_progress_${runId}`
 const retryStorageKey = () => `retry_tracking_${props.workspaceId || 'global'}`
 
+function getQuestionSetAgents(questionSet) {
+  return Array.isArray(questionSet?.agents) ? questionSet.agents : []
+}
+
+function mergeQuestionSetForUI(nextSet, previousSet = null) {
+  if (!nextSet) return null
+  const nextAgents = getQuestionSetAgents(nextSet)
+  const sameSet = previousSet && previousSet.id === nextSet.id ? previousSet : null
+  const previousAgents = getQuestionSetAgents(sameSet)
+
+  // Keep local overrides when incoming question set payload is partial.
+  if (nextAgents.length === 0 && previousAgents.length > 0) {
+    return { ...nextSet, agents: previousAgents }
+  }
+  return nextSet
+}
+
 function hasActiveRetryEntries() {
   return Object.values(retryRegistry.value || {}).some((item) => item?.status === 'queued' || item?.status === 'running')
 }
@@ -429,7 +446,7 @@ watch(() => props.questionSets, (sets) => {
     // Sync current set with updated data from props
     const updated = sets.find(s => s.id === currentQuestionSet.value.id)
     if (updated) {
-      currentQuestionSet.value = updated
+      currentQuestionSet.value = mergeQuestionSetForUI(updated, currentQuestionSet.value)
     }
   }
 }, { immediate: true, deep: true })
@@ -439,7 +456,7 @@ watch(() => props.initialQuestionSetId, (newId) => {
   if (newId && newId !== currentQuestionSet.value?.id) {
     const found = props.questionSets.find(s => s.id === newId)
     if (found) {
-      currentQuestionSet.value = found
+      currentQuestionSet.value = mergeQuestionSetForUI(found, currentQuestionSet.value)
     }
   }
 })
@@ -459,7 +476,7 @@ function initQuestionSet(sets) {
     if (props.initialQuestionSetId) {
         const found = sets.find(s => s.id === props.initialQuestionSetId)
         if (found) {
-            currentQuestionSet.value = found
+            currentQuestionSet.value = mergeQuestionSetForUI(found, currentQuestionSet.value)
             return
         }
     }
@@ -468,7 +485,7 @@ function initQuestionSet(sets) {
     if (lastId) {
         const found = sets.find(s => s.id === lastId)
         if (found) {
-            currentQuestionSet.value = found
+            currentQuestionSet.value = mergeQuestionSetForUI(found, currentQuestionSet.value)
             return
         }
     }
@@ -1194,8 +1211,8 @@ async function retryQuestionForAllAgents(questionId) {
 }
 
 function selectQuestionSet(qs) {
-    currentQuestionSet.value = qs
-    emit('update:currentQuestionSet', qs)
+    currentQuestionSet.value = mergeQuestionSetForUI(qs, currentQuestionSet.value)
+    emit('update:currentQuestionSet', currentQuestionSet.value)
 }
 
 function getQuestionCount(set) {
@@ -1219,7 +1236,7 @@ function createNewQuestionSet() {
 }
 
 function handleQuestionSetUpdated(updated) {
-  currentQuestionSet.value = updated
+  currentQuestionSet.value = mergeQuestionSetForUI(updated, currentQuestionSet.value)
 }
 
 function prevQuestion() {
@@ -1485,6 +1502,26 @@ function splitSelectedAgents(payload = {}) {
 
 function mergeAgentIDs(baseIDs = [], extraIDs = []) {
   return uniqueStringIDs([...(baseIDs || []), ...(extraIDs || [])])
+}
+
+function getEvaluatorIdsForRun(runLike) {
+  return uniqueStringIDs(runLike?.agentIds || []).filter((agentId) => isEvaluatorAgentID(agentId))
+}
+
+function hasEvaluatorResultsLoaded() {
+  const resultMap = runResults.value || {}
+  for (const agentId in resultMap) {
+    const agentResults = resultMap[agentId] || {}
+    if (isEvaluatorAgentID(agentId) && Object.keys(agentResults).length > 0) {
+      return true
+    }
+    for (const questionId in agentResults) {
+      if (String(questionId).startsWith('eval-')) {
+        return true
+      }
+    }
+  }
+  return false
 }
 
 function resolveQuestionSetIdForRun(runId = '') {
@@ -1796,11 +1833,11 @@ async function handleRunSave(payload) {
       : null
     const newAgents = savedAgents || payloadAgents || currentQuestionSet.value.agents
     
-    currentQuestionSet.value = {
+    currentQuestionSet.value = mergeQuestionSetForUI({
       ...currentQuestionSet.value,
       ...savedQuestionSet,
       agents: newAgents
-    }
+    }, currentQuestionSet.value)
   }
 }
 
@@ -2043,7 +2080,7 @@ async function restoreActiveRun(runId) {
 
     if (data.run.status === 'running') {
       if (data.question_set && (!currentQuestionSet.value || currentQuestionSet.value.id !== data.question_set.id)) {
-        currentQuestionSet.value = data.question_set
+        currentQuestionSet.value = mergeQuestionSetForUI(data.question_set, currentQuestionSet.value)
       }
       const runAgentIds = resolveRunAgentIds(data)
       currentRun.value = { ...data.run, agentIds: runAgentIds }
@@ -2108,14 +2145,76 @@ async function restoreActiveRun(runId) {
       startedTasks.value = Math.max(completedTasks.value, storedProgress?.started || completedTasks.value)
       saveRunProgress(runId)
     } else if (runId) {
+      if (data.question_set && (!currentQuestionSet.value || currentQuestionSet.value.id !== data.question_set.id)) {
+        currentQuestionSet.value = mergeQuestionSetForUI(data.question_set, currentQuestionSet.value)
+      }
+
+      const runAgentIds = resolveRunAgentIds(data)
+      const questionIds = extractQuestionIdsFromQuestionSet(data.question_set)
+      const restored = {}
+
+      if (questionIds.length > 0 && runAgentIds.length > 0) {
+        runAgentIds.forEach(agentId => {
+          restored[agentId] = {}
+          questionIds.forEach(qId => {
+            restored[agentId][qId] = {
+              id: null,
+              loading: false,
+              queued: false,
+              success: null,
+              answer: '',
+              error: null,
+              duration: null,
+              timestamp: null,
+              evaluations: [],
+              metadata: null
+            }
+          })
+        })
+      }
+
+      if (Array.isArray(data.results)) {
+        data.results.forEach(res => {
+          const agentId = res.agent_id
+          const qIdStr = String(res.question_id)
+          if (!restored[agentId]) restored[agentId] = {}
+          restored[agentId][qIdStr] = {
+            id: res.id,
+            loading: false,
+            queued: false,
+            success: res.status === 'success',
+            answer: res.answer,
+            error: res.status === 'error' ? (res.error || 'Error') : null,
+            duration: res.duration_ms / 1000,
+            timestamp: res.created_at,
+            evaluations: res.evaluations || [],
+            metadata: res.metadata || null,
+            humanValidation: res.evaluations?.find(e => e.rater_type === 'user')?.rating
+          }
+        })
+      }
+
       localStorage.removeItem('activeRunId')
       clearRunProgress(runId)
       isRunning.value = false
-      currentRun.value = null
-      startedTasks.value = 0
-      completedTasks.value = 0
-      totalTasks.value = 0
+      activeRunQuestionSetId.value = null
+      wsStore.setRunningQuestionSetId(null)
       taskProgress.value = {}
+
+      currentRun.value = { ...data.run, agentIds: runAgentIds }
+      runResults.value = restored
+      totalTasks.value = data.run.total_tasks || (Array.isArray(data.results) ? data.results.length : 0)
+      completedTasks.value = Array.isArray(data.results) ? data.results.length : 0
+      startedTasks.value = completedTasks.value
+
+      const finishedQuestionSetID = String(data.run.question_set_id || data.question_set?.id || '')
+      if (finishedQuestionSetID) {
+        latestRunCache.delete(finishedQuestionSetID)
+      }
+
+      if (completedTasks.value === 0 && currentQuestionSet.value?.id) {
+        await fetchLatestResultsForQS(currentQuestionSet.value.id)
+      }
     }
   } catch (e) {
     console.error('Failed to restore active run:', e)
@@ -2415,6 +2514,20 @@ onMounted(async () => {
           return
         }
 
+        // Fallback for older backends that complete the run without auto-queuing evaluators.
+        // If selected evaluators exist but no evaluator result is present yet, trigger once here.
+        const fallbackRunId = finishedRunId || String(currentRun.value?.id || '')
+        const fallbackEvaluatorIDs = getEvaluatorIdsForRun(currentRun.value)
+        if (fallbackRunId && fallbackEvaluatorIDs.length > 0 && !hasEvaluatorResultsLoaded()) {
+          const targetQuestionSetID = resolveQuestionSetIdForRun(fallbackRunId)
+          console.warn('[Arena] Run finished without evaluator results; triggering evaluator fallback', {
+            runId: fallbackRunId,
+            evaluatorCount: fallbackEvaluatorIDs.length
+          })
+          void triggerEvaluatorRun(fallbackRunId, targetQuestionSetID, fallbackEvaluatorIDs)
+          return
+        }
+
         isRunning.value = false
         localStorage.removeItem('activeRunId')
         taskProgress.value = {}
@@ -2441,13 +2554,16 @@ onMounted(async () => {
     })
 })
 
-watch(() => wsState.isConnected, (connected) => {
+watch(() => wsState.isConnected, async (connected) => {
   if (!connected) return
   const activeRunId = localStorage.getItem('activeRunId')
   if (activeRunId) {
-    restoreActiveRun(activeRunId)
+    await restoreActiveRun(activeRunId)
+  } else if (currentQuestionSet.value?.id && !isRunning.value) {
+    latestRunCache.delete(currentQuestionSet.value.id)
+    await fetchLatestResultsForQS(currentQuestionSet.value.id)
   }
-  reconcileRetriesFromServer()
+  await reconcileRetriesFromServer()
 })
 
 // Helper function to check if any results are still loading
