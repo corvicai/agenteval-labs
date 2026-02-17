@@ -328,6 +328,8 @@ import { isEvaluatorAgentObject, toAgentID, uniqueStringIDs, mergeAgentIDs } fro
 import { mergeQuestionSetForUI, getRunQuestionSetID } from '../utils/arena/questionSet.js'
 import { parseEvaluatorTaskQuestionID, extractScoreOutOfTen, truncatePreviewText, extractQuestionIdsFromQuestionSet } from '../utils/arena/parsing.js'
 import { calculateStats, calculateAverageEvaluationScore, formatDuration } from '../utils/arena/stats.js'
+import { flattenQuestionSetQuestions, hasQuestionBeenRun as hasQuestionBeenRunUtil, getQuestionStatus as getQuestionStatusUtil, isQuestionLoading as isQuestionLoadingUtil, getQuestionStatusText as getQuestionStatusTextUtil, getQuestionStatusTooltip as getQuestionStatusTooltipUtil } from '../utils/arena/questions.js'
+import { getPrimaryResponseEntry as getPrimaryResponseEntryUtil, getQuestionResponse as getQuestionResponseUtil, getQuestionEvaluation as getQuestionEvaluationUtil } from '../utils/arena/responses.js'
 
 const props = defineProps({
   workspaceId: String,
@@ -508,34 +510,7 @@ watch(currentQuestionSet, (newSet) => {
 })
 
 // Computed
-const flatQuestions = computed(() => {
-  if (!currentQuestionSet.value?.data) return []
-  
-  let data = currentQuestionSet.value.data
-  if (typeof data === 'string') {
-    try {
-      data = JSON.parse(data)
-    } catch (e) {
-      console.error('Failed to parse question set data:', e)
-      return []
-    }
-  }
-
-  const questions = []
-  const categories = data.categories || []
-  for (let catIdx = 0; catIdx < categories.length; catIdx++) {
-    const cat = categories[catIdx]
-    const catQuestions = cat.questions || []
-    for (let qIdx = 0; qIdx < catQuestions.length; qIdx++) {
-      const q = catQuestions[qIdx]
-      const questionText = q.question || q.text || ''
-      // Generate ID matching backend format if not present: "{catIdx+1}-{qIdx+1}"
-      const qId = q.id != null && q.id !== '' ? String(q.id) : `${catIdx + 1}-${qIdx + 1}`
-      questions.push({ ...q, id: qId, category: cat.name, question: questionText })
-    }
-  }
-  return questions
-})
+const flatQuestions = computed(() => flattenQuestionSetQuestions(currentQuestionSet.value?.data))
 
 const currentQuestionIndex = computed(() => {
   if (!selectedQuestionId.value) return 0
@@ -784,20 +759,7 @@ const agentStats = computed(() => {
 
 // Check if a question has been run (has results from any agent)
 function hasQuestionBeenRun(questionId) {
-  if (!runResults.value || !questionId) return false
-  const qIdStr = String(questionId)
-  
-  for (const agentId in runResults.value) {
-    const agentResults = runResults.value[agentId]
-    if (agentResults && agentResults[qIdStr]) {
-      const result = agentResults[qIdStr]
-      // Consider it run if it has an answer, error, or was completed
-      if (result.answer || result.error || result.timestamp) {
-        return true
-      }
-    }
-  }
-  return false
+  return hasQuestionBeenRunUtil(runResults.value, questionId)
 }
 
 function persistRetryRegistry() {
@@ -937,168 +899,58 @@ function isQuestionRetrying(questionId) {
 
 // Get status class for question
 function getQuestionStatus(questionId) {
-  if (!runResults.value || !questionId) return 'status-not-run'
-  const qIdStr = String(questionId)
-
-  if (isQuestionRetrying(qIdStr)) return 'status-loading'
-  
-  let hasError = false
-  let hasAnswer = false
-  let hasSuccess = false
-  let isLoading = false
-  
-  for (const agentId in runResults.value) {
-    const agentResults = runResults.value[agentId]
-    if (agentResults && agentResults[qIdStr]) {
-      const result = agentResults[qIdStr]
-      if (result.loading) isLoading = true
-      if (result.error) hasError = true
-      if (result.answer) hasAnswer = true
-      if (result.success === true) hasSuccess = true
-    }
-  }
-  
-  if (isLoading) return 'status-loading'
-  if (hasError && !hasAnswer && !hasSuccess) return 'status-error'
-  if (hasAnswer || hasSuccess) return 'status-completed'
-  return 'status-not-run'
+  return getQuestionStatusUtil(runResults.value, questionId, isQuestionRetrying)
 }
 
 function isQuestionLoading(questionId) {
-  if (!runResults.value || !questionId) return false
-  const qIdStr = String(questionId)
-
-  if (isQuestionRetrying(qIdStr)) return true
-
-  for (const agentId in runResults.value) {
-    const agentResults = runResults.value[agentId]
-    if (agentResults && agentResults[qIdStr]?.loading) {
-      return true
-    }
-  }
-  return false
+  return isQuestionLoadingUtil(runResults.value, questionId, isQuestionRetrying)
 }
 
 // Get status text for question
 function getQuestionStatusText(questionId) {
-  const status = getQuestionStatus(questionId)
-  switch (status) {
-    case 'status-loading':
-      return '⏳ Running'
-    case 'status-error':
-      return '❌ Error'
-    case 'status-completed':
-      return '✅ Completed'
-    default:
-      return '⭕ Not Run'
-  }
+  return getQuestionStatusTextUtil(getQuestionStatus(questionId))
 }
 
 function getQuestionStatusTooltip(questionId) {
   const status = getQuestionStatus(questionId)
-  if (status !== 'status-loading') return ''
-
-  const qIdStr = String(questionId)
-  let best = null
-
-  for (const agentId in taskProgress.value) {
-    const entry = taskProgress.value[agentId]?.[qIdStr]
-    if (!entry) continue
-    if (!best) {
-      best = entry
-      continue
-    }
-
-    const entryElapsed = typeof entry.elapsed_ms === 'number' ? entry.elapsed_ms : -1
-    const bestElapsed = typeof best.elapsed_ms === 'number' ? best.elapsed_ms : -1
-    if (entryElapsed > bestElapsed) {
-      best = entry
-      continue
-    }
-
-    if (entryElapsed === bestElapsed) {
-      const entryTs = Date.parse(entry.timestamp || '')
-      const bestTs = Date.parse(best.timestamp || '')
-      if (!Number.isNaN(entryTs) && (Number.isNaN(bestTs) || entryTs > bestTs)) {
-        best = entry
-      }
-    }
-  }
-
-  if (best?.message) return best.message
-  if (isQuestionRetrying(qIdStr)) return 'Retry is still running...'
-  return 'Task is running...'
+  return getQuestionStatusTooltipUtil(status, questionId, taskProgress.value, isQuestionRetrying)
 }
 
 function getPrimaryResponseEntry(questionId) {
-  if (!runResults.value || !questionId) return null
-  const qIdStr = String(questionId)
-  if (isQuestionRetrying(qIdStr)) return null
-
-  const orderedPrimaryAgents = mergedAgents.value
-    .filter((agent) => !isEvaluatorAgentObject(agent))
-    .sort((a, b) => (a.position || 0) - (b.position || 0))
-
-  const primaryAgentIDs = orderedPrimaryAgents.map((agent) => agent.id)
-  if (primaryAgentIDs.length === 0) {
-    for (const agentId in runResults.value) {
-      if (isEvaluatorAgentID(agentId)) continue
-      primaryAgentIDs.push(agentId)
-    }
-  }
-
-  for (const agentId of primaryAgentIDs) {
-    const result = runResults.value[agentId]?.[qIdStr]
-    if (result && result.answer && !result.loading && !result.error) {
-      return { agentId, answer: result.answer }
-    }
-  }
-
-  return null
+  return getPrimaryResponseEntryUtil({
+    runResults: runResults.value,
+    questionId,
+    mergedAgents: mergedAgents.value,
+    isEvaluatorAgentObject,
+    isEvaluatorAgentID,
+    isQuestionRetrying
+  })
 }
 
 function getQuestionResponse(questionId, truncated = true) {
-  const entry = getPrimaryResponseEntry(questionId)
-  if (!entry) return null
-  return truncated ? truncatePreviewText(entry.answer) : entry.answer
+  return getQuestionResponseUtil({
+    runResults: runResults.value,
+    questionId,
+    mergedAgents: mergedAgents.value,
+    isEvaluatorAgentObject,
+    isEvaluatorAgentID,
+    isQuestionRetrying,
+    truncatePreviewText,
+    truncated
+  })
 }
 
 function getQuestionEvaluation(questionId, truncated = true) {
-  if (!runResults.value || !questionId) return null
-
-  const responseEntry = getPrimaryResponseEntry(questionId)
-  if (!responseEntry?.agentId) return null
-
-  const qIdStr = String(questionId)
-  const expectedEvalKey = `eval-${responseEntry.agentId}-${qIdStr}`
-
-  const evaluatorAgentIDs = mergedAgents.value
-    .filter((agent) => isEvaluatorAgentObject(agent))
-    .sort((a, b) => (a.position || 0) - (b.position || 0))
-    .map((agent) => agent.id)
-
-  if (evaluatorAgentIDs.length === 0) {
-    for (const agentId in runResults.value) {
-      if (isEvaluatorAgentID(agentId)) evaluatorAgentIDs.push(agentId)
-    }
-  }
-
-  for (const evaluatorId of evaluatorAgentIDs) {
-    const evaluatorResults = runResults.value[evaluatorId]
-    if (!evaluatorResults) continue
-
-    let result = evaluatorResults[expectedEvalKey]
-    if (!result) {
-      const fallbackKey = Object.keys(evaluatorResults).find((key) => String(key).endsWith(`-${qIdStr}`))
-      if (fallbackKey) result = evaluatorResults[fallbackKey]
-    }
-
-    if (result && result.answer && !result.loading && !result.error) {
-      return truncated ? truncatePreviewText(result.answer) : result.answer
-    }
-  }
-
-  return null
+  return getQuestionEvaluationUtil({
+    runResults: runResults.value,
+    questionId,
+    mergedAgents: mergedAgents.value,
+    isEvaluatorAgentObject,
+    isEvaluatorAgentID,
+    isQuestionRetrying,
+    truncatePreviewText,
+    truncated
+  })
 }
 
 function getQuestionEvaluationScore(questionId) {
