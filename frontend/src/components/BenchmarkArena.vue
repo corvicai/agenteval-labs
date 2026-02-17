@@ -330,6 +330,7 @@ import { parseEvaluatorTaskQuestionID, extractScoreOutOfTen, truncatePreviewText
 import { calculateStats, calculateAverageEvaluationScore, formatDuration } from '../utils/arena/stats.js'
 import { flattenQuestionSetQuestions, hasQuestionBeenRun as hasQuestionBeenRunUtil, getQuestionStatus as getQuestionStatusUtil, isQuestionLoading as isQuestionLoadingUtil, getQuestionStatusText as getQuestionStatusTextUtil, getQuestionStatusTooltip as getQuestionStatusTooltipUtil } from '../utils/arena/questions.js'
 import { getPrimaryResponseEntry as getPrimaryResponseEntryUtil, getQuestionResponse as getQuestionResponseUtil, getQuestionEvaluation as getQuestionEvaluationUtil } from '../utils/arena/responses.js'
+import { splitSelectedAgents as splitSelectedAgentsUtil, getEvaluatorIdsForRun as getEvaluatorIdsForRunUtil, hasEvaluatorResultsLoaded as hasEvaluatorResultsLoadedUtil, resolveRunAgentIds as resolveRunAgentIdsUtil, resolveRetryStatusItems as resolveRetryStatusItemsUtil } from '../utils/arena/runs.js'
 
 const props = defineProps({
   workspaceId: String,
@@ -1273,45 +1274,15 @@ watch(selectedQuestionId, (newId) => {
 })
 
 function splitSelectedAgents(payload = {}) {
-  const requested = uniqueStringIDs(payload.agentIds || [])
-
-  let primary = uniqueStringIDs(payload.primaryAgentIds || [])
-  let evaluators = uniqueStringIDs(payload.evaluatorAgentIds || [])
-
-  if (primary.length === 0 && evaluators.length === 0 && requested.length > 0) {
-    requested.forEach((agentId) => {
-      if (isEvaluatorAgentID(agentId)) {
-        evaluators.push(agentId)
-      } else {
-        primary.push(agentId)
-      }
-    })
-  }
-
-  return {
-    primary: uniqueStringIDs(primary),
-    evaluators: uniqueStringIDs(evaluators)
-  }
+  return splitSelectedAgentsUtil(payload, isEvaluatorAgentID)
 }
 
 function getEvaluatorIdsForRun(runLike) {
-  return uniqueStringIDs(runLike?.agentIds || []).filter((agentId) => isEvaluatorAgentID(agentId))
+  return getEvaluatorIdsForRunUtil(runLike, isEvaluatorAgentID)
 }
 
 function hasEvaluatorResultsLoaded() {
-  const resultMap = runResults.value || {}
-  for (const agentId in resultMap) {
-    const agentResults = resultMap[agentId] || {}
-    if (isEvaluatorAgentID(agentId) && Object.keys(agentResults).length > 0) {
-      return true
-    }
-    for (const questionId in agentResults) {
-      if (String(questionId).startsWith('eval-')) {
-        return true
-      }
-    }
-  }
-  return false
+  return hasEvaluatorResultsLoadedUtil(runResults.value, isEvaluatorAgentID)
 }
 
 function resolveQuestionSetIdForRun(runId = '') {
@@ -1804,37 +1775,7 @@ function clearRunProgress(runId) {
 }
 
 function resolveRunAgentIds(data) {
-  const ids = new Set()
-
-  const runAgentIds = data?.run?.agent_ids || data?.run?.agentIds
-  if (Array.isArray(runAgentIds)) {
-    runAgentIds.forEach(id => {
-      if (id) ids.add(id)
-    })
-  }
-
-  if (Array.isArray(data?.results)) {
-    data.results.forEach(res => {
-      if (res?.agent_id) ids.add(res.agent_id)
-    })
-  }
-
-  const qsAgents = data?.question_set?.agents
-  if (Array.isArray(qsAgents)) {
-    qsAgents.forEach(agent => {
-      const id = agent?.agent_id || agent?.id
-      const enabled = agent?.enabled
-      if (id && enabled !== false) ids.add(id)
-    })
-  }
-
-  if (data?.agents && typeof data.agents === 'object' && !Array.isArray(data.agents)) {
-    Object.keys(data.agents).forEach(id => {
-      if (id) ids.add(id)
-    })
-  }
-
-  return Array.from(ids).filter(Boolean)
+  return resolveRunAgentIdsUtil(data)
 }
 
 function getRunningRunForCurrentQS() {
@@ -2016,9 +1957,7 @@ function applyRetryLoadingState(item) {
 }
 
 function resolveRetryStatusItems(response) {
-  if (Array.isArray(response?.items)) return response.items
-  if (Array.isArray(response)) return response
-  return []
+  return resolveRetryStatusItemsUtil(response)
 }
 
 async function reconcileRetriesFromServer() {
