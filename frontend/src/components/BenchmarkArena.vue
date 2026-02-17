@@ -331,6 +331,9 @@ import { calculateStats, calculateAverageEvaluationScore, formatDuration } from 
 import { flattenQuestionSetQuestions, hasQuestionBeenRun as hasQuestionBeenRunUtil, getQuestionStatus as getQuestionStatusUtil, isQuestionLoading as isQuestionLoadingUtil, getQuestionStatusText as getQuestionStatusTextUtil, getQuestionStatusTooltip as getQuestionStatusTooltipUtil } from '../utils/arena/questions.js'
 import { getPrimaryResponseEntry as getPrimaryResponseEntryUtil, getQuestionResponse as getQuestionResponseUtil, getQuestionEvaluation as getQuestionEvaluationUtil } from '../utils/arena/responses.js'
 import { splitSelectedAgents as splitSelectedAgentsUtil, getEvaluatorIdsForRun as getEvaluatorIdsForRunUtil, hasEvaluatorResultsLoaded as hasEvaluatorResultsLoadedUtil, resolveRunAgentIds as resolveRunAgentIdsUtil, resolveRetryStatusItems as resolveRetryStatusItemsUtil } from '../utils/arena/runs.js'
+import { saveRunProgress as saveRunProgressUtil, loadRunProgress as loadRunProgressUtil, clearRunProgress as clearRunProgressUtil, hasLoadingResults as hasLoadingResultsUtil, waitForResultsToLoad as waitForResultsToLoadUtil } from '../utils/arena/progress.js'
+import { getAgentResults as getAgentResultsUtil, collectResultIDsForQuestion } from '../utils/arena/results.js'
+import { useArenaRetryTracking } from '../composables/useArenaRetryTracking.js'
 
 const props = defineProps({
   workspaceId: String,
@@ -385,15 +388,21 @@ const pendingEvaluatorRuns = ref({})
 const startRunError = ref(null)
 const isExportingPdf = ref(false)
 const isRestoringRun = ref(false)
-const retryingQuestions = ref({})
-const retryRegistry = ref({})
-const RETRY_TRACK_TTL_MS = 20 * 60 * 1000
-const runProgressStorageKey = (runId) => `run_progress_${runId}`
-const retryStorageKey = () => `retry_tracking_${props.workspaceId || 'global'}`
-
-function hasActiveRetryEntries() {
-  return Object.values(retryRegistry.value || {}).some((item) => item?.status === 'queued' || item?.status === 'running')
-}
+const {
+  retryingQuestions,
+  retryRegistry,
+  hasActiveRetryEntries,
+  persistRetryRegistry,
+  loadRetryRegistry,
+  markRetryStarted,
+  markRetryFinished: markRetryFinishedState,
+  clearRetryTrackingForRun,
+  isQuestionRetrying
+} = useArenaRetryTracking({
+  workspaceId: () => props.workspaceId,
+  getRunId: () => currentRun.value?.id || '',
+  getQuestionSetId: () => currentQuestionSet.value?.id || ''
+})
 
 function clearQuestionLoadingState(questionId) {
   if (!questionId) return
@@ -763,139 +772,12 @@ function hasQuestionBeenRun(questionId) {
   return hasQuestionBeenRunUtil(runResults.value, questionId)
 }
 
-function persistRetryRegistry() {
-  try {
-    localStorage.setItem(retryStorageKey(), JSON.stringify(retryRegistry.value))
-  } catch (e) {
-    console.warn('[Arena] Failed to persist retry registry:', e)
-  }
-}
-
-function pruneRetryRegistry() {
-  const now = Date.now()
-  const next = {}
-  for (const retryId in retryRegistry.value) {
-    const item = retryRegistry.value[retryId]
-    const expiresAt = item?.expires_at ? new Date(item.expires_at).getTime() : 0
-    if (expiresAt > now) {
-      next[retryId] = item
-    }
-  }
-  retryRegistry.value = next
-}
-
-function rebuildRetryingQuestionsFromRegistry() {
-  const active = {}
-  for (const retryId in retryRegistry.value) {
-    const item = retryRegistry.value[retryId]
-    if (!item?.question_id) continue
-    if (item.status !== 'queued' && item.status !== 'running') continue
-    const qIdStr = String(item.question_id)
-    if (!active[qIdStr]) active[qIdStr] = {}
-    active[qIdStr][retryId] = true
-  }
-  retryingQuestions.value = active
-}
-
-function loadRetryRegistry() {
-  try {
-    const raw = localStorage.getItem(retryStorageKey())
-    if (!raw) {
-      retryRegistry.value = {}
-      retryingQuestions.value = {}
-      return
-    }
-    const parsed = JSON.parse(raw)
-    if (parsed && typeof parsed === 'object') {
-      retryRegistry.value = parsed
-      pruneRetryRegistry()
-      rebuildRetryingQuestionsFromRegistry()
-      persistRetryRegistry()
-    }
-  } catch (e) {
-    console.warn('[Arena] Failed to load retry registry:', e)
-    retryRegistry.value = {}
-    retryingQuestions.value = {}
-  }
-}
-
-function markRetryStarted(questionId, retryId, meta = {}) {
-  if (!questionId || !retryId) return
-  const qIdStr = String(questionId)
-  if (!retryingQuestions.value[qIdStr]) {
-    retryingQuestions.value[qIdStr] = {}
-  }
-  retryingQuestions.value[qIdStr][retryId] = true
-
-  if (String(retryId).startsWith('local-')) {
-    return
-  }
-
-  const now = Date.now()
-  const existing = retryRegistry.value[retryId] || {}
-  retryRegistry.value[retryId] = {
-    retry_id: retryId,
-    run_id: meta.runId || existing.run_id || currentRun.value?.id || '',
-    agent_id: meta.agentId || existing.agent_id || '',
-    question_id: qIdStr,
-    question_set_id: meta.questionSetId || existing.question_set_id || currentQuestionSet.value?.id || '',
-    status: meta.status || existing.status || 'queued',
-    updated_at: new Date(now).toISOString(),
-    expires_at: new Date(now + RETRY_TRACK_TTL_MS).toISOString()
-  }
-
-  persistRetryRegistry()
-}
-
 function markRetryFinished(questionId, retryId, status = 'completed') {
-  if (!questionId || !retryId) return
-  const qIdStr = String(questionId)
-  const retries = retryingQuestions.value[qIdStr]
-  if (retries) {
-    delete retries[retryId]
-    if (Object.keys(retries).length === 0) {
-      delete retryingQuestions.value[qIdStr]
-    }
-  }
-
-  const existing = retryRegistry.value[retryId]
-  if (existing) {
-    if (status === 'queued' || status === 'running') {
-      existing.status = status
-      existing.updated_at = new Date().toISOString()
-      existing.expires_at = new Date(Date.now() + RETRY_TRACK_TTL_MS).toISOString()
-      retryRegistry.value[retryId] = existing
-    } else {
-      delete retryRegistry.value[retryId]
-    }
-    persistRetryRegistry()
-  }
-
-  if (!retryingQuestions.value[qIdStr]) {
-    clearQuestionLoadingState(qIdStr)
+  const result = markRetryFinishedState(questionId, retryId, status)
+  if (result?.questionCleared) {
+    clearQuestionLoadingState(questionId)
   }
   maybeStopRunningWhenIdle()
-}
-
-function clearRetryTrackingForRun(runId) {
-  if (!runId) return
-  let changed = false
-  for (const retryId in retryRegistry.value) {
-    if (retryRegistry.value[retryId]?.run_id === runId) {
-      delete retryRegistry.value[retryId]
-      changed = true
-    }
-  }
-  if (changed) {
-    persistRetryRegistry()
-  }
-}
-
-function isQuestionRetrying(questionId) {
-  if (!questionId) return false
-  const qIdStr = String(questionId)
-  const retries = retryingQuestions.value[qIdStr]
-  return !!(retries && Object.keys(retries).length > 0)
 }
 
 // Get status class for question
@@ -1215,57 +1097,25 @@ watch(() => wsState.recentRuns, () => {
 }, { deep: true })
 
 function getAgentResults(agentId, includeAllQuestions = false) {
-  const results = runResults.value[agentId] || {}
-  const isEvaluator = isEvaluatorAgentID(agentId)
-  
-  // Filter questions if a specific one is selected (unless includeAllQuestions is true)
-  const targetQuestions = (includeAllQuestions || !selectedQuestionId.value)
-    ? flatQuestions.value
-    : flatQuestions.value.filter(q => String(q.id) === String(selectedQuestionId.value))
-
-  const isAgentRunning = isRunning.value && 
-                       activeRunQuestionSetId.value === currentQuestionSet.value?.id && 
-                       currentRun.value?.agentIds?.includes(agentId)
-
-  return targetQuestions.map(q => {
-    const qIdStr = String(q.id)
-    let res = results[qIdStr]
-    if (!res && isEvaluator) {
-      const evalKey = Object.keys(results).find((key) => String(key).endsWith(`-${qIdStr}`))
-      if (evalKey) {
-        res = results[evalKey]
-      }
-    }
-    const ratingMap = { 'like': 'positive', 'dislike': 'negative', 'valid': 'alternative', 'wrong': 'partial' }
-    return {
-      question: q,
-      answer: res ? res.answer : null,
-      loading: res ? res.loading : isAgentRunning,
-      queued: res ? res.queued : false,
-      duration: res ? res.duration : null,
-      timestamp: res ? res.timestamp : null,
-      id: res ? res.id : null,
-      error: res ? res.error : null,
-      metadata: res ? res.metadata : null,
-      progress: taskProgress.value[agentId]?.[qIdStr] || null,
-      evaluations: res ? (res.evaluations || []) : [],
-      humanValidation: res ? (ratingMap[res.humanValidation] || res.humanValidation) : null
-    }
+  return getAgentResultsUtil({
+    runResults: runResults.value,
+    agentId,
+    includeAllQuestions,
+    selectedQuestionId: selectedQuestionId.value,
+    flatQuestions: flatQuestions.value,
+    isEvaluatorAgentID,
+    isRunning: isRunning.value,
+    activeRunQuestionSetId: activeRunQuestionSetId.value,
+    currentQuestionSetId: currentQuestionSet.value?.id,
+    currentRunAgentIds: currentRun.value?.agentIds || [],
+    taskProgress: taskProgress.value
   })
 }
 
 function prioritizeQuestionInQueue(questionId) {
-    if (!runResults.value) return
-    const idsToPrioritize = []
-    for (const agentId in runResults.value) {
-        const agentResults = runResults.value[agentId]
-        const qIdStr = String(questionId)
-        if (agentResults[qIdStr]) {
-            idsToPrioritize.push(agentResults[qIdStr].id)
-        }
-    }
+    const idsToPrioritize = collectResultIDsForQuestion(runResults.value, questionId)
     if (idsToPrioritize.length > 0) {
-        downloadManager.prioritize(idsToPrioritize[0])
+      downloadManager.prioritize(idsToPrioritize[0])
     }
 }
 
@@ -1748,30 +1598,20 @@ function onRetry(agentId, index) {
 }
 
 function saveRunProgress(runId) {
-  if (!runId) return
-  const payload = {
+  saveRunProgressUtil(runId, {
     started: startedTasks.value || 0,
     completed: completedTasks.value || 0,
     total: totalTasks.value || 0,
     updatedAt: new Date().toISOString()
-  }
-  localStorage.setItem(runProgressStorageKey(runId), JSON.stringify(payload))
+  })
 }
 
 function loadRunProgress(runId) {
-  if (!runId) return null
-  const raw = localStorage.getItem(runProgressStorageKey(runId))
-  if (!raw) return null
-  try {
-    return JSON.parse(raw)
-  } catch (e) {
-    return null
-  }
+  return loadRunProgressUtil(runId)
 }
 
 function clearRunProgress(runId) {
-  if (!runId) return
-  localStorage.removeItem(runProgressStorageKey(runId))
+  clearRunProgressUtil(runId)
 }
 
 function resolveRunAgentIds(data) {
@@ -2282,30 +2122,16 @@ watch(() => wsState.isConnected, async (connected) => {
 
 // Helper function to check if any results are still loading
 function hasLoadingResults() {
-  if (!runResults.value || !currentRun.value) return false
-  
-  for (const agentId in runResults.value) {
-    const agentResults = runResults.value[agentId]
-    for (const qId in agentResults) {
-      if (agentResults[qId].loading) {
-        return true
-      }
-    }
-  }
-  return false
+  return hasLoadingResultsUtil(runResults.value, currentRun.value)
 }
 
 // Wait for all results to finish loading (with timeout)
 async function waitForResultsToLoad(maxWaitMs = 5000) {
-  const startTime = Date.now()
-  // Wait for isLoadingResults to be false
-  while (isLoadingResults.value && (Date.now() - startTime) < maxWaitMs) {
-    await new Promise(resolve => setTimeout(resolve, 100))
-  }
-  // Then wait for any individual results that are still loading
-  while (hasLoadingResults() && (Date.now() - startTime) < maxWaitMs) {
-    await new Promise(resolve => setTimeout(resolve, 100))
-  }
+  await waitForResultsToLoadUtil({
+    isLoadingResults: () => isLoadingResults.value,
+    hasLoadingResults: () => hasLoadingResults(),
+    maxWaitMs
+  })
 }
 
 async function exportToPdf() {
