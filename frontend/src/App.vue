@@ -1348,10 +1348,9 @@ onMounted(async () => {
       afkOverlayVisible.value = false
       reconnectOverlayMode.value = 'afk'
     }
-    if (!afkOverlayVisible.value) {
-      lastAfkResetAt = Date.now()
-      scheduleAfkTimer()
-    }
+    // WS reconnect is not user activity. Keep the existing AFK clock so that
+    // transient disconnects don't "refresh" the remaining time.
+    if (!afkOverlayVisible.value) scheduleAfkTimer()
     refreshAfkDebugState()
   })
 
