@@ -324,6 +324,10 @@ import { downloadManager } from '../services/DownloadManager.js'
 import { contentCache } from '../services/ContentCache.js'
 import { useWSStore } from '../stores/wsStore'
 import { processContent } from '../utils/markdown.js'
+import { isEvaluatorAgentObject, toAgentID, uniqueStringIDs, mergeAgentIDs } from '../utils/arena/agents.js'
+import { mergeQuestionSetForUI, getRunQuestionSetID } from '../utils/arena/questionSet.js'
+import { parseEvaluatorTaskQuestionID, extractScoreOutOfTen, truncatePreviewText, extractQuestionIdsFromQuestionSet } from '../utils/arena/parsing.js'
+import { calculateStats, calculateAverageEvaluationScore, formatDuration } from '../utils/arena/stats.js'
 
 const props = defineProps({
   workspaceId: String,
@@ -383,24 +387,6 @@ const retryRegistry = ref({})
 const RETRY_TRACK_TTL_MS = 20 * 60 * 1000
 const runProgressStorageKey = (runId) => `run_progress_${runId}`
 const retryStorageKey = () => `retry_tracking_${props.workspaceId || 'global'}`
-const scoreOutOfTenRegex = /(^|[^0-9])(\d{1,2})\s*\/\s*10($|[^0-9])/g
-
-function getQuestionSetAgents(questionSet) {
-  return Array.isArray(questionSet?.agents) ? questionSet.agents : []
-}
-
-function mergeQuestionSetForUI(nextSet, previousSet = null) {
-  if (!nextSet) return null
-  const nextAgents = getQuestionSetAgents(nextSet)
-  const sameSet = previousSet && previousSet.id === nextSet.id ? previousSet : null
-  const previousAgents = getQuestionSetAgents(sameSet)
-
-  // Keep local overrides when incoming question set payload is partial.
-  if (nextAgents.length === 0 && previousAgents.length > 0) {
-    return { ...nextSet, agents: previousAgents }
-  }
-  return nextSet
-}
 
 function hasActiveRetryEntries() {
   return Object.values(retryRegistry.value || {}).some((item) => item?.status === 'queued' || item?.status === 'running')
@@ -651,23 +637,6 @@ const mergedAgents = computed(() => {
   return merged
 })
 
-function isLegacyEvaluatorConfig(config) {
-  if (!config || typeof config !== 'object') return false
-  const hasTargetField = Object.prototype.hasOwnProperty.call(config, 'target_agent_id')
-  const hasOpenAIMode = typeof config.openai_mode === 'string' && config.openai_mode.trim() !== ''
-  const hasSystemPrompt = typeof config.system_prompt === 'string' && config.system_prompt.trim() !== ''
-  return hasTargetField || hasOpenAIMode || hasSystemPrompt
-}
-
-function isEvaluatorAgentObject(agent) {
-  if (!agent) return false
-  if (agent.provider_type === 'evaluator') return true
-  if (agent.provider_type !== 'openai') return false
-  if (isLegacyEvaluatorConfig(agent.config || {})) return true
-  const name = String(agent.name || '').toLowerCase()
-  return name.includes('evaluator')
-}
-
 function getAgentById(agentId) {
   if (!agentId) return null
   return mergedAgents.value.find((a) => a.id === agentId) || props.agents.find((a) => a.id === agentId) || null
@@ -676,11 +645,6 @@ function getAgentById(agentId) {
 function isEvaluatorAgentID(agentId) {
   const agent = getAgentById(agentId)
   return isEvaluatorAgentObject(agent)
-}
-
-function toAgentID(entry) {
-  if (!entry || typeof entry !== 'object') return ''
-  return String(entry.agent_id || entry.agentID || entry.id || '')
 }
 
 const selectedAgentIdsForQuestionSet = computed(() => {
@@ -1066,40 +1030,6 @@ function getQuestionStatusTooltip(questionId) {
   return 'Task is running...'
 }
 
-function truncatePreviewText(text, maxLen = 150) {
-  if (!text || typeof text !== 'string') return ''
-  if (text.length <= maxLen) return text
-
-  const base64ImagePattern = /data:image\/[^;]+;base64,[A-Za-z0-9+/=\s]+/g
-  const truncatedText = text.substring(0, maxLen)
-
-  let lastImageEnd = -1
-  let match
-  const pattern = new RegExp(base64ImagePattern)
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index + match[0].length <= maxLen) {
-      lastImageEnd = match.index + match[0].length
-    } else {
-      break
-    }
-  }
-
-  if (lastImageEnd > 0 && lastImageEnd > maxLen) {
-    return text.substring(0, lastImageEnd) + '...'
-  }
-
-  let truncateAt = maxLen
-  if (truncatedText.includes('data:image')) {
-    const imageStart = truncatedText.lastIndexOf('data:image')
-    if (imageStart >= 0) {
-      const afterImage = truncatedText.indexOf(' ', imageStart + 100)
-      truncateAt = afterImage > 0 && afterImage <= maxLen ? afterImage : imageStart
-    }
-  }
-
-  return text.substring(0, truncateAt) + '...'
-}
-
 function getPrimaryResponseEntry(questionId) {
   if (!runResults.value || !questionId) return null
   const qIdStr = String(questionId)
@@ -1171,37 +1101,6 @@ function getQuestionEvaluation(questionId, truncated = true) {
   return null
 }
 
-function parseEvaluatorTaskQuestionID(questionId) {
-  if (!questionId || typeof questionId !== 'string') return null
-  if (!questionId.startsWith('eval-')) return null
-
-  const rest = questionId.slice(5)
-  if (rest.length < 38) return null
-  if (rest[36] !== '-') return null
-
-  const targetAgentId = rest.slice(0, 36)
-  const originalQuestionId = rest.slice(37)
-  if (!targetAgentId || !originalQuestionId) return null
-
-  return {
-    targetAgentId,
-    questionId: originalQuestionId
-  }
-}
-
-function extractScoreOutOfTen(text) {
-  if (!text || typeof text !== 'string') return null
-  scoreOutOfTenRegex.lastIndex = 0
-  const matches = [...text.matchAll(scoreOutOfTenRegex)]
-  for (let i = matches.length - 1; i >= 0; i--) {
-    const raw = Number.parseInt(matches[i][2], 10)
-    if (Number.isNaN(raw)) continue
-    if (raw < 0 || raw > 10) continue
-    return raw
-  }
-  return null
-}
-
 function getQuestionEvaluationScore(questionId) {
   const fullText = getQuestionEvaluation(questionId, false)
   const score = extractScoreOutOfTen(fullText)
@@ -1270,16 +1169,6 @@ async function retryQuestionForAllAgents(questionId) {
 function selectQuestionSet(qs) {
     currentQuestionSet.value = mergeQuestionSetForUI(qs, currentQuestionSet.value)
     emit('update:currentQuestionSet', currentQuestionSet.value)
-}
-
-function getQuestionCount(set) {
-  if (!set || !set.data) return 0
-  let data = set.data
-  if (typeof data === 'string') {
-    try { data = JSON.parse(data) } catch (e) { return 0 }
-  }
-  if (!data.categories) return 0
-  return data.categories.reduce((acc, cat) => acc + (cat.questions ? cat.questions.length : 0), 0)
 }
 
 function startRunSetup() {
@@ -1531,10 +1420,6 @@ watch(selectedQuestionId, (newId) => {
   if (newId) prioritizeQuestionInQueue(newId)
 })
 
-function uniqueStringIDs(ids = []) {
-  return [...new Set((ids || []).map((id) => String(id)).filter(Boolean))]
-}
-
 function splitSelectedAgents(payload = {}) {
   const requested = uniqueStringIDs(payload.agentIds || [])
 
@@ -1555,10 +1440,6 @@ function splitSelectedAgents(payload = {}) {
     primary: uniqueStringIDs(primary),
     evaluators: uniqueStringIDs(evaluators)
   }
-}
-
-function mergeAgentIDs(baseIDs = [], extraIDs = []) {
-  return uniqueStringIDs([...(baseIDs || []), ...(extraIDs || [])])
 }
 
 function getEvaluatorIdsForRun(runLike) {
@@ -1612,11 +1493,6 @@ function popPendingEvaluators(runId) {
   const ids = uniqueStringIDs(pendingEvaluatorRuns.value[key] || [])
   delete pendingEvaluatorRuns.value[key]
   return ids
-}
-
-function getRunQuestionSetID(run) {
-  if (!run) return ''
-  return String(run.question_set_id || run.questionSetID || run.questionSetId || '')
 }
 
 async function resolveLatestRunIDForQuestionSet(questionSetId) {
@@ -2107,31 +1983,6 @@ function resolveRunAgentIds(data) {
   }
 
   return Array.from(ids).filter(Boolean)
-}
-
-function extractQuestionIdsFromQuestionSet(questionSet) {
-  const ids = []
-  if (!questionSet?.data) return ids
-  let data = questionSet.data
-  if (typeof data === 'string') {
-    try {
-      data = JSON.parse(data)
-    } catch (e) {
-      return ids
-    }
-  }
-
-  const categories = data.categories || []
-  for (let catIdx = 0; catIdx < categories.length; catIdx++) {
-    const cat = categories[catIdx]
-    const catQuestions = cat.questions || []
-    for (let qIdx = 0; qIdx < catQuestions.length; qIdx++) {
-      const q = catQuestions[qIdx]
-      const qId = q.id != null && q.id !== '' ? String(q.id) : `${catIdx + 1}-${qIdx + 1}`
-      ids.push(qId)
-    }
-  }
-  return ids
 }
 
 function getRunningRunForCurrentQS() {
@@ -2708,88 +2559,6 @@ async function exportToPdf() {
 }
 
 // Removing local triggerBrowserPrint as it's handled by parent App.vue
-
-function calculateStats(results) {
-  if (!results || !Array.isArray(results)) return {}
-  
-  let answered = 0
-  let errors = 0
-  let total = results.length
-  let totalDuration = 0
-  let validations = { positive: 0, negative: 0, alternative: 0, partial: 0, notEvaluated: 0 }
-  
-  results.forEach(r => {
-    const hasAnswer = r.answer
-    if (hasAnswer) answered++
-    if (r.error) errors++
-    if (r.duration) totalDuration += parseFloat(r.duration) || 0
-    
-    // Only count validations for questions that have been answered
-    if (hasAnswer) {
-      if (r.humanValidation) {
-        const v = r.humanValidation.toLowerCase()
-        validations[v] = (validations[v] || 0) + 1
-      } else {
-        validations.notEvaluated++
-      }
-    }
-  })
-  
-  // Calculate percentages based on answered questions, not total questions
-  const answeredCount = answered || 1 // Avoid division by zero
-  const totalValidations = validations.positive + validations.negative + validations.alternative + validations.partial + validations.notEvaluated
-  
-  return {
-    answered,
-    totalQuestions: total,
-    errors,
-    avgDuration: answered ? (totalDuration / answered).toFixed(2) : 0,
-    validations,
-    percentages: {
-      positive: totalValidations > 0 ? Math.round((validations.positive || 0) / totalValidations * 100) : 0,
-      negative: totalValidations > 0 ? Math.round((validations.negative || 0) / totalValidations * 100) : 0,
-      alternative: totalValidations > 0 ? Math.round((validations.alternative || 0) / totalValidations * 100) : 0,
-      partial: totalValidations > 0 ? Math.round((validations.partial || 0) / totalValidations * 100) : 0,
-    }
-  }
-}
-
-function calculateAverageEvaluationScore(results) {
-  if (!Array.isArray(results) || results.length === 0) {
-    return { count: 0, avgScore10: 0 }
-  }
-
-  let total = 0
-  let count = 0
-
-  results.forEach((item) => {
-    const evals = Array.isArray(item?.evaluations) ? item.evaluations : []
-    if (evals.length === 0) return
-
-    const userEval = evals.find((ev) => ev?.rater_type === 'user' && ev?.score !== null && ev?.score !== undefined)
-    const agentEval = evals.find((ev) => ev?.rater_type === 'agent' && ev?.score !== null && ev?.score !== undefined)
-    const selected = userEval || agentEval
-    if (!selected) return
-
-    const score = Number(selected.score)
-    if (!Number.isFinite(score)) return
-
-    total += score
-    count += 1
-  })
-
-  if (count === 0) return { count: 0, avgScore10: 0 }
-  return { count, avgScore10: (total / count) / 10 }
-}
-
-// Format duration for display (same as PDF)
-function formatDuration(value) {
-  const seconds = parseFloat(value)
-  if (Number.isFinite(seconds)) {
-    return seconds >= 60 ? `${(seconds / 60).toFixed(1)} min` : `${seconds.toFixed(1)} s`
-  }
-  return '0 s'
-}
 
 onUnmounted(() => {
     // Remove listeners? wsService might need off() or we just accept they pile up if not careful?
