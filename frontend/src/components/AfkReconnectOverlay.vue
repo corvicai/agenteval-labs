@@ -2,10 +2,10 @@
   <Transition name="afk-fade">
     <div v-if="active" class="afk-overlay">
       <div class="afk-card">
-        <h2>We missed you. Glad you're back.</h2>
-        <p>Your session is currently paused. Click below to reconnect.</p>
+        <h2>{{ titleText }}</h2>
+        <p>{{ descriptionText }}</p>
         <button class="btn-reconnect" :disabled="reconnecting" @click="$emit('reconnect')">
-          {{ reconnecting ? 'Reconnecting...' : 'Reconnect now' }}
+          {{ reconnecting ? 'Reconnecting...' : buttonText }}
         </button>
       </div>
     </div>
@@ -13,7 +13,9 @@
 </template>
 
 <script setup>
-defineProps({
+import { computed } from 'vue'
+
+const props = defineProps({
   active: {
     type: Boolean,
     default: false
@@ -21,10 +23,31 @@ defineProps({
   reconnecting: {
     type: Boolean,
     default: false
+  },
+  mode: {
+    type: String,
+    default: 'afk',
+    validator: (value) => ['afk', 'connection'].includes(value)
   }
 })
 
 defineEmits(['reconnect'])
+
+const titleText = computed(() => (
+  props.mode === 'connection'
+    ? 'Connection lost. Trying to recover.'
+    : "We missed you. Glad you're back."
+))
+
+const descriptionText = computed(() => (
+  props.mode === 'connection'
+    ? 'The real-time connection dropped. Click below if it does not reconnect automatically.'
+    : 'Your session is currently paused. Click below to reconnect.'
+))
+
+const buttonText = computed(() => (
+  props.mode === 'connection' ? 'Reconnect' : 'Reconnect now'
+))
 </script>
 
 <style scoped>

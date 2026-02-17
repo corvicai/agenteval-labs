@@ -182,8 +182,35 @@
     <AfkReconnectOverlay
       :active="afkOverlayVisible"
       :reconnecting="isReconnectingFromAfk"
+      :mode="reconnectOverlayMode"
       @reconnect="reconnectFromAfk"
     />
+    <div
+      v-if="afkDebug.enabled"
+      style="position: fixed; left: 12px; bottom: 12px; z-index: 12000; width: min(420px, calc(100vw - 24px)); background: rgba(2, 6, 23, 0.92); color: #e2e8f0; border: 1px solid rgba(148, 163, 184, 0.35); border-radius: 10px; padding: 10px 12px; font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; box-shadow: 0 12px 24px rgba(2, 6, 23, 0.45);"
+    >
+      <div style="font-weight: 700; color: #93c5fd; margin-bottom: 6px;">AFK DEBUG</div>
+      <div>timeout={{ Math.round(afkTimeoutMs / 1000) }}s | remaining={{ afkDebugRemainingLabel }}</div>
+      <div>last={{ afkDebug.lastActivitySource }} | {{ afkDebugLastActivityLabel }}</div>
+      <div>canTrack={{ afkDebug.canTrack }} ws={{ wsState.isConnected }} vis={{ afkDebug.visibility }} focus={{ afkDebug.hasFocus }}</div>
+      <div>overlay={{ afkOverlayVisible }} ({{ reconnectOverlayMode }}) reconnecting={{ isReconnectingFromAfk }}</div>
+      <div>events={{ afkDebug.activityCount }} ignored={{ afkDebug.ignoredCount }} heartbeats={{ afkDebug.heartbeatCount }}</div>
+      <div v-if="afkDebug.lastDisconnectReason">lastDisconnect={{ afkDebug.lastDisconnectReason }}</div>
+      <div style="display: flex; gap: 8px; margin-top: 8px;">
+        <button
+          style="border: 1px solid #475569; background: #0f172a; color: #e2e8f0; border-radius: 6px; padding: 4px 8px; cursor: pointer;"
+          @click="markUserActivity(true, 'debug-button')"
+        >
+          Ping activity
+        </button>
+        <button
+          style="border: 1px solid #7f1d1d; background: #450a0a; color: #fecaca; border-radius: 6px; padding: 4px 8px; cursor: pointer;"
+          @click="forceAfkDebug"
+        >
+          Force AFK
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -256,16 +283,107 @@ const currentWorkspace = ref(api.getStoredWorkspace())
 const refreshInterval = ref(null)
 const afkOverlayVisible = ref(false)
 const isReconnectingFromAfk = ref(false)
+const reconnectOverlayMode = ref('afk')
+const reconnectOverlayGraceMs = 7000
+let reconnectOverlayTimer = null
 
-const DEFAULT_AFK_TIMEOUT_MS = 180000
-const parsedAfkTimeout = Number.parseInt(config.AFK_TIMEOUT_MS || '', 10)
-const afkTimeoutMs = Number.isFinite(parsedAfkTimeout) && parsedAfkTimeout > 0
+const DEFAULT_AFK_TIMEOUT_MS = 300000
+const MIN_AFK_TIMEOUT_MS = 60000
+const afkForegroundHeartbeatMs = 15000
+let afkForegroundHeartbeat = null
+const afkDebugStorageKey = 'afk_debug'
+const afkDebugTickMs = 1000
+let afkDebugTicker = null
+
+function parseAfkTimeoutMs(rawValue) {
+  if (rawValue == null) return null
+  const value = String(rawValue).trim().toLowerCase()
+  if (!value) return null
+
+  if (/^\d+$/.test(value)) {
+    const timeout = Number.parseInt(value, 10)
+    return Number.isFinite(timeout) ? timeout : null
+  }
+
+  const match = value.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h)$/)
+  if (!match) return null
+
+  const amount = Number.parseFloat(match[1])
+  const unit = match[2]
+  if (!Number.isFinite(amount) || amount <= 0) return null
+
+  if (unit === 'ms') return Math.round(amount)
+  if (unit === 's') return Math.round(amount * 1000)
+  if (unit === 'm') return Math.round(amount * 60000)
+  if (unit === 'h') return Math.round(amount * 3600000)
+  return null
+}
+
+const parsedAfkTimeout = parseAfkTimeoutMs(config.AFK_TIMEOUT_MS)
+const afkTimeoutMs = Number.isFinite(parsedAfkTimeout) && parsedAfkTimeout >= MIN_AFK_TIMEOUT_MS
   ? parsedAfkTimeout
   : DEFAULT_AFK_TIMEOUT_MS
-const afkActivityEvents = ['pointerdown', 'pointermove', 'mousemove', 'touchstart', 'scroll', 'wheel', 'keydown', 'keyup', 'click', 'input']
+if (parsedAfkTimeout != null && parsedAfkTimeout < MIN_AFK_TIMEOUT_MS) {
+  console.warn('[AFK] Ignoring too-low AFK timeout configuration', {
+    configured: config.AFK_TIMEOUT_MS,
+    parsedMs: parsedAfkTimeout,
+    minMs: MIN_AFK_TIMEOUT_MS,
+    usingMs: afkTimeoutMs
+  })
+}
+
+const afkActivityEvents = [
+  'pointerdown',
+  'pointerup',
+  'pointermove',
+  'mousemove',
+  'mousedown',
+  'mouseup',
+  'touchstart',
+  'touchmove',
+  'scroll',
+  'wheel',
+  'keydown',
+  'keyup',
+  'click',
+  'dblclick',
+  'input',
+  'focus'
+]
 let afkTimer = null
 let lastAfkResetAt = 0
 const afkListenerOptions = { capture: true, passive: true }
+const afkDebug = ref({
+  enabled: false,
+  nowMs: Date.now(),
+  remainingMs: null,
+  lastActivityAt: 0,
+  lastActivitySource: '-',
+  visibility: typeof document !== 'undefined' ? document.visibilityState : 'unknown',
+  hasFocus: typeof document !== 'undefined' ? document.hasFocus() : false,
+  canTrack: false,
+  wsConnected: false,
+  overlayVisible: false,
+  overlayMode: 'afk',
+  activityCount: 0,
+  ignoredCount: 0,
+  heartbeatCount: 0,
+  lastDisconnectReason: '',
+  lastDisconnectAt: 0
+})
+
+const afkDebugRemainingLabel = computed(() => {
+  const remainingMs = afkDebug.value.remainingMs
+  if (remainingMs == null) return '-'
+  return `${Math.max(0, Math.ceil(remainingMs / 1000))}s`
+})
+
+const afkDebugLastActivityLabel = computed(() => {
+  if (!afkDebug.value.lastActivityAt) return '-'
+  const ageSec = Math.max(0, Math.floor((afkDebug.value.nowMs - afkDebug.value.lastActivityAt) / 1000))
+  const time = new Date(afkDebug.value.lastActivityAt).toLocaleTimeString()
+  return `${ageSec}s ago @ ${time}`
+})
 
 const agents = computed(() => wsState.agents)
 const questionSets = computed(() => wsState.questionSets)
@@ -481,6 +599,9 @@ async function handleLogout() {
   currentWorkspace.value = null
   afkOverlayVisible.value = false
   isReconnectingFromAfk.value = false
+  reconnectOverlayMode.value = 'afk'
+  clearReconnectOverlayTimer()
+  clearAfkForegroundHeartbeat()
   clearAfkTimer()
   // runResults, currentRun, tasks, selectedQuestionId are now in BenchmarkArena and will be unmounted.
   // We just need to clear global state.
@@ -890,10 +1011,157 @@ function clearAfkTimer() {
   if (!afkTimer) return
   clearTimeout(afkTimer)
   afkTimer = null
+  refreshAfkDebugState()
+}
+
+function afkDebugLog(eventName, details = {}) {
+  if (!afkDebug.value.enabled) return
+  console.debug('[AFK][debug]', eventName, details)
+}
+
+function clearAfkDebugTicker() {
+  if (!afkDebugTicker) return
+  clearInterval(afkDebugTicker)
+  afkDebugTicker = null
+}
+
+function refreshAfkDebugState(extra = {}) {
+  if (!afkDebug.value.enabled) return
+  const remainingMs = canTrackAfk() && lastAfkResetAt
+    ? Math.max(0, afkTimeoutMs - (Date.now() - lastAfkResetAt))
+    : null
+  afkDebug.value = {
+    ...afkDebug.value,
+    nowMs: Date.now(),
+    remainingMs,
+    visibility: document.visibilityState,
+    hasFocus: document.hasFocus(),
+    canTrack: canTrackAfk(),
+    wsConnected: wsState.isConnected,
+    overlayVisible: afkOverlayVisible.value,
+    overlayMode: reconnectOverlayMode.value,
+    ...extra
+  }
+}
+
+function setAfkDebugEnabled(enabled) {
+  afkDebug.value = { ...afkDebug.value, enabled }
+  if (!enabled) {
+    clearAfkDebugTicker()
+    try {
+      delete window.__AFK_DEBUG__
+    } catch (_) {}
+    return
+  }
+
+  refreshAfkDebugState()
+  if (!afkDebugTicker) {
+    afkDebugTicker = setInterval(() => refreshAfkDebugState(), afkDebugTickMs)
+  }
+
+  window.__AFK_DEBUG__ = {
+    status: () => ({ ...afkDebug.value }),
+    ping: () => markUserActivity(true, 'debug-api'),
+    forceAfk: () => activateAfkMode(),
+    enable: () => {
+      localStorage.setItem(afkDebugStorageKey, '1')
+      setAfkDebugEnabled(true)
+    },
+    disable: () => {
+      localStorage.removeItem(afkDebugStorageKey)
+      setAfkDebugEnabled(false)
+    }
+  }
+
+  afkDebugLog('enabled', {
+    timeoutMs: afkTimeoutMs,
+    configuredTimeout: config.AFK_TIMEOUT_MS || null
+  })
+}
+
+function setupAfkDebugMode() {
+  const params = new URLSearchParams(window.location.search)
+  const queryFlag = params.get('afkDebug')
+  if (queryFlag === '1') localStorage.setItem(afkDebugStorageKey, '1')
+  if (queryFlag === '0') localStorage.removeItem(afkDebugStorageKey)
+  const enabled = localStorage.getItem(afkDebugStorageKey) === '1'
+  setAfkDebugEnabled(enabled)
+}
+
+function teardownAfkDebugMode() {
+  clearAfkDebugTicker()
+  try {
+    delete window.__AFK_DEBUG__
+  } catch (_) {}
+}
+
+function clearReconnectOverlayTimer() {
+  if (!reconnectOverlayTimer) return
+  clearTimeout(reconnectOverlayTimer)
+  reconnectOverlayTimer = null
+  refreshAfkDebugState()
+}
+
+function clearAfkForegroundHeartbeat() {
+  if (!afkForegroundHeartbeat) return
+  clearInterval(afkForegroundHeartbeat)
+  afkForegroundHeartbeat = null
+  refreshAfkDebugState()
+}
+
+function startAfkForegroundHeartbeat() {
+  if (afkForegroundHeartbeat) return
+  afkForegroundHeartbeat = setInterval(() => {
+    if (!canTrackAfk()) return
+    if (document.visibilityState !== 'visible') return
+    if (!document.hasFocus()) return
+    afkDebug.value = {
+      ...afkDebug.value,
+      heartbeatCount: afkDebug.value.heartbeatCount + 1
+    }
+    markUserActivity(true, 'heartbeat')
+  }, afkForegroundHeartbeatMs)
+  refreshAfkDebugState()
+}
+
+function showReconnectOverlay(mode = 'afk') {
+  reconnectOverlayMode.value = mode
+  afkOverlayVisible.value = true
+  isReconnectingFromAfk.value = false
+  afkDebugLog('overlay-visible', { mode })
+  refreshAfkDebugState()
+}
+
+function markUserActivity(force = false, source = 'activity') {
+  if (afkOverlayVisible.value) return
+  const now = Date.now()
+  if (!force && now - lastAfkResetAt < 500) {
+    afkDebug.value = {
+      ...afkDebug.value,
+      ignoredCount: afkDebug.value.ignoredCount + 1
+    }
+    afkDebugLog('activity-ignored', { source, deltaMs: now - lastAfkResetAt })
+    return
+  }
+  lastAfkResetAt = now
+  afkDebug.value = {
+    ...afkDebug.value,
+    activityCount: afkDebug.value.activityCount + 1,
+    lastActivityAt: now,
+    lastActivitySource: source
+  }
+  afkDebugLog('activity', { source, force })
+  if (!canTrackAfk()) {
+    clearAfkTimer()
+    refreshAfkDebugState()
+    return
+  }
+  scheduleAfkTimer()
+  refreshAfkDebugState()
 }
 
 function canTrackAfk() {
-  return isAuthenticated.value && appReady.value && !wsState.isMaintenance && !wsState.runningQuestionSetId
+  return isAuthenticated.value && appReady.value && wsState.isConnected && !wsState.isMaintenance && !wsState.runningQuestionSetId
 }
 
 async function activateAfkMode() {
@@ -902,9 +1170,19 @@ async function activateAfkMode() {
     timeoutMs: afkTimeoutMs,
     workspaceId: currentWorkspace.value?.id || null
   })
-  afkOverlayVisible.value = true
-  isReconnectingFromAfk.value = false
+  afkDebugLog('activate-afk', {
+    timeoutMs: afkTimeoutMs,
+    workspaceId: currentWorkspace.value?.id || null
+  })
+  afkDebug.value = {
+    ...afkDebug.value,
+    lastDisconnectReason: 'afk-timeout',
+    lastDisconnectAt: Date.now()
+  }
+  clearReconnectOverlayTimer()
+  showReconnectOverlay('afk')
   wsDisconnect('afk-timeout')
+  refreshAfkDebugState()
 }
 
 function scheduleAfkTimer() {
@@ -916,32 +1194,28 @@ function scheduleAfkTimer() {
   const elapsed = Date.now() - lastAfkResetAt
   const remaining = afkTimeoutMs - elapsed
   if (remaining <= 0) {
+    afkDebugLog('schedule-expired', { elapsed, remaining, timeoutMs: afkTimeoutMs })
     activateAfkMode()
     return
   }
   afkTimer = setTimeout(() => activateAfkMode(), remaining)
+  afkDebugLog('schedule', { remainingMs: remaining, elapsedMs: elapsed, timeoutMs: afkTimeoutMs })
+  refreshAfkDebugState()
 }
 
-function handleUserActivity() {
-  if (afkOverlayVisible.value) return
-  const now = Date.now()
-  if (now - lastAfkResetAt < 500) return
-  lastAfkResetAt = now
-  if (!canTrackAfk()) {
-    clearAfkTimer()
-    return
-  }
-  scheduleAfkTimer()
+function handleUserActivity(event) {
+  markUserActivity(false, event?.type || 'event')
 }
 
 function handleVisibilityChange() {
   if (document.visibilityState !== 'visible') {
     clearAfkTimer()
+    afkDebugLog('hidden', {})
+    refreshAfkDebugState()
     return
   }
-  if (afkOverlayVisible.value) return
-  lastAfkResetAt = Date.now()
-  scheduleAfkTimer()
+  afkDebugLog('visible', {})
+  markUserActivity(true, 'visibilitychange')
 }
 
 function bindAfkActivityListeners() {
@@ -949,6 +1223,8 @@ function bindAfkActivityListeners() {
     window.addEventListener(eventName, handleUserActivity, afkListenerOptions)
     document.addEventListener(eventName, handleUserActivity, afkListenerOptions)
   })
+  window.addEventListener('focus', handleUserActivity)
+  document.addEventListener('selectionchange', handleUserActivity)
 }
 
 function unbindAfkActivityListeners() {
@@ -956,28 +1232,52 @@ function unbindAfkActivityListeners() {
     window.removeEventListener(eventName, handleUserActivity, afkListenerOptions)
     document.removeEventListener(eventName, handleUserActivity, afkListenerOptions)
   })
+  window.removeEventListener('focus', handleUserActivity)
+  document.removeEventListener('selectionchange', handleUserActivity)
+}
+
+function forceAfkDebug() {
+  activateAfkMode()
 }
 
 async function reconnectFromAfk() {
   if (isReconnectingFromAfk.value) return
-  console.log('[AFK] Reconnect requested by user')
+  clearReconnectOverlayTimer()
+  afkDebugLog('manual-reconnect-click', { overlayMode: reconnectOverlayMode.value })
+
+  if (wsState.isConnected) {
+    afkOverlayVisible.value = false
+    reconnectOverlayMode.value = 'afk'
+    lastAfkResetAt = Date.now()
+    scheduleAfkTimer()
+    refreshAfkDebugState()
+    return
+  }
+
+  console.log('[AFK] Reconnect requested by user', { mode: reconnectOverlayMode.value })
   isReconnectingFromAfk.value = true
   try {
     await wsConnect(currentWorkspace.value?.id || null)
     await syncState()
     afkOverlayVisible.value = false
+    reconnectOverlayMode.value = 'afk'
     lastAfkResetAt = Date.now()
     scheduleAfkTimer()
     console.log('[AFK] Reconnected and sync completed')
+    afkDebugLog('manual-reconnect-success', {})
   } catch (e) {
-    console.error('[App] AFK reconnect failed:', e)
+    console.error('[App] Reconnect failed:', e)
+    afkDebugLog('manual-reconnect-failed', { error: e?.message || String(e) })
   } finally {
     isReconnectingFromAfk.value = false
+    refreshAfkDebugState()
   }
 }
 
 onMounted(async () => {
+  setupAfkDebugMode()
   bindAfkActivityListeners()
+  startAfkForegroundHeartbeat()
   document.addEventListener('visibilitychange', handleVisibilityChange)
   // If we think we are authenticated, verify with the backend
   if (isAuthenticated.value) {
@@ -1040,15 +1340,53 @@ onMounted(async () => {
     }
   })
 
+  wsService.on('connected', () => {
+    clearReconnectOverlayTimer()
+    afkDebugLog('ws-connected', {})
+    if (afkOverlayVisible.value && reconnectOverlayMode.value === 'connection') {
+      console.log('[App] WS reconnected automatically; closing reconnect overlay')
+      afkOverlayVisible.value = false
+      reconnectOverlayMode.value = 'afk'
+    }
+    if (!afkOverlayVisible.value) {
+      lastAfkResetAt = Date.now()
+      scheduleAfkTimer()
+    }
+    refreshAfkDebugState()
+  })
+
   wsService.on('disconnected', (payload) => {
     if (!isAuthenticated.value || !appReady.value) return
     if (afkOverlayVisible.value) return
     if (wsState.isMaintenance) return
     const reason = payload?.disconnectReason || 'unknown'
+    afkDebug.value = {
+      ...afkDebug.value,
+      lastDisconnectReason: reason,
+      lastDisconnectAt: Date.now()
+    }
+    afkDebugLog('ws-disconnected', {
+      reason,
+      reconnectPlanned: payload?.reconnectPlanned !== false,
+      code: payload?.code,
+      wsReason: payload?.reason || ''
+    })
     if (['afk-timeout', 'logout', 'app-unmount'].includes(reason)) return
+    clearAfkTimer()
+    const reconnectPlanned = payload?.reconnectPlanned !== false
+    if (reconnectPlanned) {
+      clearReconnectOverlayTimer()
+      reconnectOverlayTimer = setTimeout(() => {
+        if (!isAuthenticated.value || !appReady.value) return
+        if (wsState.isMaintenance || wsState.isConnected || afkOverlayVisible.value) return
+        console.warn('[App] WS still disconnected after grace period; showing reconnect overlay', payload)
+        showReconnectOverlay('connection')
+      }, reconnectOverlayGraceMs)
+      return
+    }
     console.warn('[App] WS disconnected; showing reconnect overlay', payload)
-    afkOverlayVisible.value = true
-    isReconnectingFromAfk.value = false
+    showReconnectOverlay('connection')
+    refreshAfkDebugState()
   })
 
   wsService.on('EVT_FORCE_LOGOUT', (payload) => {
@@ -1068,6 +1406,9 @@ onUnmounted(() => {
   unbindAfkActivityListeners()
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   clearAfkTimer()
+  clearAfkForegroundHeartbeat()
+  clearReconnectOverlayTimer()
+  teardownAfkDebugMode()
   wsDisconnect('app-unmount')
   if (refreshInterval.value) {
     clearInterval(refreshInterval.value)
