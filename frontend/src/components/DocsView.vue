@@ -18,26 +18,52 @@
             <li><strong>Max Parallel Requests:</strong> Limits how many concurrent questions this agent processes. Defaults to 5.</li>
           </ul>
         </div>
+
+        <div class="card">
+          <h3>Supported Agent Providers</h3>
+          <p>The platform supports multiple providers for execution and evaluation workflows.</p>
+          <ul>
+            <li><strong>mcp:</strong> Corvic agents via MCP endpoint + token.</li>
+            <li><strong>openai:</strong> OpenAI API.</li>
+            <li><strong>nvidia:</strong> NVIDIA NIM API. Browse models at <a href="https://build.nvidia.com/models" target="_blank" rel="noopener noreferrer">build.nvidia.com/models</a>.</li>
+            <li><strong>openrouter:</strong> OpenRouter API.</li>
+            <li><strong>anthropic:</strong> Anthropic/Claude API.</li>
+            <li><strong>openai_compatible:</strong> Any provider exposing an OpenAI-compatible endpoint (<code>base_url</code> + API key).</li>
+            <li><strong>evaluator:</strong> Multi-provider evaluator agent (recommended for benchmark scoring).</li>
+          </ul>
+        </div>
       </section>
 
       <!-- Section: Evaluators -->
       <section class="docs-section">
         <h2>⚖️ Evaluator Agents</h2>
-        <p>Evaluators are specialized agents powered by the <strong>OpenAI API</strong>. They analyze responses from other agents, comparing them against expected answers (when provided) to calculate accuracy and quality scores.</p>
+        <p>Evaluators are specialized agents that score responses from other agents. They compare each answer against the user question and, when present, the expected answer.</p>
         
         <div class="card">
-          <h3>1. OpenAI Setup</h3>
-          <p>To use an Evaluator, you need to configure your API credentials:</p>
+          <h3>1. Evaluator Provider Options</h3>
+          <p>You can pick one evaluator provider explicitly in <strong>Manage Agents</strong>:</p>
           <ul>
-            <li>Go to the <a href="https://platform.openai.com/" target="_blank">OpenAI Platform</a>.</li>
-            <li>In <strong>API Keys</strong>, create a new secret key.</li>
-            <li>In <strong>Settings > Billing</strong>, ensure you have credits available.</li>
-            <li>In <strong>Agent Manager</strong>, create an agent with provider <code>evaluator</code> (OpenAI) and paste your key in the <code>api_key</code> field.</li>
+            <li><strong>OpenAI:</strong> <code>openai_api_key</code> (or <code>api_key</code>), model, and optional managed mode (<code>prompt_id</code>).</li>
+            <li><strong>NVIDIA NIM:</strong> <code>nvidia_api_key</code>, model, and optional base URL/system prompt.</li>
+            <li><strong>OpenRouter:</strong> <code>openrouter_api_key</code>, model, and optional base URL/system prompt.</li>
+            <li><strong>Anthropic:</strong> <code>anthropic_api_key</code>, model, and optional system prompt.</li>
+            <li><strong>OpenAI-Compatible:</strong> <code>compatible_api_key</code> + <code>compatible_base_url</code> for custom providers.</li>
+          </ul>
+          <p><strong>Tip:</strong> prefer explicit provider selection instead of auto mode for predictable behavior.</p>
+        </div>
+
+        <div class="card">
+          <h3>2. Credentials Checklist</h3>
+          <p>Before running benchmark/evaluation, ensure:</p>
+          <ul>
+            <li>Your selected evaluator provider has valid credentials.</li>
+            <li>The evaluator has a target primary agent in Run Setup.</li>
+            <li>Your account has quota/credits in the provider dashboard.</li>
           </ul>
         </div>
 
         <div class="card highlight">
-          <h3>2. Recommended System Prompt</h3>
+          <h3>3. Recommended System Prompt</h3>
           <p>Configure your <strong>Evaluator Agent</strong> with this system prompt to ensure consistent and strict benchmarking results. This is the same default prompt used by the API when Standard mode has no custom system prompt.</p>
           
           <div class="code-block-container">
@@ -60,6 +86,18 @@
       <section class="docs-section">
         <h2>💡 Tips & Best Practices</h2>
         <div class="tips-grid">
+          <div class="tip-card">
+            <h4>Expected Answer Quality</h4>
+            <p>Write expected answers logically and concisely. State exactly what must be present in a correct response, with objective facts and format constraints when needed.</p>
+          </div>
+          <div class="tip-card">
+            <h4>Expected Answer Structure</h4>
+            <p>Prefer clear acceptance criteria: required entities, key facts, units/dates, and boundaries for correctness. Avoid vague goals like “good explanation”.</p>
+          </div>
+          <div class="tip-card">
+            <h4>Evaluator Precision</h4>
+            <p>The clearer your expected answer, the more precise and stable the evaluator score becomes across runs and providers.</p>
+          </div>
           <div class="tip-card">
             <h4>Rate Limiting</h4>
             <p>If you see <code>429 Too Many Requests</code>, reduce the "Max Parallel Requests" in Agent settings or check your API quotas.</p>
