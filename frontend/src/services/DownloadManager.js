@@ -49,26 +49,29 @@ class DownloadManager {
         if (this.processing || this.queue.size === 0) return
 
         this.processing = true
+        const batch = []
+        let consumePriority = false
         try {
-            const batch = []
-
             // 1. Pick priority item if exists and needed
             if (this.priorityId && this.queue.has(this.priorityId)) {
                 batch.push(this.priorityId)
-                this.queue.delete(this.priorityId)
-                this.priorityId = null // Consumed
+                consumePriority = true
             }
 
             // 2. Fill rest of batch
             for (const id of this.queue) {
                 if (batch.length >= this.batchSize) break
+                if (id === this.priorityId) continue
                 batch.push(id)
-                this.queue.delete(id)
             }
 
             if (batch.length > 0) {
                 console.log('[DownloadManager] Fetching batch:', batch.length, 'items')
                 await wsService.getResultDetails(batch)
+                batch.forEach(id => this.queue.delete(id))
+                if (consumePriority) {
+                    this.priorityId = null
+                }
             } else {
                 // Queue empty, stop interval
                 if (this.interval) {
@@ -80,6 +83,10 @@ class DownloadManager {
             console.error('[DownloadManager] Failed to process batch:', e)
         } finally {
             this.processing = false
+            if (this.queue.size === 0 && this.interval) {
+                clearInterval(this.interval)
+                this.interval = null
+            }
         }
     }
 }

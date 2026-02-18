@@ -1039,115 +1039,6 @@ onMounted(async () => {
 .org-btn {
   display: flex;
   align-items: center;
-  padding: 1rem;
-  background: white;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
-  text-align: left;
-  gap: 1rem;
-}
-
-.org-btn:hover {
-  border-color: #49399d;
-  background: #f8fafc;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-}
-
-.org-icon {
-  font-size: 1.5rem;
-  background: #f1f5f9;
-  width: 44px;
-  height: 44px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 10px;
-}
-
-.org-info {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
-.org-name {
-  font-weight: 700;
-  color: #1e293b;
-  font-size: 1rem;
-}
-
-.org-role {
-  font-size: 0.8rem;
-  color: #64748b;
-  text-transform: capitalize;
-}
-
-.select-arrow {
-  color: #cbd5e1;
-  font-weight: bold;
-  font-size: 1.2rem;
-}
-
-.org-btn:hover .select-arrow {
-  color: #49399d;
-  transform: translateX(3px);
-  transition: all 0.2s;
-}
-
-.suspended-tag {
-  color: #ef4444;
-  font-size: 0.75rem;
-  font-weight: 700;
-  background: #fef2f2;
-  padding: 0.1rem 0.4rem;
-  border-radius: 4px;
-  margin-left: 0.5rem;
-}
-
-.btn-ghost {
-  background: transparent;
-  border: 1px solid transparent;
-  color: #64748b;
-  font-weight: 600;
-  font-size: 0.9rem;
-}
-
-.btn-ghost:hover {
-  color: #1e293b;
-  background: #f1f5f9;
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-.org-selector h3 {
-  margin: 0 0 0.5rem;
-  font-size: 1.25rem;
-  color: #1e293b;
-  text-align: center;
-}
-
-.org-selector p {
-  font-size: 0.875rem;
-  color: #64748b;
-  text-align: center;
-  margin-bottom: 1.5rem;
-}
-
-.org-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.org-btn {
-  display: flex;
-  align-items: center;
   width: 100%;
   padding: 1rem;
   background: white;
@@ -1155,8 +1046,8 @@ onMounted(async () => {
   border-radius: 12px;
   cursor: pointer;
   transition: all 0.2s;
-  gap: 1rem;
   text-align: left;
+  gap: 1rem;
 }
 
 .org-btn:hover:not(:disabled) {
@@ -1183,40 +1074,82 @@ onMounted(async () => {
 }
 
 .org-info {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  flex: 1;
 }
 
 .org-name {
   font-weight: 600;
   color: #1e293b;
+  font-size: 1rem;
+}
+
+.org-role {
+  font-size: 0.8rem;
+  color: #64748b;
+  text-transform: capitalize;
+}
+
+.select-arrow {
+  color: #cbd5e1;
+  font-weight: bold;
+  font-size: 1.2rem;
+}
+
+.org-btn:hover .select-arrow {
+  color: #49399d;
+  transform: translateX(3px);
+  transition: all 0.2s;
 }
 
 .suspended-tag {
-  font-size: 0.7rem;
   color: #dc2626;
+  font-size: 0.7rem;
+  font-weight: 700;
   background: #fef2f2;
   padding: 2px 6px;
   border-radius: 4px;
   align-self: flex-start;
+  margin-left: 0.5rem;
   margin-top: 2px;
-}
-
-.mt-4 {
-  margin-top: 1rem;
 }
 
 .btn-ghost {
   background: transparent;
+  border: 1px solid transparent;
   color: #64748b;
+  font-weight: 600;
+  font-size: 0.9rem;
   width: 100%;
-  border: 1px transparent solid;
 }
 
 .btn-ghost:hover {
   color: #49399d;
   background: #f1f5f9;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.org-selector h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.25rem;
+  color: #1e293b;
+  text-align: center;
+}
+
+.org-selector p {
+  font-size: 0.875rem;
+  color: #64748b;
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+.mt-4 {
+  margin-top: 1rem;
 }
 
 .btn-cancel-delete {

@@ -414,13 +414,6 @@ export default {
 }
 
 .status-completed {
-  background: #eebefa;
-  color: #5f3dc4; /* Changed to purple to match theme, was green before? */
-}
-
-/* Let's stick to green for completed if that's standard, but purple is the brand. */
-/* Actually let's use standard green for completed success */
-.status-completed {
   background: #d3f9d8;
   color: #2b8a3e;
 }

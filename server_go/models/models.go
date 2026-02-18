@@ -19,7 +19,7 @@ type Organization struct {
 	Users            []User             `gorm:"many2many:user_organizations;" json:"users,omitempty"`
 	UserOrgs         []UserOrganization `json:"user_orgs,omitempty"` // For role info
 	// Workspaces removed - workspaces no longer belong to organizations
-	CreatedAt        time.Time          `json:"created_at"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type UserOrganization struct {
@@ -86,7 +86,7 @@ type Agent struct {
 	ID             uuid.UUID     `gorm:"type:uuid;primaryKey" json:"id"`
 	WorkspaceID    uuid.UUID     `gorm:"type:uuid;not null" json:"workspace_id"`
 	Name           string        `gorm:"not null" json:"name"`
-	ProviderType   string        `gorm:"not null" json:"provider_type"` // 'mcp', 'openai', 'evaluator'
+	ProviderType   string        `gorm:"not null" json:"provider_type"` // 'mcp', 'openai', 'nvidia', 'evaluator'
 	Config         EncryptedJSON `gorm:"type:text;not null;default:''" json:"config"`
 	Enabled        bool          `gorm:"default:true" json:"enabled"`
 	Position       int           `gorm:"default:0" json:"position"`

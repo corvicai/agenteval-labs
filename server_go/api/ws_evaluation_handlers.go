@@ -117,7 +117,14 @@ func (h *Hub) handleRunEvaluators(c *Connection, env models.Envelope) {
 		return
 	}
 
-	if err := h.engine.RunEvaluators(runID); err != nil {
+	var selectedEvaluatorIDs []uuid.UUID
+	for _, idStr := range req.EvaluatorAgentIDs {
+		if id, parseErr := uuid.Parse(idStr); parseErr == nil {
+			selectedEvaluatorIDs = append(selectedEvaluatorIDs, id)
+		}
+	}
+
+	if err := h.engine.RunEvaluators(runID, selectedEvaluatorIDs); err != nil {
 		c.SendError(env.CorrelationID, "failed to run evaluators: "+err.Error())
 		return
 	}

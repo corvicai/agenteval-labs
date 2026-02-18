@@ -6,6 +6,8 @@
         "dev": "vite --host --port 3010",
         "build": "vite build",
         "preview": "vite preview --port 3010",
+        "lint:css": "stylelint \"src/**/*.{css,vue}\"",
+        "lint:css:fix": "stylelint \"src/**/*.{css,vue}\" --fix",
         "test": "vitest",
         "test:coverage": "vitest run --coverage"
     },
@@ -20,6 +22,8 @@
         "@vitejs/plugin-vue": "^5.2.4",
         "@vue/test-utils": "^2.4.6",
         "jsdom": "^27.4.0",
+        "postcss-html": "^1.8.1",
+        "stylelint": "^17.3.0",
         "vite": "^5.0.0",
         "vitest": "^4.0.18"
     },

@@ -19,80 +19,88 @@
         </div>
 
         <div class="setup-section">
-          <label class="section-label">Select Benchmark Agents</label>
-          <p class="section-hint">These agents will answer the questions first.</p>
-          <div class="agents-checklist">
-            <div 
-              v-for="(agent, index) in localAgents.filter(a => a.provider_type !== 'evaluator')" 
-              :key="agent.id" 
-              class="agent-check-item"
-              :class="{ selected: selectedAgentIds.includes(agent.id) }"
+          <label class="section-label">Active Agents For This Question Set</label>
+          <p class="section-hint">Only these agents are stored as active for this question set.</p>
+
+          <div v-if="isLoadingEnvelope" class="empty-text">Loading agent selection...</div>
+
+          <div v-else class="agents-checklist">
+            <div
+              v-for="(agent, index) in selectedAgents"
+              :key="agent.id"
+              class="agent-check-item selected"
               draggable="true"
-              @dragstart="onDragStart($event, index)"
-              @dragover="onDragOver($event, index)"
-              @drop="onDrop($event, index)"
-              @click="toggleAgent(agent.id)"
+              @dragstart="onSelectedDragStart($event, index)"
+              @dragover="onSelectedDragOver($event)"
+              @drop="onSelectedDrop($event, index)"
             >
               <div class="drag-handle">⋮⋮</div>
-              <div class="checkbox">
-                {{ selectedAgentIds.includes(agent.id) ? '☑️' : '⬜' }}
-              </div>
               <div class="agent-info">
                 <span class="agent-name">{{ agent.name }}</span>
                 <span class="agent-type">{{ agent.provider_type }}</span>
-              </div>
-            </div>
-          </div>
-          <p v-if="selectedAgentIds.filter(id => localAgents.find(a => a.id === id)?.provider_type !== 'evaluator').length === 0" class="error-text">
-            ⚠️ Please select at least one agent to run.
-          </p>
-        </div>
 
-        <div class="setup-section" v-if="localAgents.some(a => a.provider_type === 'evaluator')">
-          <label class="section-label">Configure Evaluators</label>
-          <p class="section-hint">Evaluators run automatically after agents finish.</p>
-          <div class="agents-checklist">
-            <div 
-              v-for="(agent, index) in localAgents.filter(a => a.provider_type === 'evaluator')" 
-              :key="agent.id" 
-              class="agent-check-item"
-              :class="{ selected: selectedAgentIds.includes(agent.id) }"
-              @click="toggleAgent(agent.id)"
-            >
-              <div class="checkbox">
-                {{ selectedAgentIds.includes(agent.id) ? '☑️' : '⬜' }}
-              </div>
-              <div class="agent-info">
-                <span class="agent-name">{{ agent.name }} ({{ agent.provider_type }})</span>
-                
-                <!-- Target Agent Selection for Evaluators -->
-                <div class="target-agent-select" @click.stop>
+                <div v-if="isEvaluatorAgent(agent)" class="target-agent-select">
                   <label>Target:</label>
-                  <select v-model="agent.config.target_agent_id">
-                    <option value="">All Agents</option>
-                    <option v-for="a in localAgents.filter(x => x.id !== agent.id && x.provider_type !== 'evaluator')" :key="a.id" :value="a.id">
-                      {{ a.name }}
+                  <select v-model="agent.config.target_agent_id" @change="isDirty = true">
+                    <option
+                      v-for="target in selectedPrimaryAgents"
+                      :key="target.id"
+                      :value="target.id"
+                    >
+                      {{ target.name }}
                     </option>
                   </select>
                 </div>
               </div>
+              <button class="btn btn-ghost btn-remove" @click="removeAgent(agent.id)">Remove</button>
             </div>
           </div>
+
+          <p v-if="!isLoadingEnvelope && selectedAgents.length === 0" class="error-text">
+            ⚠️ Select at least one agent to run.
+          </p>
+          <p v-else-if="selectedPrimaryAgentIds.length === 0 && selectedEvaluatorAgentIds.length > 0" class="warning-text">
+            ℹ️ Evaluator-only mode: this will evaluate answers from the latest run for this question set.
+          </p>
+          <p v-if="selectedEvaluatorsMissingTarget.length > 0" class="error-text">
+            ⚠️ Select a target agent for evaluator(s): {{ selectedEvaluatorsMissingTarget.map(a => a.name).join(', ') }}.
+          </p>
+        </div>
+
+        <div class="setup-section">
+          <label class="section-label">Available Agents</label>
+          <p class="section-hint">These workspace agents are available to add to this question set.</p>
+
+          <div class="agents-checklist">
+            <div
+              v-for="agent in availableAgents"
+              :key="agent.id"
+              class="agent-check-item"
+            >
+              <div class="agent-info">
+                <span class="agent-name">{{ agent.name }}</span>
+                <span class="agent-type">{{ agent.provider_type }}</span>
+              </div>
+              <button class="btn btn-secondary btn-add" @click="addAgent(agent.id)">Add</button>
+            </div>
+          </div>
+
+          <p v-if="availableAgents.length === 0" class="empty-text">No more agents available.</p>
         </div>
       </div>
 
       <div class="modal-footer">
-        <button class="btn btn-secondary" @click="saveSelection" :disabled="isSaving">
+        <button class="btn btn-secondary" @click="saveSelection" :disabled="isSaving || isLoadingEnvelope">
           {{ isSaving ? 'Saving...' : 'Save Selection' }}
         </button>
         <div class="footer-actions">
           <button class="btn btn-ghost" @click="$emit('cancel')" :disabled="isSaving">Cancel</button>
-          <button 
-            class="btn btn-primary btn-lg" 
-            :disabled="selectedAgentIds.length === 0 || isSaving"
+          <button
+            class="btn btn-primary btn-lg"
+            :disabled="selectedAgents.length === 0 || selectedEvaluatorsMissingTarget.length > 0 || isSaving || isLoadingEnvelope"
             @click="confirmRun"
           >
-            {{ isSaving ? 'Saving...' : `Start Run (${selectedAgentIds.length})` }}
+            {{ isSaving ? 'Saving...' : `Start Run (${selectedAgents.length})` }}
           </button>
         </div>
       </div>
@@ -111,90 +119,164 @@ const props = defineProps({
 
 const emit = defineEmits(['start', 'cancel', 'save'])
 
-const localAgents = ref([])
+const selectedAgents = ref([])
+const availableAgents = ref([])
 const isSaving = ref(false)
+const isLoadingEnvelope = ref(false)
 const isDirty = ref(false)
+const draggedSelectedIndex = ref(null)
 
-// Initialize local agents list (sorted by position)
-const sortedAgents = [...props.agents].sort((a, b) => (a.position || 0) - (b.position || 0))
-localAgents.value = sortedAgents
+function toAgentID(entry) {
+  if (!entry || typeof entry !== 'object') return ''
+  return String(entry.agent_id || entry.agentID || entry.id || '')
+}
 
-const selectedAgentIds = ref([])
-
-// Initialize selected IDs from agents prop (which already reflects database state via mergedAgents)
-// The agents prop comes from BenchmarkArena's mergedAgents which applies QS overrides
-function initializeSelection() {
-  // Primary source: check the 'enabled' field on each agent provided in props
-  // These props already come pre-merged with QS overrides from BenchmarkArena
-  const enabledIds = props.agents.filter(a => a.enabled).map(a => a.id)
-  
-  // If we have specific enabled agents, use them.
-  // If ALL are disabled but we have overrides in the question set, we should respect that (keep 0 selected)
-  const hasOverrides = props.questionSet?.agents && props.questionSet.agents.length > 0
-  
-  if (enabledIds.length > 0 || hasOverrides) {
-    selectedAgentIds.value = enabledIds
-    console.log(`[RunSetupModal] Initialized specialized selection. Enabled: ${enabledIds.length}, Has Overrides: ${hasOverrides}`)
-  } else {
-    // Fallback: if no agents enabled and NO overrides exist yet, default to all primary agents
-    console.log('[RunSetupModal] No overrides found, defaulting to all active agents')
-    selectedAgentIds.value = props.agents.filter(a => a.provider_type !== 'evaluator').map(a => a.id)
+function cloneConfig(rawConfig) {
+  if (typeof rawConfig === 'string') {
+    try {
+      rawConfig = JSON.parse(rawConfig)
+    } catch (e) {
+      rawConfig = {}
+    }
+  }
+  if (!rawConfig || typeof rawConfig !== 'object' || Array.isArray(rawConfig)) {
+    return {}
+  }
+  try {
+    return JSON.parse(JSON.stringify(rawConfig))
+  } catch (e) {
+    return { ...rawConfig }
   }
 }
 
-// Watchers to keep local state in sync if props change while modal is open
-watch(() => props.agents, (newAgents) => {
-  if (newAgents && !isDirty.value) {
-    const sorted = [...newAgents].sort((a, b) => (a.position || 0) - (b.position || 0))
-    localAgents.value = sorted
-    initializeSelection()
+function normalizeAgent(agent = {}, fallbackPosition = 0) {
+  return {
+    ...agent,
+    id: String(agent.id || ''),
+    position: Number.isFinite(agent.position) ? agent.position : fallbackPosition,
+    config: cloneConfig(agent.config)
   }
-}, { deep: true })
+}
 
-watch(() => props.questionSet, (newQs) => {
-  if (newQs) {
-    initializeSelection()
+function sortAgents(list = []) {
+  return [...list].sort((a, b) => (a.position || 0) - (b.position || 0))
+}
+
+function isTargetConfigured(agent) {
+  return typeof agent?.config?.target_agent_id === 'string' && agent.config.target_agent_id.trim() !== ''
+}
+
+function isLegacyEvaluatorConfig(config) {
+  if (!config || typeof config !== 'object') return false
+  const hasTargetField = Object.prototype.hasOwnProperty.call(config, 'target_agent_id')
+  const hasOpenAIMode = typeof config.openai_mode === 'string' && config.openai_mode.trim() !== ''
+  const hasSystemPrompt = typeof config.system_prompt === 'string' && config.system_prompt.trim() !== ''
+  return hasTargetField || hasOpenAIMode || hasSystemPrompt
+}
+
+function isEvaluatorAgent(agent) {
+  if (!agent) return false
+  if (agent.provider_type === 'evaluator') return true
+  if (agent.provider_type !== 'openai') return false
+  if (isLegacyEvaluatorConfig(agent.config || {})) return true
+  const name = String(agent.name || '').toLowerCase()
+  return name.includes('evaluator')
+}
+
+function normalizeSelectedPositions() {
+  selectedAgents.value = selectedAgents.value.map((agent, index) => ({
+    ...agent,
+    position: index
+  }))
+}
+
+function hydrateFromFallback() {
+  const baseAgents = sortAgents((props.agents || []).map((agent, index) => normalizeAgent(agent, index)))
+  const overrideRows = Array.isArray(props.questionSet?.agents) ? props.questionSet.agents : []
+  const overrideIDs = overrideRows.map((item) => toAgentID(item)).filter(Boolean)
+
+  if (overrideIDs.length > 0) {
+    const overrideMap = {}
+    overrideRows.forEach((row) => {
+      const id = toAgentID(row)
+      if (id) overrideMap[id] = row
+    })
+
+    const selected = []
+    const available = []
+
+    for (const base of baseAgents) {
+      const row = overrideMap[base.id]
+      if (row && row.enabled !== false) {
+        selected.push({
+          ...base,
+          position: row.position !== undefined ? row.position : base.position,
+          config: cloneConfig(row.config || base.config)
+        })
+      } else {
+        available.push(base)
+      }
+    }
+
+    selectedAgents.value = sortAgents(selected)
+    normalizeSelectedPositions()
+    availableAgents.value = sortAgents(available)
+    return
   }
-}, { deep: true })
 
-onMounted(() => {
-  initializeSelection()
+  const selected = baseAgents.filter((agent) => !!agent.enabled)
+  const selectedIDSet = new Set(selected.map((agent) => agent.id))
+  const available = baseAgents.filter((agent) => !selectedIDSet.has(agent.id))
+
+  selectedAgents.value = sortAgents(selected)
+  normalizeSelectedPositions()
+  availableAgents.value = sortAgents(available)
+}
+
+async function loadEnvelope() {
+  if (!props.questionSet?.id) {
+    hydrateFromFallback()
+    return
+  }
+
+  isLoadingEnvelope.value = true
+  try {
+    const response = await wsService.getQuestionSetAgentEnvelope(props.questionSet.id)
+    const selected = sortAgents((response?.selected_agents || []).map((agent, index) => normalizeAgent(agent, index)))
+    const selectedIDSet = new Set(selected.map((agent) => agent.id))
+    const available = sortAgents((response?.available_agents || [])
+      .map((agent, index) => normalizeAgent(agent, index))
+      .filter((agent) => !selectedIDSet.has(agent.id)))
+
+    selectedAgents.value = selected
+    normalizeSelectedPositions()
+    availableAgents.value = available
+    isDirty.value = false
+  } catch (error) {
+    console.error('[RunSetupModal] Failed to load question-set agent envelope:', error)
+    hydrateFromFallback()
+  } finally {
+    isLoadingEnvelope.value = false
+  }
+}
+
+const selectedAgentIds = computed(() => selectedAgents.value.map((agent) => agent.id))
+
+const selectedPrimaryAgents = computed(() =>
+  selectedAgents.value.filter((agent) => !isEvaluatorAgent(agent))
+)
+
+const selectedPrimaryAgentIds = computed(() => selectedPrimaryAgents.value.map((agent) => agent.id))
+
+const selectedEvaluatorAgents = computed(() =>
+  selectedAgents.value.filter((agent) => isEvaluatorAgent(agent))
+)
+
+const selectedEvaluatorAgentIds = computed(() => selectedEvaluatorAgents.value.map((agent) => agent.id))
+
+const selectedEvaluatorsMissingTarget = computed(() => {
+  return selectedEvaluatorAgents.value.filter((agent) => !isTargetConfigured(agent))
 })
-
-const draggedIndex = ref(null)
-
-function onDragStart(event, index) {
-  draggedIndex.value = index
-  event.dataTransfer.effectAllowed = 'move'
-  // Optional: set drag image ghost
-}
-
-function onDragOver(event, index) {
-  event.preventDefault() // Required to allow dropping
-  event.dataTransfer.dropEffect = 'move'
-}
-
-function onDrop(event, index) {
-  event.preventDefault()
-  const fromIndex = draggedIndex.value
-  
-  if (fromIndex === null || fromIndex === index) return
-
-  isDirty.value = true
-  // Clone array to modify
-  const newAgents = [...localAgents.value]
-  const [movedItem] = newAgents.splice(fromIndex, 1)
-  newAgents.splice(index, 0, movedItem)
-  
-  // Update positions based on new index
-  newAgents.forEach((a, idx) => {
-    a.position = idx
-  })
-  
-  // Assign back to reactive ref
-  localAgents.value = newAgents
-  draggedIndex.value = null
-}
 
 const totalQuestions = computed(() => {
   if (!props.questionSet?.data) return 0
@@ -202,46 +284,105 @@ const totalQuestions = computed(() => {
   if (typeof data === 'string') {
     try {
       data = JSON.parse(data)
-    } catch { return 0 }
+    } catch {
+      return 0
+    }
   }
   return data.categories?.reduce((acc, cat) => acc + (cat.questions?.length || 0), 0) || 0
 })
 
-function toggleAgent(id) {
+function addAgent(agentID) {
+  const id = String(agentID || '')
+  if (!id) return
+
+  const index = availableAgents.value.findIndex((agent) => agent.id === id)
+  if (index === -1) return
+
+  const [agent] = availableAgents.value.splice(index, 1)
+  selectedAgents.value.push({
+    ...agent,
+    position: selectedAgents.value.length
+  })
+  normalizeSelectedPositions()
+  availableAgents.value = sortAgents(availableAgents.value)
   isDirty.value = true
-  if (selectedAgentIds.value.includes(id)) {
-    selectedAgentIds.value = selectedAgentIds.value.filter(aid => aid !== id)
-  } else {
-    selectedAgentIds.value.push(id)
+
+  if (isEvaluatorAgent(agent) && !isTargetConfigured(agent)) {
+    alert(`Evaluator "${agent.name}" requires a target agent. Select one before running.`)
   }
 }
 
-// Build payload for question set agents API
+function removeAgent(agentID) {
+  const id = String(agentID || '')
+  if (!id) return
+
+  const index = selectedAgents.value.findIndex((agent) => agent.id === id)
+  if (index === -1) return
+
+  const [agent] = selectedAgents.value.splice(index, 1)
+  normalizeSelectedPositions()
+
+  availableAgents.value = sortAgents([
+    ...availableAgents.value,
+    {
+      ...agent,
+      position: Number.isFinite(agent.position) ? agent.position : availableAgents.value.length
+    }
+  ])
+
+  isDirty.value = true
+}
+
+function onSelectedDragStart(event, index) {
+  draggedSelectedIndex.value = index
+  event.dataTransfer.effectAllowed = 'move'
+}
+
+function onSelectedDragOver(event) {
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'move'
+}
+
+function onSelectedDrop(event, index) {
+  event.preventDefault()
+  const fromIndex = draggedSelectedIndex.value
+  if (fromIndex === null || fromIndex === index) return
+
+  const reordered = [...selectedAgents.value]
+  const [moved] = reordered.splice(fromIndex, 1)
+  reordered.splice(index, 0, moved)
+  selectedAgents.value = reordered
+  normalizeSelectedPositions()
+
+  draggedSelectedIndex.value = null
+  isDirty.value = true
+}
+
 function buildAgentsPayload() {
-  return localAgents.value.map((a, i) => ({
-    agent_id: a.id,
-    enabled: selectedAgentIds.value.includes(a.id),
-    position: i,
-    config: a.config || {}
+  return selectedAgents.value.map((agent, index) => ({
+    agent_id: agent.id,
+    enabled: true,
+    position: index,
+    config: cloneConfig(agent.config)
   }))
 }
 
 async function saveToDatabase() {
-  if (!props.questionSet?.id) return
-  
+  if (!props.questionSet?.id) return null
+
   try {
     isSaving.value = true
     const payload = buildAgentsPayload()
-    console.log('[RunSetupModal] Sending payload to DB:', payload.map(a => ({ id: a.agent_id.slice(0,8), enabled: a.enabled })))
     const saved = await wsService.updateQuestionSetAgents(props.questionSet.id, payload)
-    console.log('[RunSetupModal] Saved agent selection to database')
     isDirty.value = false
-    if (saved && !saved.agents) {
+
+    if (saved && (!Array.isArray(saved.agents) || saved.agents.length === 0)) {
       saved.agents = payload
     }
+
     return saved || { id: props.questionSet.id, agents: payload }
   } catch (error) {
-    console.error('[RunSetupModal] Failed to save to database:', error)
+    console.error('[RunSetupModal] Failed to save agent selection:', error)
     alert('Failed to save agent selection: ' + (error?.message || 'Unknown error'))
     return null
   } finally {
@@ -250,44 +391,76 @@ async function saveToDatabase() {
 }
 
 async function confirmRun() {
-  if (selectedAgentIds.value.length === 0) return
-  
-  // Save selection to database before starting the run
+  if (selectedAgents.value.length === 0) return
+
+  if (selectedEvaluatorsMissingTarget.value.length > 0) {
+    const names = selectedEvaluatorsMissingTarget.value.map((agent) => agent.name).join(', ')
+    alert(`Set a target agent before running for: ${names}.`)
+    return
+  }
+
+  if (selectedPrimaryAgentIds.value.length === 0 && selectedEvaluatorAgentIds.value.length > 0) {
+    const confirmed = confirm('Evaluator-only mode will use the latest run answers from this question set. Continue?')
+    if (!confirmed) return
+  }
+
   const savedQuestionSet = await saveToDatabase()
   if (!savedQuestionSet) return
-  
+
+  const agentsPayload = buildAgentsPayload()
+
   emit('save', {
-    selectedIds: selectedAgentIds.value,
-    agents: localAgents.value,
+    selectedIds: [...selectedAgentIds.value],
+    agents: agentsPayload,
     questionSet: savedQuestionSet
   })
 
   emit('start', {
     questionSetId: props.questionSet.id,
-    agentIds: selectedAgentIds.value.filter(id => {
-       const agent = localAgents.value.find(a => a.id === id)
-       return agent && agent.provider_type !== 'evaluator'
-    })
+    agentIds: [...selectedAgentIds.value],
+    primaryAgentIds: [...selectedPrimaryAgentIds.value],
+    evaluatorAgentIds: [...selectedEvaluatorAgentIds.value]
   })
 }
 
 async function saveSelection() {
-  // Save selection to database
   const savedQuestionSet = await saveToDatabase()
   if (!savedQuestionSet) return
-  
+
+  const agentsPayload = buildAgentsPayload()
+
   emit('save', {
-    selectedIds: selectedAgentIds.value,
-    agents: localAgents.value, // Pass reordered agents
+    selectedIds: [...selectedAgentIds.value],
+    agents: agentsPayload,
     questionSet: savedQuestionSet
   })
 }
+
+watch(
+  () => props.questionSet?.id,
+  async (nextID, prevID) => {
+    if (!nextID) {
+      hydrateFromFallback()
+      return
+    }
+    if (nextID !== prevID || !isDirty.value) {
+      await loadEnvelope()
+    }
+  },
+  { immediate: true }
+)
+
+onMounted(() => {
+  if (!props.questionSet?.id) {
+    hydrateFromFallback()
+  }
+})
 </script>
 
 <style scoped>
 .run-setup-modal {
   width: 90%;
-  max-width: 500px;
+  max-width: 620px;
 }
 
 .modal-body {
@@ -347,7 +520,7 @@ async function saveSelection() {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  max-height: 300px;
+  max-height: 260px;
   overflow-y: auto;
 }
 
@@ -358,13 +531,7 @@ async function saveSelection() {
   padding: 0.75rem;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.agent-check-item:hover {
-  background: #f8fafc;
-  border-color: #cbd5e1;
+  background: #fff;
 }
 
 .agent-check-item.selected {
@@ -372,12 +539,8 @@ async function saveSelection() {
   border-color: #bfdbfe;
 }
 
-.checkbox {
-  font-size: 1.2rem;
-  width: 24px;
-}
-
 .agent-info {
+  flex: 1;
   display: flex;
   flex-direction: column;
 }
@@ -422,8 +585,32 @@ async function saveSelection() {
   outline: none;
 }
 
+.btn-add,
+.btn-remove {
+  min-width: 88px;
+}
+
+.drag-handle {
+  cursor: grab;
+  color: #bdc3c7;
+  font-size: 1.2rem;
+  padding-right: 0.5rem;
+  user-select: none;
+}
+
+.empty-text {
+  color: #64748b;
+  font-size: 0.85rem;
+}
+
 .error-text {
   color: #ef4444;
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+}
+
+.warning-text {
+  color: #b45309;
   font-size: 0.85rem;
   margin-top: 0.5rem;
 }
@@ -436,12 +623,5 @@ async function saveSelection() {
 .btn-lg {
   padding: 0.75rem 1.5rem;
   font-size: 1rem;
-}
-.drag-handle {
-  cursor: grab;
-  color: #bdc3c7;
-  font-size: 1.2rem;
-  padding-right: 0.5rem;
-  user-select: none;
 }
 </style>

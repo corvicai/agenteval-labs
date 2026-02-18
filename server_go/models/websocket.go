@@ -20,6 +20,16 @@ type StartRunPayload struct {
 	AgentIDs      []string `json:"agent_ids,omitempty"`
 }
 
+type GetQuestionSetAgentEnvelopePayload struct {
+	QuestionSetID string `json:"question_set_id"`
+}
+
+type QuestionSetAgentEnvelopeResponse struct {
+	QuestionSetID   string  `json:"question_set_id"`
+	SelectedAgents  []Agent `json:"selected_agents"`
+	AvailableAgents []Agent `json:"available_agents"`
+}
+
 // RerunTaskPayload represents the payload for CMD_RERUN_TASK
 type RerunTaskPayload struct {
 	RunID            string `json:"run_id"`
@@ -246,7 +256,8 @@ type RetryStatusResponse struct {
 }
 
 type RunEvaluatorsPayload struct {
-	RunID string `json:"run_id"`
+	RunID             string   `json:"run_id"`
+	EvaluatorAgentIDs []string `json:"evaluator_agent_ids,omitempty"`
 }
 
 type GetSpyPayload struct {

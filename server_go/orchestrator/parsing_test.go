@@ -191,3 +191,88 @@ func TestExtractTargetAgentID(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractEvaluatorScore(t *testing.T) {
+	tests := []struct {
+		name      string
+		answer    string
+		wantScore int
+		wantOK    bool
+	}{
+		{
+			name:      "score at end",
+			answer:    "Good response.\n7/10",
+			wantScore: 7,
+			wantOK:    true,
+		},
+		{
+			name:      "multiple scores keeps last valid",
+			answer:    "First pass 3/10, after review: 8/10",
+			wantScore: 8,
+			wantOK:    true,
+		},
+		{
+			name:      "score with spaces",
+			answer:    "Final score: 10 / 10",
+			wantScore: 10,
+			wantOK:    true,
+		},
+		{
+			name:      "markdown wrapper",
+			answer:    "Final score **9/10**",
+			wantScore: 9,
+			wantOK:    true,
+		},
+		{
+			name:      "invalid denominator",
+			answer:    "5/5",
+			wantScore: 0,
+			wantOK:    false,
+		},
+		{
+			name:      "invalid numerator",
+			answer:    "11/10",
+			wantScore: 0,
+			wantOK:    false,
+		},
+		{
+			name:      "no score",
+			answer:    "No explicit score",
+			wantScore: 0,
+			wantOK:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotScore, gotOK := extractEvaluatorScore(tt.answer)
+			assert.Equal(t, tt.wantOK, gotOK)
+			assert.Equal(t, tt.wantScore, gotScore)
+		})
+	}
+}
+
+func TestMapEvaluatorScore(t *testing.T) {
+	tests := []struct {
+		score10        int
+		expectedRating string
+		expectedCode   int
+		expectedScore  int
+	}{
+		{score10: 10, expectedRating: "like", expectedCode: 1, expectedScore: 100},
+		{score10: 8, expectedRating: "like", expectedCode: 1, expectedScore: 80},
+		{score10: 7, expectedRating: "valid", expectedCode: 2, expectedScore: 70},
+		{score10: 6, expectedRating: "valid", expectedCode: 2, expectedScore: 60},
+		{score10: 5, expectedRating: "dislike", expectedCode: 3, expectedScore: 50},
+		{score10: 3, expectedRating: "dislike", expectedCode: 3, expectedScore: 30},
+		{score10: 2, expectedRating: "dislike", expectedCode: 3, expectedScore: 20},
+		{score10: 0, expectedRating: "dislike", expectedCode: 3, expectedScore: 0},
+	}
+
+	for _, tt := range tests {
+		rating, code, score := mapEvaluatorScore(tt.score10)
+		assert.Equal(t, tt.expectedRating, rating)
+		assert.Equal(t, tt.expectedCode, code)
+		assert.Equal(t, tt.expectedScore, score)
+	}
+}

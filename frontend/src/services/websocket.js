@@ -16,6 +16,17 @@ class WebSocketService {
         this.lastDisconnectReason = null
     }
 
+    static REQUEST_TIMEOUTS = {
+        DEFAULT: 10000,
+        START_RUN: 120000,
+        RUN_EVALUATORS: 120000,
+        RERUN_TASK: 45000,
+        RUN_DETAILS: 30000,
+        RUN_LITE: 30000,
+        LATEST_RUN_BY_QS: 30000,
+        UPDATE_AGENT: 30000
+    }
+
     async _probeWebSocketHttpEndpoint(wsUrl) {
         const probeUrl = wsUrl.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:')
         const controller = new AbortController()
@@ -127,8 +138,9 @@ class WebSocketService {
         return this._establishConnection()
     }
 
-    connect(workspaceId, token = null) {
+    connect(workspaceId, token = null, options = {}) {
         this.shouldReconnect = true
+        const skipStoredToken = options?.skipStoredToken === true
         const storedUser = localStorage.getItem('user')
         let userIsImpersonating = false
         if (storedUser) {
@@ -148,7 +160,7 @@ class WebSocketService {
             if (!localStorage.getItem('impersonation_token') && legacyToken) {
                 localStorage.setItem('impersonation_token', legacyToken)
             }
-        } else if (!newToken && legacyToken) {
+        } else if (!newToken && legacyToken && !skipStoredToken) {
             // Keep legacy token for Authorization header fallback in api.js
             newToken = legacyToken
         }
@@ -380,20 +392,114 @@ class WebSocketService {
         }
     }
 
+    _getStoredWorkspaceId() {
+        const raw = localStorage.getItem('workspace')
+        if (!raw) return null
+        try {
+            const parsed = JSON.parse(raw)
+            return parsed?.id || null
+        } catch (e) {
+            return null
+        }
+    }
+
+    _isLikelyAuthError(message) {
+        const text = String(message || '').toLowerCase()
+        return text.includes('401') ||
+            text.includes('not authenticated') ||
+            text.includes('unauthorized') ||
+            text.includes('invalid token') ||
+            text.includes('user not found')
+    }
+
+    async _checkSessionValidityViaRefresh() {
+        if (!localStorage.getItem('user')) return null
+
+        try {
+            const api = await import('./api.js')
+            await api.request('/auth/refresh', { method: 'POST' })
+            return true
+        } catch (e) {
+            if (this._isLikelyAuthError(e?.message || e)) {
+                return false
+            }
+            return null
+        }
+    }
+
+    async _ensureConnectionForRequest(type) {
+        if (this.isConnected()) return
+
+        if (this.connectionPromise) {
+            console.log(`[WS] Waiting for in-flight connection before request: ${type}`)
+            try {
+                await this.connectionPromise
+            } catch (e) {
+                console.warn('[WS] In-flight connection failed before request', {
+                    type,
+                    error: e?.message || String(e)
+                })
+            }
+            if (this.isConnected()) return
+        }
+
+        const targetWorkspaceId = this.workspaceId || this._getStoredWorkspaceId() || null
+        const hasLegacyToken = !!localStorage.getItem('token')
+        const isImpersonating = localStorage.getItem('is_impersonating') === '1'
+        let reconnectError = null
+
+        try {
+            console.warn('[WS] Auto-reconnecting before request', { type, workspaceId: targetWorkspaceId })
+            await this.connect(targetWorkspaceId)
+        } catch (e) {
+            reconnectError = e
+            console.warn('[WS] Auto-reconnect failed before request', {
+                type,
+                workspaceId: targetWorkspaceId,
+                error: e?.message || String(e)
+            })
+        }
+
+        // Legacy token can become stale while cookie session is still valid.
+        // Retry once without forcing token query parameter.
+        if (!this.isConnected() && hasLegacyToken && !isImpersonating) {
+            try {
+                console.warn('[WS] Retrying reconnect without legacy token', { type, workspaceId: targetWorkspaceId })
+                await this.connect(targetWorkspaceId, null, { skipStoredToken: true })
+            } catch (e) {
+                if (!reconnectError) reconnectError = e
+                console.warn('[WS] Cookie-only reconnect failed before request', {
+                    type,
+                    workspaceId: targetWorkspaceId,
+                    error: e?.message || String(e)
+                })
+            }
+        }
+
+        if (this.isConnected()) return
+
+        const sessionValidity = await this._checkSessionValidityViaRefresh()
+        if (sessionValidity === false) {
+            this._emit('session_expired', {
+                source: 'request',
+                requestType: type,
+                error: reconnectError?.message || 'session-refresh-401'
+            })
+            throw new Error('Session expired. Please log in again.')
+        }
+
+        if (reconnectError) {
+            throw new Error(`WebSocket not connected and failed to reconnect (${reconnectError?.message || 'unknown'})`)
+        }
+
+        throw new Error('WebSocket not connected')
+    }
+
     /**
      * Sends a request and waits for a response matched by correlation_id
      * @returns {Promise}
      */
-    async request(type, payload, timeoutMs = 10000) {
-        if (!this.isConnected()) {
-            console.log(`[WS] Waiting for connection before request: ${type}`)
-            try {
-                await this.connectionPromise
-            } catch (e) {
-                throw new Error('WebSocket not connected and failed to connect')
-            }
-        }
-
+    _sendRequest(type, payload, timeoutMs = WebSocketService.REQUEST_TIMEOUTS.DEFAULT) {
         return new Promise((resolve, reject) => {
             if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
                 return reject(new Error('WebSocket not connected'))
@@ -418,6 +524,15 @@ class WebSocketService {
         })
     }
 
+    async request(type, payload, timeoutMs = WebSocketService.REQUEST_TIMEOUTS.DEFAULT) {
+        if (this.isConnected()) {
+            return this._sendRequest(type, payload, timeoutMs)
+        }
+
+        await this._ensureConnectionForRequest(type)
+        return this._sendRequest(type, payload, timeoutMs)
+    }
+
     send(type, payload, correlationId = null) {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
             console.error('[WS] Not connected')
@@ -435,11 +550,11 @@ class WebSocketService {
     }
 
     // Command shortcuts (now returning promises where appropriate)
-    startRun(questionSetId, agentIds = []) {
-        return this.request('CMD_START_RUN', { question_set_id: questionSetId, agent_ids: agentIds })
+    startRun(questionSetId, agentIds = [], timeoutMs = WebSocketService.REQUEST_TIMEOUTS.START_RUN) {
+        return this.request('CMD_START_RUN', { question_set_id: questionSetId, agent_ids: agentIds }, timeoutMs)
     }
 
-    rerunTask(runId, agentId, questionId, options = {}) {
+    rerunTask(runId, agentId, questionId, options = {}, timeoutMs = WebSocketService.REQUEST_TIMEOUTS.RERUN_TASK) {
         return this.request('CMD_RERUN_TASK', {
             run_id: runId,
             agent_id: agentId,
@@ -448,19 +563,19 @@ class WebSocketService {
             result_id: options.resultId || '',
             original_question: options.originalQuestion || '',
             expected_answer: options.expectedAnswer || ''
-        })
+        }, timeoutMs)
     }
 
     cancelRun(runId) {
         return this.request('CMD_CANCEL_RUN', { run_id: runId })
     }
 
-    runEvaluators(runId) {
-        return this.request('CMD_RUN_EVALUATORS', { run_id: runId })
+    runEvaluators(runId, evaluatorAgentIds = [], timeoutMs = WebSocketService.REQUEST_TIMEOUTS.RUN_EVALUATORS) {
+        return this.request('CMD_RUN_EVALUATORS', { run_id: runId, evaluator_agent_ids: evaluatorAgentIds }, timeoutMs)
     }
 
-    updateAgent(agentId, data) {
-        return this.request('REQ_UPDATE_AGENT', { id: agentId, ...data })
+    updateAgent(agentId, data, timeoutMs = WebSocketService.REQUEST_TIMEOUTS.UPDATE_AGENT) {
+        return this.request('REQ_UPDATE_AGENT', { id: agentId, ...data }, timeoutMs)
     }
 
     importQuestionSet(clientId, data) {
@@ -483,6 +598,10 @@ class WebSocketService {
         return this.request('REQ_UPDATE_QUESTION_SET_AGENTS', { question_set_id: questionSetId, agents })
     }
 
+    getQuestionSetAgentEnvelope(questionSetId) {
+        return this.request('REQ_GET_QUESTION_SET_AGENT_ENVELOPE', { question_set_id: questionSetId })
+    }
+
     createAgent(workspaceId, data) {
         return this.request('REQ_CREATE_AGENT', { workspace_id: workspaceId, ...data })
     }
@@ -500,8 +619,8 @@ class WebSocketService {
         return this.request('REQ_GET_MANAGER_USERS', {})
     }
 
-    getRunDetails(runId) {
-        return this.request('REQ_GET_RUN_DETAILS', { run_id: runId })
+    getRunDetails(runId, timeoutMs = WebSocketService.REQUEST_TIMEOUTS.RUN_DETAILS) {
+        return this.request('REQ_GET_RUN_DETAILS', { run_id: runId }, timeoutMs)
     }
 
     deleteRun(runId) {
@@ -512,12 +631,12 @@ class WebSocketService {
         return this.request('REQ_DELETE_ALL_RUNS', {})
     }
 
-    getRunLite(runId) {
-        return this.request('REQ_GET_RUN_LITE', { run_id: runId })
+    getRunLite(runId, timeoutMs = WebSocketService.REQUEST_TIMEOUTS.RUN_LITE) {
+        return this.request('REQ_GET_RUN_LITE', { run_id: runId }, timeoutMs)
     }
 
-    getLatestRunByQuestionSet(questionSetId) {
-        return this.request('REQ_GET_LATEST_RUN_BY_QS', { question_set_id: questionSetId })
+    getLatestRunByQuestionSet(questionSetId, timeoutMs = WebSocketService.REQUEST_TIMEOUTS.LATEST_RUN_BY_QS) {
+        return this.request('REQ_GET_LATEST_RUN_BY_QS', { question_set_id: questionSetId }, timeoutMs)
     }
 
     getResultDetails(resultIds) {

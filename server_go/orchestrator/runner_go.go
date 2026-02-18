@@ -46,6 +46,14 @@ func (r *goRunner) Execute(ctx context.Context, req ExecutionRequest) (Execution
 		return r.executeMCP(ctx, req), nil
 	case "openai":
 		return r.executeOpenAI(ctx, req), nil
+	case "nvidia":
+		return r.executeNVIDIA(ctx, req), nil
+	case "openrouter":
+		return r.executeOpenRouter(ctx, req), nil
+	case "anthropic":
+		return r.executeAnthropic(ctx, req), nil
+	case "openai_compatible":
+		return r.executeOpenAICompatible(ctx, req), nil
 	default:
 		return ExecutionResponse{Success: false, Error: fmt.Sprintf("unknown provider type: %s", req.ProviderType)}, nil
 	}
@@ -130,7 +138,7 @@ func (r *goRunner) executeMCP(ctx context.Context, req ExecutionRequest) Executi
 }
 
 func (r *goRunner) callMCP(ctx context.Context, endpoint, token, question string, retry int) (ExecutionResponse, map[string]any, error) {
-	client := mcp.NewClient(&mcp.Implementation{Name: "agenteval-runner", Version: "v1.0.0"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "agenteval-go-runner", Version: "v1.0.0"}, nil)
 
 	httpClient := &http.Client{
 		Timeout: runnerTaskTimeout,
@@ -211,21 +219,23 @@ func (r *goRunner) callMCP(ctx context.Context, endpoint, token, question string
 
 func (r *goRunner) executeOpenAI(ctx context.Context, req ExecutionRequest) ExecutionResponse {
 	start := time.Now()
-	apiKey := firstNonEmptyString(req.Config, "api_key")
-	promptID := firstNonEmptyString(req.Config, "prompt_id")
-	promptVersion := firstNonEmptyString(req.Config, "prompt_version")
-	projectID := firstNonEmptyString(req.Config, "project_id")
-	systemPrompt := firstNonEmptyString(req.Config, "system_prompt", "instructions")
-	if strings.TrimSpace(systemPrompt) == "" {
+	payload := req.Payload
+	isEvaluatorTask := isEvaluatorPayload(payload)
+
+	apiKey := firstNonEmptyString(req.Config, "openai_api_key", "api_key")
+	promptID := firstNonEmptyString(req.Config, "openai_prompt_id", "prompt_id")
+	promptVersion := firstNonEmptyString(req.Config, "openai_prompt_version", "prompt_version")
+	projectID := firstNonEmptyString(req.Config, "openai_project_id", "project_id")
+	systemPrompt := firstNonEmptyString(req.Config, "openai_system_prompt", "system_prompt", "instructions")
+	if strings.TrimSpace(systemPrompt) == "" && isEvaluatorTask {
 		systemPrompt = DefaultEvaluatorSystemPrompt()
 	}
-	model := strings.TrimSpace(firstNonEmptyString(req.Config, "model"))
+	model := strings.TrimSpace(firstNonEmptyString(req.Config, "openai_model", "model"))
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
 	openAIMode := resolveOpenAIMode(req.Config, promptID)
 
-	payload := req.Payload
 	questionText := resolveQuestionText(payload)
 	originalQuestion := firstNonEmptyString(payload, "original_question")
 	expectedAnswer := firstNonEmptyString(payload, "expected_answer")
@@ -235,7 +245,7 @@ func (r *goRunner) executeOpenAI(ctx context.Context, req ExecutionRequest) Exec
 	if apiKey == "" {
 		return ExecutionResponse{
 			Success: false,
-			Error:   "OpenAI API Key is missing. Please configure your Evaluator Agent or use 'MOCK' as the key.",
+			Error:   "OpenAI API Key is missing. Configure openai_api_key (or api_key) and retry.",
 			Metadata: map[string]any{
 				"duration_ms": 0,
 			},
@@ -300,7 +310,7 @@ func (r *goRunner) executeOpenAI(ctx context.Context, req ExecutionRequest) Exec
 					},
 				},
 			}
-		} else if originalQuestion != "" || expectedAnswer != "" {
+		} else if isEvaluatorTask {
 			inputPayload = fmt.Sprintf("RESPONSE TO EVALUATE:\n%s\n\n---\nCONTEXT:\nOriginal Question: %s\nExpected Answer: %s\n", questionText, fallbackString(originalQuestion, "N/A"), fallbackString(expectedAnswer, "N/A"))
 		} else {
 			inputPayload = questionText
@@ -328,8 +338,10 @@ func (r *goRunner) executeOpenAI(ctx context.Context, req ExecutionRequest) Exec
 					},
 				},
 			}
-		} else {
+		} else if isEvaluatorTask {
 			questionText = buildEvaluationPrompt(questionText, originalQuestion, expectedAnswer)
+			inputPayload = questionText
+		} else {
 			inputPayload = questionText
 		}
 
@@ -355,6 +367,489 @@ func (r *goRunner) executeOpenAI(ctx context.Context, req ExecutionRequest) Exec
 		"duration_ms":  int(time.Since(start).Milliseconds()),
 		"raw_response": rawResponse,
 		"prompt_sent":  promptSent,
+	}
+	return ExecutionResponse{Success: true, Answer: resultText, Metadata: metadata}
+}
+
+func (r *goRunner) executeNVIDIA(ctx context.Context, req ExecutionRequest) ExecutionResponse {
+	start := time.Now()
+
+	apiKey := firstNonEmptyString(req.Config, "nvidia_api_key", "api_key")
+	model := strings.TrimSpace(firstNonEmptyString(req.Config, "nvidia_model", "model"))
+	baseURL := strings.TrimRight(strings.TrimSpace(firstNonEmptyString(req.Config, "nvidia_base_url", "base_url")), "/")
+	systemPrompt := strings.TrimSpace(firstNonEmptyString(req.Config, "nvidia_system_prompt", "system_prompt", "instructions"))
+	isEvaluatorTask := isEvaluatorPayload(req.Payload)
+	if systemPrompt == "" && isEvaluatorTask {
+		systemPrompt = DefaultEvaluatorSystemPrompt()
+	}
+
+	if apiKey == "" {
+		return ExecutionResponse{
+			Success: false,
+			Error:   "NVIDIA NIM API key is missing. Configure nvidia_api_key (or api_key) and retry.",
+			Metadata: map[string]any{
+				"duration_ms": 0,
+			},
+		}
+	}
+
+	if model == "" {
+		model = strings.TrimSpace(os.Getenv("NVIDIA_NIM_MODEL"))
+	}
+	if model == "" {
+		model = "meta/llama-3.1-8b-instruct"
+	}
+
+	if baseURL == "" {
+		baseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("NVIDIA_NIM_BASE_URL")), "/")
+	}
+	if baseURL == "" {
+		baseURL = "https://integrate.api.nvidia.com/v1"
+	}
+
+	if isMockAPIKey(apiKey) {
+		if r.isProduction() {
+			return ExecutionResponse{
+				Success: false,
+				Error:   "Mock execution is disabled in production",
+				Metadata: map[string]any{
+					"duration_ms": 0,
+				},
+			}
+		}
+		answer := mockOpenAIAnswer(resolveQuestionText(req.Payload))
+		return ExecutionResponse{
+			Success: true,
+			Answer:  answer,
+			Metadata: map[string]any{
+				"duration_ms": int(time.Since(start).Milliseconds()),
+				"raw_response": map[string]any{
+					"mock":   true,
+					"status": "simulated",
+				},
+			},
+		}
+	}
+
+	if ctx != nil && ctx.Err() != nil {
+		return ExecutionResponse{Success: false, Error: ctx.Err().Error(), Metadata: errorMeta(start, ctx.Err(), nil)}
+	}
+
+	questionText := resolveQuestionText(req.Payload)
+	originalQuestion := firstNonEmptyString(req.Payload, "original_question")
+	expectedAnswer := firstNonEmptyString(req.Payload, "expected_answer")
+	if isEvaluatorTask {
+		questionText = buildEvaluationPrompt(questionText, originalQuestion, expectedAnswer)
+	}
+
+	messages := make([]map[string]any, 0, 2)
+	if systemPrompt != "" {
+		messages = append(messages, map[string]any{
+			"role":    "system",
+			"content": systemPrompt,
+		})
+	}
+	messages = append(messages, map[string]any{
+		"role":    "user",
+		"content": questionText,
+	})
+
+	body := map[string]any{
+		"model":    model,
+		"messages": messages,
+	}
+
+	resultText, rawResponse, err := callOpenAIWithBaseURL(ctx, apiKey, "", baseURL, "chat/completions", body, parseOpenAIChat)
+	if err != nil {
+		metadata := errorMeta(start, err, nil)
+		addTimeoutMeta(metadata, ctx, runnerTaskTimeout)
+		if isGatewayTimeoutError(err) {
+			metadata["timeout_source"] = "upstream_gateway"
+		}
+		return ExecutionResponse{Success: false, Error: err.Error(), Metadata: metadata}
+	}
+
+	metadata := map[string]any{
+		"duration_ms":  int(time.Since(start).Milliseconds()),
+		"raw_response": rawResponse,
+		"prompt_sent": map[string]any{
+			"provider":      "nvidia",
+			"model":         model,
+			"base_url":      baseURL,
+			"system_prompt": systemPrompt,
+			"messages":      messages,
+		},
+	}
+	return ExecutionResponse{Success: true, Answer: resultText, Metadata: metadata}
+}
+
+func (r *goRunner) executeOpenRouter(ctx context.Context, req ExecutionRequest) ExecutionResponse {
+	start := time.Now()
+
+	apiKey := firstNonEmptyString(req.Config, "openrouter_api_key", "api_key")
+	model := strings.TrimSpace(firstNonEmptyString(req.Config, "openrouter_model", "model"))
+	baseURL := strings.TrimRight(strings.TrimSpace(firstNonEmptyString(req.Config, "openrouter_base_url", "base_url")), "/")
+	systemPrompt := strings.TrimSpace(firstNonEmptyString(req.Config, "openrouter_system_prompt", "system_prompt", "instructions"))
+	httpReferer := strings.TrimSpace(firstNonEmptyString(req.Config, "openrouter_http_referer", "http_referer"))
+	xTitle := strings.TrimSpace(firstNonEmptyString(req.Config, "openrouter_x_title", "x_title"))
+	isEvaluatorTask := isEvaluatorPayload(req.Payload)
+	if systemPrompt == "" && isEvaluatorTask {
+		systemPrompt = DefaultEvaluatorSystemPrompt()
+	}
+
+	if apiKey == "" {
+		return ExecutionResponse{
+			Success: false,
+			Error:   "OpenRouter API key is missing. Configure openrouter_api_key (or api_key) and retry.",
+			Metadata: map[string]any{
+				"duration_ms": 0,
+			},
+		}
+	}
+
+	if model == "" {
+		model = strings.TrimSpace(os.Getenv("OPENROUTER_MODEL"))
+	}
+	if model == "" {
+		model = "openai/gpt-4o-mini"
+	}
+
+	if baseURL == "" {
+		baseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("OPENROUTER_BASE_URL")), "/")
+	}
+	if baseURL == "" {
+		baseURL = "https://openrouter.ai/api/v1"
+	}
+
+	if httpReferer == "" {
+		httpReferer = strings.TrimSpace(os.Getenv("OPENROUTER_HTTP_REFERER"))
+	}
+	if xTitle == "" {
+		xTitle = strings.TrimSpace(os.Getenv("OPENROUTER_X_TITLE"))
+	}
+
+	if isMockAPIKey(apiKey) {
+		if r.isProduction() {
+			return ExecutionResponse{
+				Success: false,
+				Error:   "Mock execution is disabled in production",
+				Metadata: map[string]any{
+					"duration_ms": 0,
+				},
+			}
+		}
+		answer := mockOpenAIAnswer(resolveQuestionText(req.Payload))
+		return ExecutionResponse{
+			Success: true,
+			Answer:  answer,
+			Metadata: map[string]any{
+				"duration_ms": int(time.Since(start).Milliseconds()),
+				"raw_response": map[string]any{
+					"mock":   true,
+					"status": "simulated",
+				},
+			},
+		}
+	}
+
+	if ctx != nil && ctx.Err() != nil {
+		return ExecutionResponse{Success: false, Error: ctx.Err().Error(), Metadata: errorMeta(start, ctx.Err(), nil)}
+	}
+
+	questionText := resolveQuestionText(req.Payload)
+	originalQuestion := firstNonEmptyString(req.Payload, "original_question")
+	expectedAnswer := firstNonEmptyString(req.Payload, "expected_answer")
+	if isEvaluatorTask {
+		questionText = buildEvaluationPrompt(questionText, originalQuestion, expectedAnswer)
+	}
+
+	messages := make([]map[string]any, 0, 2)
+	if systemPrompt != "" {
+		messages = append(messages, map[string]any{
+			"role":    "system",
+			"content": systemPrompt,
+		})
+	}
+	messages = append(messages, map[string]any{
+		"role":    "user",
+		"content": questionText,
+	})
+
+	body := map[string]any{
+		"model":    model,
+		"messages": messages,
+	}
+
+	extraHeaders := map[string]string{}
+	if httpReferer != "" {
+		extraHeaders["HTTP-Referer"] = httpReferer
+	}
+	if xTitle != "" {
+		extraHeaders["X-Title"] = xTitle
+	}
+
+	resultText, rawResponse, err := callOpenAIWithBaseURLAndHeaders(ctx, apiKey, "", baseURL, "chat/completions", body, parseOpenAIChat, extraHeaders)
+	if err != nil {
+		metadata := errorMeta(start, err, nil)
+		addTimeoutMeta(metadata, ctx, runnerTaskTimeout)
+		if isGatewayTimeoutError(err) {
+			metadata["timeout_source"] = "upstream_gateway"
+		}
+		return ExecutionResponse{Success: false, Error: err.Error(), Metadata: metadata}
+	}
+
+	metadata := map[string]any{
+		"duration_ms":  int(time.Since(start).Milliseconds()),
+		"raw_response": rawResponse,
+		"prompt_sent": map[string]any{
+			"provider":      "openrouter",
+			"model":         model,
+			"base_url":      baseURL,
+			"system_prompt": systemPrompt,
+			"messages":      messages,
+		},
+	}
+	if len(extraHeaders) > 0 {
+		metadata["provider_headers"] = extraHeaders
+	}
+	return ExecutionResponse{Success: true, Answer: resultText, Metadata: metadata}
+}
+
+func (r *goRunner) executeOpenAICompatible(ctx context.Context, req ExecutionRequest) ExecutionResponse {
+	start := time.Now()
+
+	apiKey := firstNonEmptyString(req.Config, "compatible_api_key", "openai_compatible_api_key", "api_key")
+	model := strings.TrimSpace(firstNonEmptyString(req.Config, "compatible_model", "openai_compatible_model", "model"))
+	baseURL := strings.TrimRight(strings.TrimSpace(firstNonEmptyString(req.Config, "compatible_base_url", "openai_compatible_base_url", "base_url")), "/")
+	systemPrompt := strings.TrimSpace(firstNonEmptyString(req.Config, "compatible_system_prompt", "openai_compatible_system_prompt", "system_prompt", "instructions"))
+	isEvaluatorTask := isEvaluatorPayload(req.Payload)
+	if systemPrompt == "" && isEvaluatorTask {
+		systemPrompt = DefaultEvaluatorSystemPrompt()
+	}
+
+	if apiKey == "" {
+		return ExecutionResponse{
+			Success: false,
+			Error:   "OpenAI-compatible API key is missing. Configure compatible_api_key (or api_key) and retry.",
+			Metadata: map[string]any{
+				"duration_ms": 0,
+			},
+		}
+	}
+
+	if baseURL == "" {
+		baseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("OPENAI_COMPATIBLE_BASE_URL")), "/")
+	}
+	if baseURL == "" {
+		return ExecutionResponse{
+			Success: false,
+			Error:   "OpenAI-compatible base URL is missing. Configure compatible_base_url (or base_url) and retry.",
+			Metadata: map[string]any{
+				"duration_ms": 0,
+			},
+		}
+	}
+
+	if model == "" {
+		model = strings.TrimSpace(os.Getenv("OPENAI_COMPATIBLE_MODEL"))
+	}
+	if model == "" {
+		model = "gpt-4o-mini"
+	}
+
+	if isMockAPIKey(apiKey) {
+		if r.isProduction() {
+			return ExecutionResponse{
+				Success: false,
+				Error:   "Mock execution is disabled in production",
+				Metadata: map[string]any{
+					"duration_ms": 0,
+				},
+			}
+		}
+		answer := mockOpenAIAnswer(resolveQuestionText(req.Payload))
+		return ExecutionResponse{
+			Success: true,
+			Answer:  answer,
+			Metadata: map[string]any{
+				"duration_ms": int(time.Since(start).Milliseconds()),
+				"raw_response": map[string]any{
+					"mock":   true,
+					"status": "simulated",
+				},
+			},
+		}
+	}
+
+	if ctx != nil && ctx.Err() != nil {
+		return ExecutionResponse{Success: false, Error: ctx.Err().Error(), Metadata: errorMeta(start, ctx.Err(), nil)}
+	}
+
+	questionText := resolveQuestionText(req.Payload)
+	originalQuestion := firstNonEmptyString(req.Payload, "original_question")
+	expectedAnswer := firstNonEmptyString(req.Payload, "expected_answer")
+	if isEvaluatorTask {
+		questionText = buildEvaluationPrompt(questionText, originalQuestion, expectedAnswer)
+	}
+
+	messages := make([]map[string]any, 0, 2)
+	if systemPrompt != "" {
+		messages = append(messages, map[string]any{
+			"role":    "system",
+			"content": systemPrompt,
+		})
+	}
+	messages = append(messages, map[string]any{
+		"role":    "user",
+		"content": questionText,
+	})
+
+	body := map[string]any{
+		"model":    model,
+		"messages": messages,
+	}
+
+	extraHeaders := extractStringMap(req.Config, "compatible_headers")
+	resultText, rawResponse, err := callOpenAIWithBaseURLAndHeaders(ctx, apiKey, "", baseURL, "chat/completions", body, parseOpenAIChat, extraHeaders)
+	if err != nil {
+		metadata := errorMeta(start, err, nil)
+		addTimeoutMeta(metadata, ctx, runnerTaskTimeout)
+		if isGatewayTimeoutError(err) {
+			metadata["timeout_source"] = "upstream_gateway"
+		}
+		return ExecutionResponse{Success: false, Error: err.Error(), Metadata: metadata}
+	}
+
+	metadata := map[string]any{
+		"duration_ms":  int(time.Since(start).Milliseconds()),
+		"raw_response": rawResponse,
+		"prompt_sent": map[string]any{
+			"provider":      "openai_compatible",
+			"model":         model,
+			"base_url":      baseURL,
+			"system_prompt": systemPrompt,
+			"messages":      messages,
+		},
+	}
+	if len(extraHeaders) > 0 {
+		metadata["provider_headers"] = extraHeaders
+	}
+	return ExecutionResponse{Success: true, Answer: resultText, Metadata: metadata}
+}
+
+func (r *goRunner) executeAnthropic(ctx context.Context, req ExecutionRequest) ExecutionResponse {
+	start := time.Now()
+
+	apiKey := firstNonEmptyString(req.Config, "anthropic_api_key", "api_key")
+	model := strings.TrimSpace(firstNonEmptyString(req.Config, "anthropic_model", "model"))
+	baseURL := strings.TrimRight(strings.TrimSpace(firstNonEmptyString(req.Config, "anthropic_base_url", "base_url")), "/")
+	systemPrompt := strings.TrimSpace(firstNonEmptyString(req.Config, "anthropic_system_prompt", "system_prompt", "instructions"))
+	version := strings.TrimSpace(firstNonEmptyString(req.Config, "anthropic_version"))
+	isEvaluatorTask := isEvaluatorPayload(req.Payload)
+	if systemPrompt == "" && isEvaluatorTask {
+		systemPrompt = DefaultEvaluatorSystemPrompt()
+	}
+
+	if apiKey == "" {
+		return ExecutionResponse{
+			Success: false,
+			Error:   "Anthropic API key is missing. Configure anthropic_api_key (or api_key) and retry.",
+			Metadata: map[string]any{
+				"duration_ms": 0,
+			},
+		}
+	}
+
+	if model == "" {
+		model = strings.TrimSpace(os.Getenv("ANTHROPIC_MODEL"))
+	}
+	if model == "" {
+		model = "claude-3-5-sonnet-latest"
+	}
+
+	if baseURL == "" {
+		baseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("ANTHROPIC_BASE_URL")), "/")
+	}
+	if baseURL == "" {
+		baseURL = "https://api.anthropic.com/v1"
+	}
+
+	if version == "" {
+		version = strings.TrimSpace(os.Getenv("ANTHROPIC_VERSION"))
+	}
+	if version == "" {
+		version = "2023-06-01"
+	}
+
+	if isMockAPIKey(apiKey) {
+		if r.isProduction() {
+			return ExecutionResponse{
+				Success: false,
+				Error:   "Mock execution is disabled in production",
+				Metadata: map[string]any{
+					"duration_ms": 0,
+				},
+			}
+		}
+		answer := mockOpenAIAnswer(resolveQuestionText(req.Payload))
+		return ExecutionResponse{
+			Success: true,
+			Answer:  answer,
+			Metadata: map[string]any{
+				"duration_ms": int(time.Since(start).Milliseconds()),
+				"raw_response": map[string]any{
+					"mock":   true,
+					"status": "simulated",
+				},
+			},
+		}
+	}
+
+	if ctx != nil && ctx.Err() != nil {
+		return ExecutionResponse{Success: false, Error: ctx.Err().Error(), Metadata: errorMeta(start, ctx.Err(), nil)}
+	}
+
+	questionText := resolveQuestionText(req.Payload)
+	originalQuestion := firstNonEmptyString(req.Payload, "original_question")
+	expectedAnswer := firstNonEmptyString(req.Payload, "expected_answer")
+	if isEvaluatorTask {
+		questionText = buildEvaluationPrompt(questionText, originalQuestion, expectedAnswer)
+	}
+
+	body := map[string]any{
+		"model":      model,
+		"max_tokens": 1024,
+		"messages": []map[string]any{
+			{
+				"role":    "user",
+				"content": questionText,
+			},
+		},
+	}
+	if systemPrompt != "" {
+		body["system"] = systemPrompt
+	}
+
+	resultText, rawResponse, err := callAnthropicMessages(ctx, apiKey, baseURL, version, body)
+	if err != nil {
+		metadata := errorMeta(start, err, nil)
+		addTimeoutMeta(metadata, ctx, runnerTaskTimeout)
+		if isGatewayTimeoutError(err) {
+			metadata["timeout_source"] = "upstream_gateway"
+		}
+		return ExecutionResponse{Success: false, Error: err.Error(), Metadata: metadata}
+	}
+
+	metadata := map[string]any{
+		"duration_ms":  int(time.Since(start).Milliseconds()),
+		"raw_response": rawResponse,
+		"prompt_sent": map[string]any{
+			"provider":      "anthropic",
+			"model":         model,
+			"base_url":      baseURL,
+			"anthropic_ver": version,
+			"system_prompt": systemPrompt,
+		},
 	}
 	return ExecutionResponse{Success: true, Answer: resultText, Metadata: metadata}
 }
@@ -401,6 +896,28 @@ func resolveQuestionText(payload map[string]any) string {
 		return strings.TrimSpace(answer)
 	}
 	return strings.TrimSpace(firstNonEmptyString(payload, "question"))
+}
+
+func isEvaluatorPayload(payload map[string]any) bool {
+	if payload == nil {
+		return false
+	}
+
+	switch raw := payload["is_evaluator_task"].(type) {
+	case bool:
+		return raw
+	case string:
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "1", "true", "yes", "y", "on":
+			return true
+		}
+	}
+
+	if strings.TrimSpace(firstNonEmptyString(payload, "agent_answer")) != "" {
+		return true
+	}
+
+	return false
 }
 
 func isRateLimitError(err error) bool {
@@ -576,14 +1093,21 @@ func callOpenAIChat(ctx context.Context, apiKey, projectID string, messages []ma
 type parseFn func(map[string]any) (string, error)
 
 func callOpenAI(ctx context.Context, apiKey, projectID, path string, body map[string]any, parser parseFn) (string, map[string]any, error) {
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return "", nil, err
-	}
-
 	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")), "/")
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
+	}
+	return callOpenAIWithBaseURL(ctx, apiKey, projectID, baseURL, path, body, parser)
+}
+
+func callOpenAIWithBaseURL(ctx context.Context, apiKey, projectID, baseURL, path string, body map[string]any, parser parseFn) (string, map[string]any, error) {
+	return callOpenAIWithBaseURLAndHeaders(ctx, apiKey, projectID, baseURL, path, body, parser, nil)
+}
+
+func callOpenAIWithBaseURLAndHeaders(ctx context.Context, apiKey, projectID, baseURL, path string, body map[string]any, parser parseFn, extraHeaders map[string]string) (string, map[string]any, error) {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return "", nil, err
 	}
 
 	if ctx == nil {
@@ -597,6 +1121,14 @@ func callOpenAI(ctx context.Context, apiKey, projectID, path string, body map[st
 	req.Header.Set("Content-Type", "application/json")
 	if projectID != "" {
 		req.Header.Set("OpenAI-Project", projectID)
+	}
+	for key, value := range extraHeaders {
+		k := strings.TrimSpace(key)
+		v := strings.TrimSpace(value)
+		if k == "" || v == "" {
+			continue
+		}
+		req.Header.Set(k, v)
 	}
 
 	client := &http.Client{Timeout: runnerTaskTimeout}
@@ -620,6 +1152,132 @@ func callOpenAI(ctx context.Context, apiKey, projectID, path string, body map[st
 
 	text, err := parser(decoded)
 	return text, decoded, err
+}
+
+func callAnthropicMessages(ctx context.Context, apiKey, baseURL, version string, body map[string]any) (string, map[string]any, error) {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return "", nil, err
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	anthropicPath := baseURL
+	if !strings.HasSuffix(strings.ToLower(strings.TrimSpace(baseURL)), "/messages") {
+		anthropicPath = strings.TrimRight(baseURL, "/") + "/messages"
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", anthropicPath, bytes.NewReader(payload))
+	if err != nil {
+		return "", nil, err
+	}
+	req.Header.Set("x-api-key", apiKey)
+	req.Header.Set("anthropic-version", version)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: runnerTaskTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", nil, err
+	}
+	defer resp.Body.Close()
+
+	var decoded map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return "", nil, err
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if errMsg := parseAnthropicError(decoded); errMsg != "" {
+			return "", decoded, errors.New(errMsg)
+		}
+		return "", decoded, fmt.Errorf("anthropic request failed with status %d", resp.StatusCode)
+	}
+
+	text, err := parseAnthropicMessages(decoded)
+	return text, decoded, err
+}
+
+func parseAnthropicError(decoded map[string]any) string {
+	errObj, ok := decoded["error"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	if msg, ok := errObj["message"].(string); ok && strings.TrimSpace(msg) != "" {
+		return msg
+	}
+	return ""
+}
+
+func parseAnthropicMessages(decoded map[string]any) (string, error) {
+	content, ok := decoded["content"].([]any)
+	if !ok || len(content) == 0 {
+		return "", errors.New("anthropic response missing content")
+	}
+
+	var b strings.Builder
+	for _, item := range content {
+		segment, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		t, _ := segment["type"].(string)
+		if strings.TrimSpace(strings.ToLower(t)) != "text" {
+			continue
+		}
+		text, _ := segment["text"].(string)
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(text)
+	}
+
+	if b.Len() == 0 {
+		return "", errors.New("unable to extract anthropic text response")
+	}
+	return b.String(), nil
+}
+
+func extractStringMap(config map[string]any, key string) map[string]string {
+	if config == nil {
+		return nil
+	}
+	raw, ok := config[key]
+	if !ok || raw == nil {
+		return nil
+	}
+
+	result := map[string]string{}
+	switch typed := raw.(type) {
+	case map[string]string:
+		for k, v := range typed {
+			if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
+				continue
+			}
+			result[k] = v
+		}
+	case map[string]any:
+		for k, v := range typed {
+			if strings.TrimSpace(k) == "" {
+				continue
+			}
+			value := strings.TrimSpace(fmt.Sprint(v))
+			if value == "" || value == "<nil>" {
+				continue
+			}
+			result[k] = value
+		}
+	}
+
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func parseOpenAIResponses(decoded map[string]any) (string, error) {

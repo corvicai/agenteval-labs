@@ -16,6 +16,55 @@ import (
 	"gorm.io/gorm"
 )
 
+func normalizeResultEvaluationsForDisplay(result *models.RunResult) {
+	if result == nil || len(result.Evaluations) == 0 {
+		return
+	}
+
+	hasUserEval := false
+	var latestAgentEval *models.Evaluation
+
+	for i := range result.Evaluations {
+		ev := result.Evaluations[i]
+		raterType := strings.ToLower(strings.TrimSpace(ev.RaterType))
+		if raterType == "user" {
+			hasUserEval = true
+			break
+		}
+		if raterType != "agent" {
+			continue
+		}
+		if latestAgentEval == nil || ev.CreatedAt.After(latestAgentEval.CreatedAt) {
+			cloned := ev
+			latestAgentEval = &cloned
+		}
+	}
+
+	if hasUserEval || latestAgentEval == nil {
+		return
+	}
+
+	// Backward-compatibility bridge for clients that only read rater_type=user.
+	synthetic := *latestAgentEval
+	// Legacy auto-evaluator runs stored low scores as "wrong", which the UI
+	// interprets as partial. Normalize those to negative for display.
+	if strings.EqualFold(strings.TrimSpace(synthetic.Rating), "wrong") && synthetic.Score != nil && *synthetic.Score <= 50 {
+		ratingCode := 3
+		synthetic.Rating = "dislike"
+		synthetic.RatingCode = &ratingCode
+	}
+	synthetic.ID = uuid.New()
+	synthetic.RaterType = "user"
+	synthetic.RaterID = uuid.Nil
+	result.Evaluations = append(result.Evaluations, synthetic)
+}
+
+func normalizeResultsEvaluationsForDisplay(results []models.RunResult) {
+	for i := range results {
+		normalizeResultEvaluationsForDisplay(&results[i])
+	}
+}
+
 func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 	var payload models.StartRunPayload
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
@@ -72,23 +121,73 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 					c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is in managed mode but Prompt ID is missing", agent.Name))
 					return
 				}
-			case "evaluator":
+			case "nvidia":
 				apiKey, _ := config["api_key"].(string)
 				if strings.TrimSpace(apiKey) == "" {
-					c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is missing credentials (API Key is required)", agent.Name))
+					c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is missing credentials (NVIDIA API Key is required)", agent.Name))
 					return
 				}
-				promptID, _ := config["prompt_id"].(string)
-				mode, _ := config["openai_mode"].(string)
-				mode = strings.ToLower(strings.TrimSpace(mode))
-				if mode == "" {
-					if strings.TrimSpace(promptID) != "" {
-						mode = "managed"
-					} else {
-						mode = "standard"
-					}
+			case "anthropic":
+				apiKey, _ := config["anthropic_api_key"].(string)
+				if strings.TrimSpace(apiKey) == "" {
+					apiKey, _ = config["api_key"].(string)
 				}
-				if mode == "managed" && strings.TrimSpace(promptID) == "" {
+				if strings.TrimSpace(apiKey) == "" {
+					c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is missing credentials (anthropic_api_key or api_key is required)", agent.Name))
+					return
+				}
+			case "openrouter":
+				apiKey, _ := config["openrouter_api_key"].(string)
+				if strings.TrimSpace(apiKey) == "" {
+					apiKey, _ = config["api_key"].(string)
+				}
+				if strings.TrimSpace(apiKey) == "" {
+					c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is missing credentials (openrouter_api_key or api_key is required)", agent.Name))
+					return
+				}
+			case "openai_compatible":
+				apiKey, _ := config["compatible_api_key"].(string)
+				if strings.TrimSpace(apiKey) == "" {
+					apiKey, _ = config["api_key"].(string)
+				}
+				baseURL, _ := config["compatible_base_url"].(string)
+				if strings.TrimSpace(baseURL) == "" {
+					baseURL, _ = config["base_url"].(string)
+				}
+				if strings.TrimSpace(apiKey) == "" || strings.TrimSpace(baseURL) == "" {
+					c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is missing credentials (compatible_api_key/api_key and compatible_base_url/base_url are required)", agent.Name))
+					return
+				}
+			case "evaluator":
+				preferredProvider := orchestrator.PreferredEvaluatorProvider(config)
+				resolvedProvider := orchestrator.ResolveEvaluatorProvider(config)
+
+				if !orchestrator.IsSelectedEvaluatorProviderConfigured(config) {
+					switch preferredProvider {
+					case orchestrator.EvaluatorProviderNVIDIA:
+						c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is missing credentials (nvidia_api_key or api_key is required)", agent.Name))
+					case orchestrator.EvaluatorProviderOpenRouter:
+						c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is missing credentials (openrouter_api_key or api_key is required)", agent.Name))
+					case orchestrator.EvaluatorProviderAnthropic:
+						c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is missing credentials (anthropic_api_key or api_key is required)", agent.Name))
+					case orchestrator.EvaluatorProviderOpenAICompatible:
+						c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is missing credentials (compatible_api_key + compatible_base_url are required)", agent.Name))
+					case orchestrator.EvaluatorProviderAuto:
+						c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is missing evaluator credentials (configure at least one: nvidia_api_key, openrouter_api_key, anthropic_api_key, openai_api_key or compatible_api_key+compatible_base_url)", agent.Name))
+					default:
+						if orchestrator.EvaluatorOpenAIMode(config) == "managed" {
+							c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is in managed mode but Prompt ID is missing", agent.Name))
+						} else {
+							c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is missing credentials (openai_api_key or api_key is required)", agent.Name))
+						}
+					}
+					return
+				}
+
+				if (preferredProvider == orchestrator.EvaluatorProviderOpenAI || preferredProvider == orchestrator.EvaluatorProviderAuto) &&
+					resolvedProvider == orchestrator.EvaluatorProviderOpenAI &&
+					orchestrator.EvaluatorOpenAIMode(config) == "managed" &&
+					strings.TrimSpace(orchestrator.EvaluatorOpenAIPromptID(config)) == "" {
 					c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' is in managed mode but Prompt ID is missing", agent.Name))
 					return
 				}
@@ -246,6 +345,7 @@ func (h *Hub) handleGetRunDetails(c *Connection, env models.Envelope) {
 		c.SendError(env.CorrelationID, "failed to load results: "+err.Error())
 		return
 	}
+	normalizeResultsEvaluationsForDisplay(response.Results)
 
 	// 4. Collect Agent info
 	response.Agents = make(map[string]models.Agent)
@@ -563,6 +663,7 @@ func (h *Hub) handleGetResultDetails(c *Connection, env models.Envelope) {
 		c.SendError(env.CorrelationID, "failed to fetch details")
 		return
 	}
+	normalizeResultsEvaluationsForDisplay(results)
 
 	c.SendResponse(DataResultDetails, env.CorrelationID, models.ResultDetailsResponse{Results: results})
 }

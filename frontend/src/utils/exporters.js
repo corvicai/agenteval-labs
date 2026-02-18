@@ -42,6 +42,20 @@ const buildAgentStats = (results, calculateStats) => {
     }
 }
 
+const isEvaluatorAgent = (agent = {}) => {
+    const provider = String(agent.provider || agent.provider_type || '').toLowerCase()
+    const name = String(agent.name || agent.config?.name || '').toLowerCase()
+    const cfg = agent.config || {}
+    const hasLegacyEvaluatorConfig =
+        !!cfg?.target_agent_id ||
+        (typeof cfg?.openai_mode === 'string' && cfg.openai_mode.trim() !== '') ||
+        (typeof cfg?.system_prompt === 'string' && cfg.system_prompt.trim() !== '')
+
+    if (provider === 'evaluator') return true
+    if (provider === 'openai' && (hasLegacyEvaluatorConfig || name.includes('evaluator'))) return true
+    return false
+}
+
 export const exportResultsReport = ({
     agentsRef,
     extractText = extractAnswerText,
@@ -54,7 +68,17 @@ export const exportResultsReport = ({
         return
     }
 
-    const agentsArray = agents.map(agent => {
+    const orderedAgents = [...agents].sort((a, b) => {
+        const aEval = isEvaluatorAgent(a)
+        const bEval = isEvaluatorAgent(b)
+        if (aEval && !bEval) return 1
+        if (!aEval && bEval) return -1
+        const aPos = Number.isFinite(a?.position) ? a.position : 0
+        const bPos = Number.isFinite(b?.position) ? b.position : 0
+        return aPos - bPos
+    })
+
+    const agentsArray = orderedAgents.map(agent => {
         const config = agent.config?.value || agent.config || {}
         const results = agent.results?.value || agent.results || []
         const statsData = buildAgentStats(results, calculateStats)
@@ -70,14 +94,14 @@ export const exportResultsReport = ({
     })
 
     // Determine max number of questions across all agents
-    const maxLength = Math.max(0, ...agents.map(agent => (agent.results?.value || agent.results || []).length))
+    const maxLength = Math.max(0, ...orderedAgents.map(agent => (agent.results?.value || agent.results || []).length))
     const resultsArray = []
 
     for (let i = 0; i < maxLength; i++) {
         // Get question info from first available agent result
-        const firstResult = agents.find(a => (a.results?.value || a.results || [])[i])?.results[i] ||
-            (agents[0]?.results?.value?.[i]) ||
-            (agents[0]?.results?.[i])
+        const firstResult = orderedAgents.find(a => (a.results?.value || a.results || [])[i])?.results[i] ||
+            (orderedAgents[0]?.results?.value?.[i]) ||
+            (orderedAgents[0]?.results?.[i])
 
         if (!firstResult) continue
 
@@ -85,7 +109,7 @@ export const exportResultsReport = ({
             questionNumber: i + 1,
             question: firstResult.question,
             expectedAnswer: firstResult.question?.expected || null, // Capture expected answer if available
-            agents: agents.map(agent => {
+            agents: orderedAgents.map(agent => {
                 const arr = agent.results?.value || agent.results || []
                 const result = arr[i]
                 return {

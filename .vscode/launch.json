@@ -10,7 +10,6 @@
             "cwd": "${workspaceFolder}/server_go",
             "env": {
                 "DATABASE_URL": "host=localhost user=postgres password=postgres dbname=benchmarking port=5432 sslmode=disable",
-                "PYTHON_RUNNER_URL": "http://localhost:3003",
                 "JWT_SECRET": "dev-secret-debug-mode",
                 "APP_ENV": "development",
                 "PORT": "8080"

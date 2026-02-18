@@ -60,7 +60,7 @@
             <div class="agent-item-header">
               <span class="agent-name">{{ agent.name }}</span>
               <span class="agent-type-badge" :class="agent.provider_type">
-                {{ agent.provider_type === 'mcp' ? 'Corvic' : (agent.provider_type === 'evaluator' ? 'Evaluator' : agent.provider_type) }}
+                {{ agent.provider_type === 'mcp' ? 'Corvic' : (agent.provider_type === 'evaluator' ? 'Evaluator' : (agent.provider_type === 'nvidia' ? 'NVIDIA NIM' : agent.provider_type)) }}
               </span>
             </div>
             <div class="agent-item-status">
@@ -231,17 +231,6 @@ function onQuestionSetSaved(updated) {
   gap: 8px;
 }
 
-.questions-header-top h3 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.questions-header-actions {
-  display: flex;
-  gap: 8px;
-}
-
 /* UL reset – no surrounding container box */
 .qs-list {
   list-style: none;
@@ -313,7 +302,6 @@ function onQuestionSetSaved(updated) {
   color: #1B2430;
 
   /* allow wrapping like the screenshot */
-  white-space: normal;
   flex: 1;
   white-space: nowrap;
   overflow: hidden;
@@ -450,6 +438,11 @@ function onQuestionSetSaved(updated) {
 .agent-type-badge.evaluator {
   background: #fff3cd;
   color: #856404;
+}
+
+.agent-type-badge.nvidia {
+  background: #dcfce7;
+  color: #14532d;
 }
 
 .agent-item-status {

@@ -1203,10 +1203,6 @@ td {
   font-size: 0.75rem;
 }
 
-.mt-4 {
-  margin-top: 1rem;
-}
-
 .form-actions {
   display: flex;
   gap: 0.75rem;

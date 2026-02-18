@@ -106,6 +106,15 @@ const totalQuestions = computed(() => {
   return localCategories.value.reduce((acc, cat) => acc + (cat.questions?.length || 0), 0)
 })
 
+function resolveStableQuestionId(question, catIdx, qIdx) {
+  const rawId = question?.id
+  if (rawId !== null && rawId !== undefined && String(rawId) !== '') {
+    return rawId
+  }
+  // Keep compatibility with runner fallback IDs to avoid orphaning historical results.
+  return `${catIdx + 1}-${qIdx + 1}`
+}
+
 const loadQuestions = () => {
   loading.value = true
   try {
@@ -124,12 +133,10 @@ const loadQuestions = () => {
       if (data && data.categories) {
         // Deep clone to avoid direct mutations
         const cloned = JSON.parse(JSON.stringify(data.categories))
-        // Ensure every question has an ID
+        // Ensure every question has a stable ID.
         cloned.forEach((cat, cIdx) => {
           cat.questions?.forEach((q, qIdx) => {
-            if (!q.id) {
-              q.id = `q-${Date.now()}-${cIdx}-${qIdx}`
-            }
+            q.id = resolveStableQuestionId(q, cIdx, qIdx)
           })
         })
         localCategories.value = cloned

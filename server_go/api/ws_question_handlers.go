@@ -254,6 +254,9 @@ func (h *Hub) handleUpdateQuestionSetAgents(c *Connection, env models.Envelope) 
 		// Insert new mappings
 		var mappings []models.QuestionSetAgent
 		for _, a := range payload.Agents {
+			if !a.Enabled {
+				continue
+			}
 			agentID, err := uuid.Parse(a.AgentID)
 			if err != nil {
 				log.Printf("[QS_AGENTS] Skipping invalid agent_id: %s", a.AgentID)
@@ -265,7 +268,7 @@ func (h *Hub) handleUpdateQuestionSetAgents(c *Connection, env models.Envelope) 
 				QuestionSetID: qsID,
 				AgentID:       agentID,
 				Config:        models.EncryptedJSON(configJSON),
-				Enabled:       a.Enabled,
+				Enabled:       true,
 				Position:      a.Position,
 			})
 		}
@@ -288,4 +291,109 @@ func (h *Hub) handleUpdateQuestionSetAgents(c *Connection, env models.Envelope) 
 
 	h.BroadcastEvent(meta.WorkspaceID, "question_sets", "updated", qs)
 	c.SendResponse(DataResponse, env.CorrelationID, qs)
+}
+
+func (h *Hub) handleGetQuestionSetAgentEnvelope(c *Connection, env models.Envelope) {
+	if !c.IsAuthenticated {
+		c.SendError(env.CorrelationID, "not authenticated")
+		return
+	}
+
+	var payload models.GetQuestionSetAgentEnvelopePayload
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		c.SendError(env.CorrelationID, "invalid payload")
+		return
+	}
+
+	qsID, err := uuid.Parse(payload.QuestionSetID)
+	if err != nil {
+		c.SendError(env.CorrelationID, "invalid question_set_id")
+		return
+	}
+
+	type qsMeta struct {
+		WorkspaceID uuid.UUID `json:"workspace_id"`
+	}
+	var meta qsMeta
+	if err := h.db.Table("question_sets").
+		Select("clients.workspace_id").
+		Joins("JOIN clients ON clients.id = question_sets.client_id").
+		Where("question_sets.id = ?", qsID).
+		Scan(&meta).Error; err != nil {
+		c.SendErrorWithDetails(env.CorrelationID, "question set not found", err.Error())
+		return
+	}
+	if meta.WorkspaceID == uuid.Nil {
+		c.SendError(env.CorrelationID, "question set workspace not found")
+		return
+	}
+
+	var user models.User
+	h.db.First(&user, "id = ?", c.UserID)
+	if !user.IsAdmin && c.WorkspaceID != uuid.Nil && meta.WorkspaceID != c.WorkspaceID {
+		c.SendError(env.CorrelationID, "workspace mismatch")
+		return
+	}
+
+	var workspaceAgents []models.Agent
+	if err := h.db.Where("workspace_id = ?", meta.WorkspaceID).
+		Order("position ASC").
+		Order("created_at ASC").
+		Find(&workspaceAgents).Error; err != nil {
+		c.SendErrorWithDetails(env.CorrelationID, "failed to load workspace agents", err.Error())
+		return
+	}
+
+	var qsAgents []models.QuestionSetAgent
+	if err := h.db.Preload("Agent").
+		Where("question_set_id = ?", qsID).
+		Order("position ASC").
+		Find(&qsAgents).Error; err != nil {
+		c.SendErrorWithDetails(env.CorrelationID, "failed to load question set agents", err.Error())
+		return
+	}
+
+	selectedAgents := make([]models.Agent, 0, len(qsAgents))
+	selectedIDs := make(map[uuid.UUID]struct{}, len(qsAgents))
+
+	for _, link := range qsAgents {
+		if !link.Enabled {
+			continue
+		}
+		if link.Agent.ID == uuid.Nil {
+			continue
+		}
+		selected := link.Agent
+		if len(link.Config) > 0 {
+			selected.Config = link.Config
+		}
+		selected.Enabled = true
+		selected.Position = link.Position
+		selectedAgents = append(selectedAgents, selected)
+		selectedIDs[selected.ID] = struct{}{}
+	}
+
+	if len(selectedAgents) == 0 {
+		for _, candidate := range workspaceAgents {
+			if !candidate.Enabled || candidate.ProviderType == "evaluator" {
+				continue
+			}
+			selectedAgents = append(selectedAgents, candidate)
+			selectedIDs[candidate.ID] = struct{}{}
+		}
+	}
+
+	availableAgents := make([]models.Agent, 0, len(workspaceAgents))
+	for _, candidate := range workspaceAgents {
+		if _, ok := selectedIDs[candidate.ID]; ok {
+			continue
+		}
+		availableAgents = append(availableAgents, candidate)
+	}
+
+	c.SendResponse(DataResponse, env.CorrelationID, models.QuestionSetAgentEnvelopeResponse{
+		QuestionSetID:   qsID.String(),
+		SelectedAgents:  selectedAgents,
+		AvailableAgents: availableAgents,
+	})
 }

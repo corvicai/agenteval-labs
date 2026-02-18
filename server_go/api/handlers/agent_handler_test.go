@@ -19,6 +19,8 @@ import (
 
 // setupTestDB creates an in-memory SQLite database for testing
 func setupTestDB(t *testing.T) *gorm.DB {
+	t.Setenv("ENCRYPTION_KEY", "12345678901234567890123456789012")
+
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 

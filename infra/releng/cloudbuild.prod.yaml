@@ -6,7 +6,7 @@ steps:
       set -eu -o pipefail
       RELEASE_TAG=$(cat infra/releng/release-tag.txt)
 
-      gcloud run deploy agenteval-runner-prod --image ${_IMAGE_REPO_BASE}/agenteval-runner:release-${RELEASE_TAG} --region ${_DEPLOY_REGION}
+      gcloud run deploy agenteval-api-prod --image ${_IMAGE_REPO_BASE}/agenteval-api:release-${RELEASE_TAG} --region ${_DEPLOY_REGION}
 
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     script: |

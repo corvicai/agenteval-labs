@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,18 +34,46 @@ type Engine struct {
 }
 
 type Task struct {
-	RunID            uuid.UUID
-	WorkspaceID      uuid.UUID // Needed for broadcasting queued event
-	AgentID          uuid.UUID
-	QuestionID       string
-	QuestionText     string
-	ExpectedAnswer   string
-	OriginalQuestion string
-	AgentAnswer      string // For evaluators: the agent's response to evaluate
-	AgentConfig      map[string]any
-	ProviderType     string
-	MaxConcurrency   int // Max parallel requests for this agent
-	RetryID          string
+	RunID             uuid.UUID
+	WorkspaceID       uuid.UUID // Needed for broadcasting queued event
+	AgentID           uuid.UUID
+	QuestionID        string
+	QuestionText      string
+	ExpectedAnswer    string
+	OriginalQuestion  string
+	AgentAnswer       string // For evaluators: the agent's response to evaluate
+	AgentConfig       map[string]any
+	ProviderType      string
+	MaxConcurrency    int // Max parallel requests for this agent
+	RetryID           string
+	TargetRunResultID uuid.UUID // For evaluator tasks: run_result being evaluated
+}
+
+var (
+	evaluatorScoreAtEndRegex = regexp.MustCompile(`(\d{1,2})\s*/\s*10$`)
+	evaluatorScoreAnyRegex   = regexp.MustCompile(`(^|[^0-9])(\d{1,2})\s*/\s*10($|[^0-9])`)
+)
+
+func decodeConfigJSON(raw []byte) map[string]any {
+	cfg := make(map[string]any)
+	if len(raw) == 0 {
+		return cfg
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil || cfg == nil {
+		return map[string]any{}
+	}
+	return cfg
+}
+
+func mergeConfig(base map[string]any, override map[string]any) map[string]any {
+	merged := make(map[string]any, len(base)+len(override))
+	for k, v := range base {
+		merged[k] = v
+	}
+	for k, v := range override {
+		merged[k] = v
+	}
+	return merged
 }
 
 type ExecutionRequest struct {
@@ -61,10 +91,10 @@ type ExecutionResponse struct {
 	Metadata  map[string]any `json:"metadata"`
 }
 
-func NewEngine(db *gorm.DB, pythonURL string, workers int) *Engine {
+func NewEngine(db *gorm.DB, workers int) *Engine {
 	return &Engine{
 		db:              db,
-		runner:          newRunner(pythonURL),
+		runner:          newRunner(),
 		workerCount:     workers,
 		taskQueue:       make(chan *Task, 10000),
 		cancelledRuns:   make(map[uuid.UUID]bool),
@@ -284,7 +314,7 @@ func (e *Engine) executeTask(task *Task) {
 
 	providerType := task.ProviderType
 	if providerType == "evaluator" {
-		providerType = "openai"
+		providerType = ResolveEvaluatorProvider(task.AgentConfig)
 	}
 
 	payload := map[string]any{
@@ -294,6 +324,7 @@ func (e *Engine) executeTask(task *Task) {
 		"agent_answer":      task.AgentAnswer, // For evaluators: the response to evaluate
 		"answer":            task.AgentAnswer, // Alias for clarity in evaluator payloads
 		"response":          task.AgentAnswer, // Extra alias for clarity in evaluator payloads
+		"is_evaluator_task": task.ProviderType == "evaluator" || task.TargetRunResultID != uuid.Nil || strings.HasPrefix(strings.TrimSpace(task.QuestionID), "eval-"),
 	}
 
 	// For evaluator tasks, send both explicit question and answer fields
@@ -364,6 +395,26 @@ func (e *Engine) executeTask(task *Task) {
 			log.Printf("[ENGINE] Failed to save result: %v", err)
 		}
 
+		if status == "success" && strings.TrimSpace(result.Answer) != "" {
+			if err := e.persistEvaluatorScore(task, result.Answer); err != nil {
+				log.Printf("[EVAL] Failed to persist automatic evaluator score for run %s, question %s: %v", task.RunID, task.QuestionID, err)
+			}
+		}
+
+		// Auto-run evaluators for primary-agent retries only, scoped to the fresh result.
+		// This avoids re-evaluating the whole run after a single answer retry.
+		isPrimaryRetry := task.RetryID != "" &&
+			strings.ToLower(strings.TrimSpace(task.ProviderType)) != "evaluator" &&
+			!strings.HasPrefix(strings.TrimSpace(task.QuestionID), "eval-")
+		if isPrimaryRetry && status == "success" && strings.TrimSpace(result.Answer) != "" {
+			if err := e.RunEvaluatorsForResults(task.RunID, nil, []models.RunResult{result}); err != nil {
+				// Keep retry flow resilient; evaluator automation must not fail the primary retry.
+				if !strings.Contains(strings.ToLower(err.Error()), "no evaluator agents available") {
+					log.Printf("[EVAL] Auto-run after retry failed for run %s, question %s: %v", task.RunID, task.QuestionID, err)
+				}
+			}
+		}
+
 		// Check if all tasks for this run are complete
 		e.checkRunCompletion(task.RunID)
 	}
@@ -399,6 +450,9 @@ func (e *Engine) executeTask(task *Task) {
 			"metadata":      executionResult.Metadata,
 			"duration_ms":   durationMs,
 		}
+		if task.TargetRunResultID != uuid.Nil {
+			payload["target_run_result_id"] = task.TargetRunResultID.String()
+		}
 		if task.RetryID != "" {
 			payload["retry_id"] = task.RetryID
 		}
@@ -428,6 +482,32 @@ func (e *Engine) checkRunCompletion(runID uuid.UUID) {
 	e.db.Model(&models.RunResult{}).Where("run_id = ?", runID).Count(&count)
 
 	if int(count) >= run.TotalTasks {
+		// Auto-run evaluators once, right after primary tasks complete.
+		// We only do this while run is in "running" state and before any evaluator
+		// result exists, so retries/manual evaluator runs won't loop re-queueing.
+		if strings.EqualFold(strings.TrimSpace(run.Status), "running") {
+			var evalResultCount int64
+			if err := e.db.Model(&models.RunResult{}).
+				Where("run_id = ? AND question_id LIKE ?", runID, "eval-%").
+				Count(&evalResultCount).Error; err == nil && evalResultCount == 0 {
+				previousTotalTasks := run.TotalTasks
+				if err := e.RunEvaluators(runID, nil); err != nil {
+					if !strings.Contains(strings.ToLower(err.Error()), "no evaluator agents available") {
+						log.Printf("[EVAL] Auto-run failed for run %s: %v", runID, err)
+					}
+				} else {
+					var refreshed models.Run
+					if refreshErr := e.db.First(&refreshed, "id = ?", runID).Error; refreshErr == nil {
+						if refreshed.TotalTasks > previousTotalTasks {
+							log.Printf("[EVAL] Auto-run queued for run %s (%d -> %d total tasks)", runID, previousTotalTasks, refreshed.TotalTasks)
+							return
+						}
+						run = refreshed
+					}
+				}
+			}
+		}
+
 		// Check for any errors
 		var errorCount int64
 		e.db.Model(&models.RunResult{}).Where("run_id = ? AND status = ?", runID, "error").Count(&errorCount)
@@ -504,6 +584,131 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+func extractEvaluatorScore(answer string) (int, bool) {
+	text := strings.TrimSpace(answer)
+	if text == "" {
+		return 0, false
+	}
+
+	if m := evaluatorScoreAtEndRegex.FindStringSubmatch(text); len(m) == 2 {
+		if n, err := strconv.Atoi(m[1]); err == nil && n >= 0 && n <= 10 {
+			return n, true
+		}
+	}
+
+	all := evaluatorScoreAnyRegex.FindAllStringSubmatch(text, -1)
+	for i := len(all) - 1; i >= 0; i-- {
+		if len(all[i]) < 3 {
+			continue
+		}
+		n, err := strconv.Atoi(all[i][2])
+		if err != nil {
+			continue
+		}
+		if n >= 0 && n <= 10 {
+			return n, true
+		}
+	}
+
+	return 0, false
+}
+
+func mapEvaluatorScore(score10 int) (rating string, ratingCode int, score100 int) {
+	if score10 < 0 {
+		score10 = 0
+	}
+	if score10 > 10 {
+		score10 = 10
+	}
+
+	score100 = score10 * 10
+
+	switch {
+	case score10 >= 8:
+		return "like", 1, score100
+	case score10 >= 6:
+		return "valid", 2, score100
+	default:
+		return "dislike", 3, score100
+	}
+}
+
+func isEvaluatorExecutionTask(task *Task) bool {
+	if task == nil {
+		return false
+	}
+	if task.TargetRunResultID != uuid.Nil {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(task.ProviderType), "evaluator") {
+		return true
+	}
+	return strings.HasPrefix(strings.TrimSpace(task.QuestionID), "eval-")
+}
+
+func (e *Engine) resolveEvaluatorTargetRunResultID(task *Task) uuid.UUID {
+	if e.db == nil || task == nil {
+		return uuid.Nil
+	}
+	if task.TargetRunResultID != uuid.Nil {
+		return task.TargetRunResultID
+	}
+
+	targetAgentID, targetQuestionID := extractTargetAgentID(strings.TrimSpace(task.QuestionID))
+	if targetAgentID == uuid.Nil || strings.TrimSpace(targetQuestionID) == "" {
+		return uuid.Nil
+	}
+
+	var target models.RunResult
+	if err := e.db.
+		Where("run_id = ? AND agent_id = ? AND question_id = ? AND status = ?",
+			task.RunID, targetAgentID, targetQuestionID, "success").
+		Order("created_at DESC").
+		Order("id DESC").
+		First(&target).Error; err != nil {
+		return uuid.Nil
+	}
+
+	return target.ID
+}
+
+func (e *Engine) persistEvaluatorScore(task *Task, evaluatorAnswer string) error {
+	if !isEvaluatorExecutionTask(task) || e.db == nil || task == nil {
+		return nil
+	}
+
+	targetResultID := e.resolveEvaluatorTargetRunResultID(task)
+	if targetResultID == uuid.Nil {
+		return nil
+	}
+
+	score10, ok := extractEvaluatorScore(evaluatorAnswer)
+	if !ok {
+		return nil
+	}
+
+	rating, ratingCode, score100 := mapEvaluatorScore(score10)
+
+	if err := e.db.
+		Where("run_result_id = ? AND rater_type = ? AND rater_id = ?", targetResultID, "agent", task.AgentID).
+		Delete(&models.Evaluation{}).Error; err != nil {
+		return err
+	}
+
+	eval := models.Evaluation{
+		ID:          uuid.New(),
+		RunResultID: targetResultID,
+		RaterType:   "agent",
+		RaterID:     task.AgentID,
+		Rating:      rating,
+		RatingCode:  &ratingCode,
+		Score:       &score100,
+		Comments:    strings.TrimSpace(evaluatorAnswer),
+	}
+
+	return e.db.Create(&eval).Error
 }
 
 func extractTargetAgentID(questionID string) (uuid.UUID, string) {
@@ -596,21 +801,38 @@ func parseQuestionSetMaps(data datatypes.JSON) (map[string]string, map[string]st
 	return originalQuestions, expectedAnswers
 }
 
-// RunEvaluators runs evaluator agents on the results of primary agents
-func (e *Engine) RunEvaluators(runID uuid.UUID) error {
+func (e *Engine) queueEvaluatorTasksForResults(run models.Run, results []models.RunResult, selectedEvaluatorIDs []uuid.UUID) error {
 	if e.db == nil {
 		return fmt.Errorf("database not configured")
 	}
 
-	var run models.Run
-	if err := e.db.First(&run, "id = ?", runID).Error; err != nil {
+	// Get evaluator candidates (native evaluator + legacy openai evaluators)
+	var evaluatorCandidates []models.Agent
+	if err := e.db.Where("workspace_id = ? AND provider_type IN ? AND enabled = true", run.WorkspaceID, []string{"evaluator", "openai"}).Find(&evaluatorCandidates).Error; err != nil {
 		return err
 	}
 
-	// Get all evaluator agents for this workspace
-	var evaluators []models.Agent
-	if err := e.db.Where("workspace_id = ? AND provider_type = 'evaluator' AND enabled = true", run.WorkspaceID).Find(&evaluators).Error; err != nil {
-		return err
+	selectedSet := make(map[uuid.UUID]struct{})
+	for _, id := range selectedEvaluatorIDs {
+		if id != uuid.Nil {
+			selectedSet[id] = struct{}{}
+		}
+	}
+
+	evaluators := make([]models.Agent, 0, len(evaluatorCandidates))
+	for _, candidate := range evaluatorCandidates {
+		if !isEvaluatorAgent(candidate) {
+			continue
+		}
+		if len(selectedSet) > 0 {
+			if _, ok := selectedSet[candidate.ID]; !ok {
+				continue
+			}
+		}
+		evaluators = append(evaluators, candidate)
+	}
+	if len(evaluators) == 0 {
+		return fmt.Errorf("no evaluator agents available")
 	}
 
 	// Validate evaluator configurations
@@ -618,12 +840,6 @@ func (e *Engine) RunEvaluators(runID uuid.UUID) error {
 		if err := e.validateEvaluatorConfig(eval); err != nil {
 			return err
 		}
-	}
-
-	// Get all results from this run
-	var results []models.RunResult
-	if err := e.db.Where("run_id = ?", runID).Find(&results).Error; err != nil {
-		return err
 	}
 
 	// Get question set data to find expected answers
@@ -640,11 +856,14 @@ func (e *Engine) RunEvaluators(runID uuid.UUID) error {
 		evaluatorIDs[ev.ID] = struct{}{}
 	}
 
-	log.Printf("[EVAL] Running evaluators for run %s. Results to evaluate: %d", runID, len(results))
+	log.Printf("[EVAL] Running evaluators for run %s. Results to evaluate: %d", run.ID, len(results))
+
+	tasksToQueue := make([]*Task, 0)
 
 	// For each evaluator, create tasks to evaluate each result
 	for _, evaluator := range evaluators {
-		var evalConfig map[string]any
+		baseEvalConfig := decodeConfigJSON(evaluator.Config)
+		evalConfig := baseEvalConfig
 
 		// Check for question set override
 		var override models.QuestionSetAgent
@@ -653,13 +872,9 @@ func (e *Engine) RunEvaluators(runID uuid.UUID) error {
 				continue // Skip if explicitly disabled for this question set
 			}
 			if len(override.Config) > 0 {
-				json.Unmarshal(override.Config, &evalConfig)
-			} else {
-				json.Unmarshal(evaluator.Config, &evalConfig)
+				overrideCfg := decodeConfigJSON(override.Config)
+				evalConfig = mergeConfig(baseEvalConfig, overrideCfg)
 			}
-		} else {
-			// If no override, respect workspace-level enabled status (already filtered in query)
-			json.Unmarshal(evaluator.Config, &evalConfig)
 		}
 
 		// Keep track of unique agents in this run for debugging
@@ -724,21 +939,95 @@ func (e *Engine) RunEvaluators(runID uuid.UUID) error {
 			evalQuestion := result.Answer // The answer we are evaluating
 
 			task := &Task{
-				RunID:            runID,
-				AgentID:          evaluator.ID,
-				QuestionID:       fmt.Sprintf("eval-%s-%s", result.AgentID, questionID),
-				QuestionText:     evalQuestion,
-				ExpectedAnswer:   expectedAnswer,
-				OriginalQuestion: originalQuestion,
-				AgentAnswer:      result.Answer, // Explicit agent answer for Python server
-				AgentConfig:      evalConfig,
-				ProviderType:     evaluator.ProviderType,
+				RunID:             run.ID,
+				WorkspaceID:       run.WorkspaceID,
+				AgentID:           evaluator.ID,
+				QuestionID:        fmt.Sprintf("eval-%s-%s", result.AgentID, questionID),
+				QuestionText:      evalQuestion,
+				ExpectedAnswer:    expectedAnswer,
+				OriginalQuestion:  originalQuestion,
+				AgentAnswer:       result.Answer, // Explicit agent answer for Python server
+				AgentConfig:       evalConfig,
+				ProviderType:      evaluator.ProviderType,
+				MaxConcurrency:    evaluator.MaxConcurrency,
+				TargetRunResultID: result.ID,
 			}
-			e.QueueTask(task)
+			tasksToQueue = append(tasksToQueue, task)
 		}
 	}
 
+	if len(tasksToQueue) == 0 {
+		log.Printf("[EVAL] No evaluator tasks to queue for run %s", run.ID)
+		return nil
+	}
+
+	if err := e.db.Model(&models.Run{}).Where("id = ?", run.ID).Updates(map[string]any{
+		"status":      "running",
+		"total_tasks": gorm.Expr("total_tasks + ?", len(tasksToQueue)),
+	}).Error; err != nil {
+		return err
+	}
+
+	e.ensureRunContext(run.ID)
+	for _, task := range tasksToQueue {
+		e.QueueTask(task)
+	}
+	log.Printf("[EVAL] Queued %d evaluator tasks for run %s", len(tasksToQueue), run.ID)
+
 	return nil
+}
+
+// RunEvaluators runs evaluator agents on all eligible primary results of a run.
+func (e *Engine) RunEvaluators(runID uuid.UUID, selectedEvaluatorIDs []uuid.UUID) error {
+	if e.db == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	var run models.Run
+	if err := e.db.First(&run, "id = ?", runID).Error; err != nil {
+		return err
+	}
+	if run.Status == "cancelled" {
+		return fmt.Errorf("run is cancelled")
+	}
+
+	var results []models.RunResult
+	if err := e.db.Where("run_id = ?", runID).Find(&results).Error; err != nil {
+		return err
+	}
+
+	return e.queueEvaluatorTasksForResults(run, results, selectedEvaluatorIDs)
+}
+
+// RunEvaluatorsForResults runs evaluator agents only for the provided result subset.
+func (e *Engine) RunEvaluatorsForResults(runID uuid.UUID, selectedEvaluatorIDs []uuid.UUID, results []models.RunResult) error {
+	if e.db == nil {
+		return fmt.Errorf("database not configured")
+	}
+	if len(results) == 0 {
+		return nil
+	}
+
+	var run models.Run
+	if err := e.db.First(&run, "id = ?", runID).Error; err != nil {
+		return err
+	}
+	if run.Status == "cancelled" {
+		return fmt.Errorf("run is cancelled")
+	}
+
+	filtered := make([]models.RunResult, 0, len(results))
+	for _, r := range results {
+		if r.RunID != runID {
+			continue
+		}
+		filtered = append(filtered, r)
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+
+	return e.queueEvaluatorTasksForResults(run, filtered, selectedEvaluatorIDs)
 }
 
 // StartRun starts a new benchmark run
@@ -760,27 +1049,28 @@ func (e *Engine) StartRun(workspaceID uuid.UUID, questionSetID uuid.UUID, agentI
 	// Get agents
 	var agents []models.Agent
 	if len(agentIDs) > 0 {
-		e.db.Where("id IN ? AND workspace_id = ? AND enabled = true", agentIDs, workspaceID).Find(&agents)
+		e.db.Where("id IN ? AND workspace_id = ?", agentIDs, workspaceID).Find(&agents)
 	} else {
-		// Get all enabled primary agents (not evaluators)
+		// Load all primary agents; question-set overrides become the source of truth when present.
 		var workspaceAgents []models.Agent
-		e.db.Where("workspace_id = ? AND enabled = true AND provider_type != 'evaluator'", workspaceID).Order("position ASC").Find(&workspaceAgents)
+		e.db.Where("workspace_id = ? AND provider_type != 'evaluator'", workspaceID).Order("position ASC").Find(&workspaceAgents)
 
-		// Filter based on overrides if any exist
+		// When mappings exist, use only mapped and enabled agents for this question set.
 		if len(overrides) > 0 {
 			for _, wa := range workspaceAgents {
 				if o, ok := overrideMap[wa.ID]; ok {
 					if o.Enabled {
 						agents = append(agents, wa)
 					}
-				} else {
-					// No override means enabled by default (compatibility with older question sets)
-					agents = append(agents, wa)
 				}
 			}
 		} else {
-			// No overrides at all - use all workspace agents
-			agents = workspaceAgents
+			// Legacy fallback for old question sets with no mapping yet.
+			for _, wa := range workspaceAgents {
+				if wa.Enabled {
+					agents = append(agents, wa)
+				}
+			}
 		}
 	}
 
@@ -803,7 +1093,7 @@ func (e *Engine) StartRun(workspaceID uuid.UUID, questionSetID uuid.UUID, agentI
 	totalTasks := 0
 	nonEvaluatorAgentCount := 0
 	for _, agent := range agents {
-		if agent.ProviderType != "evaluator" {
+		if !isEvaluatorAgent(agent) {
 			nonEvaluatorAgentCount++
 		}
 	}
@@ -829,17 +1119,17 @@ func (e *Engine) StartRun(workspaceID uuid.UUID, questionSetID uuid.UUID, agentI
 
 	// Queue tasks for each agent + question
 	for _, agent := range agents {
-		if agent.ProviderType == "evaluator" {
+		if isEvaluatorAgent(agent) {
 			log.Printf("[ENGINE] Skipping evaluator agent %s during initial StartRun", agent.ID)
 			continue
 		}
-		var agentConfig map[string]any
+		baseAgentConfig := decodeConfigJSON(agent.Config)
+		agentConfig := baseAgentConfig
 
 		// Use override if available
 		if override, ok := overrideMap[agent.ID]; ok && len(override.Config) > 0 {
-			json.Unmarshal(override.Config, &agentConfig)
-		} else {
-			json.Unmarshal(agent.Config, &agentConfig)
+			overrideCfg := decodeConfigJSON(override.Config)
+			agentConfig = mergeConfig(baseAgentConfig, overrideCfg)
 		}
 
 		globalQuestionIndex := 0
@@ -976,6 +1266,7 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 	taskQuestionText := questionText
 	taskOriginalQuestion := questionText
 	taskAgentAnswer := "" // For evaluators: the agent response to evaluate
+	taskTargetRunResultID := uuid.Nil
 
 	// SPECIAL HANDLING FOR EVALUATOR AGENTS
 	if agent.ProviderType == "evaluator" {
@@ -1024,6 +1315,7 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 			if err := query.First(&targetResult).Error; err == nil {
 				taskAgentAnswer = targetResult.Answer
 				taskQuestionText = targetResult.Answer
+				taskTargetRunResultID = targetResult.ID
 				log.Printf("[RERUN] Found specific result: %s (Ans len: %d)", targetResult.ID, len(taskAgentAnswer))
 			} else {
 				log.Printf("[RERUN] Could not find specific result: %v", err)
@@ -1045,9 +1337,10 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 					// Verify if this agent is NOT an evaluator
 					var rAgent models.Agent
 					if err := e.db.First(&rAgent, "id = ?", r.AgentID).Error; err == nil {
-						if rAgent.ProviderType != "evaluator" {
+						if !isEvaluatorAgent(rAgent) {
 							taskAgentAnswer = r.Answer
 							taskQuestionText = r.Answer
+							taskTargetRunResultID = r.ID
 							log.Printf("[RERUN] HEURISTIC SUCCESS! Selected result %s from Agent %s", r.ID, r.AgentID)
 							break
 						}
@@ -1065,24 +1358,68 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 	}
 
 	task := &Task{
-		RunID:            run.ID,
-		WorkspaceID:      run.WorkspaceID,
-		AgentID:          agent.ID,
-		QuestionID:       questionID,
-		QuestionText:     taskQuestionText,
-		OriginalQuestion: taskOriginalQuestion,
-		ExpectedAnswer:   expectedAnswer,
-		AgentAnswer:      taskAgentAnswer,
-		AgentConfig:      agentConfig,
-		ProviderType:     agent.ProviderType,
-		MaxConcurrency:   agent.MaxConcurrency,
-		RetryID:          retryID,
+		RunID:             run.ID,
+		WorkspaceID:       run.WorkspaceID,
+		AgentID:           agent.ID,
+		QuestionID:        questionID,
+		QuestionText:      taskQuestionText,
+		OriginalQuestion:  taskOriginalQuestion,
+		ExpectedAnswer:    expectedAnswer,
+		AgentAnswer:       taskAgentAnswer,
+		AgentConfig:       agentConfig,
+		ProviderType:      agent.ProviderType,
+		MaxConcurrency:    agent.MaxConcurrency,
+		RetryID:           retryID,
+		TargetRunResultID: taskTargetRunResultID,
 	}
 
 	log.Printf("[RERUN] Queuing task: run=%s, agent=%s, qid=%s, ans_len=%d", task.RunID, task.AgentID, task.QuestionID, len(task.AgentAnswer))
 	e.QueueTask(task)
 
 	return nil
+}
+
+func parseAgentConfig(agent models.Agent) map[string]any {
+	cfg := make(map[string]any)
+	if len(agent.Config) == 0 {
+		return cfg
+	}
+	if err := json.Unmarshal(agent.Config, &cfg); err != nil {
+		return map[string]any{}
+	}
+	return cfg
+}
+
+func isLegacyEvaluatorConfig(cfg map[string]any) bool {
+	if cfg == nil {
+		return false
+	}
+	if _, hasTarget := cfg["target_agent_id"]; hasTarget {
+		return true
+	}
+	if mode := strings.TrimSpace(firstNonEmptyString(cfg, "openai_mode")); mode != "" {
+		return true
+	}
+	if sys := strings.TrimSpace(firstNonEmptyString(cfg, "system_prompt", "instructions")); sys != "" {
+		return true
+	}
+	return false
+}
+
+func isEvaluatorAgent(agent models.Agent) bool {
+	switch strings.ToLower(strings.TrimSpace(agent.ProviderType)) {
+	case "evaluator":
+		return true
+	case "openai":
+		cfg := parseAgentConfig(agent)
+		if isLegacyEvaluatorConfig(cfg) {
+			return true
+		}
+		name := strings.ToLower(strings.TrimSpace(agent.Name))
+		return strings.Contains(name, "evaluator")
+	default:
+		return false
+	}
 }
 
 func (e *Engine) validateEvaluatorConfig(evaluator models.Agent) error {
@@ -1092,7 +1429,8 @@ func (e *Engine) validateEvaluatorConfig(evaluator models.Agent) error {
 		return fmt.Errorf("invalid evaluator config for %s: %v", evaluator.Name, err)
 	}
 
-	apiKey, _ := config["api_key"].(string)
+	preferredProvider := PreferredEvaluatorProvider(config)
+	resolvedProvider := ResolveEvaluatorProvider(config)
 
 	// If "MOCK" or "DRYRUN" is explicitly present anywhere in the config (case insensitive), we allow it
 	upperConfig := strings.ToUpper(configStr)
@@ -1100,9 +1438,38 @@ func (e *Engine) validateEvaluatorConfig(evaluator models.Agent) error {
 		return nil
 	}
 
-	// Otherwise, it must be a real configuration
-	if apiKey == "" {
-		return fmt.Errorf("Evaluator Agent '%s' is not configured. Please set a valid OpenAI API Key in Agent Settings or use 'MOCK' for testing.", evaluator.Name)
+	// Otherwise, it must be a real configuration for the selected provider.
+	if IsSelectedEvaluatorProviderConfigured(config) {
+		return nil
 	}
-	return nil
+
+	switch preferredProvider {
+	case EvaluatorProviderNVIDIA:
+		return fmt.Errorf("Evaluator Agent '%s' is not configured. Please set nvidia_api_key (or legacy api_key) in Agent Settings, or use 'MOCK' for testing.", evaluator.Name)
+	case EvaluatorProviderOpenRouter:
+		return fmt.Errorf("Evaluator Agent '%s' is not configured. Please set openrouter_api_key (or legacy api_key) in Agent Settings, or use 'MOCK' for testing.", evaluator.Name)
+	case EvaluatorProviderAnthropic:
+		return fmt.Errorf("Evaluator Agent '%s' is not configured. Please set anthropic_api_key (or legacy api_key) in Agent Settings, or use 'MOCK' for testing.", evaluator.Name)
+	case EvaluatorProviderOpenAICompatible:
+		return fmt.Errorf("Evaluator Agent '%s' is not configured. OpenAI-compatible mode requires compatible_api_key and compatible_base_url (or legacy api_key/base_url).", evaluator.Name)
+	case EvaluatorProviderAuto:
+		return fmt.Errorf("Evaluator Agent '%s' is not configured. In auto mode, configure at least one provider: nvidia_api_key, openrouter_api_key, anthropic_api_key, openai_api_key, or compatible_api_key+compatible_base_url.", evaluator.Name)
+	default:
+		if resolvedProvider == EvaluatorProviderNVIDIA {
+			return fmt.Errorf("Evaluator Agent '%s' is not configured. Please set nvidia_api_key (or legacy api_key) in Agent Settings, or use 'MOCK' for testing.", evaluator.Name)
+		}
+		if resolvedProvider == EvaluatorProviderOpenRouter {
+			return fmt.Errorf("Evaluator Agent '%s' is not configured. Please set openrouter_api_key (or legacy api_key) in Agent Settings, or use 'MOCK' for testing.", evaluator.Name)
+		}
+		if resolvedProvider == EvaluatorProviderAnthropic {
+			return fmt.Errorf("Evaluator Agent '%s' is not configured. Please set anthropic_api_key (or legacy api_key) in Agent Settings, or use 'MOCK' for testing.", evaluator.Name)
+		}
+		if resolvedProvider == EvaluatorProviderOpenAICompatible {
+			return fmt.Errorf("Evaluator Agent '%s' is not configured. OpenAI-compatible mode requires compatible_api_key and compatible_base_url (or legacy api_key/base_url).", evaluator.Name)
+		}
+		if EvaluatorOpenAIMode(config) == "managed" {
+			return fmt.Errorf("Evaluator Agent '%s' is not configured. OpenAI managed mode requires openai_api_key (or api_key) and prompt_id/openai_prompt_id.", evaluator.Name)
+		}
+		return fmt.Errorf("Evaluator Agent '%s' is not configured. Please set openai_api_key (or legacy api_key) in Agent Settings, or use 'MOCK' for testing.", evaluator.Name)
+	}
 }
