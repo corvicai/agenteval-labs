@@ -16,6 +16,17 @@ class WebSocketService {
         this.lastDisconnectReason = null
     }
 
+    static REQUEST_TIMEOUTS = {
+        DEFAULT: 10000,
+        START_RUN: 120000,
+        RUN_EVALUATORS: 120000,
+        RERUN_TASK: 45000,
+        RUN_DETAILS: 30000,
+        RUN_LITE: 30000,
+        LATEST_RUN_BY_QS: 30000,
+        UPDATE_AGENT: 30000
+    }
+
     async _probeWebSocketHttpEndpoint(wsUrl) {
         const probeUrl = wsUrl.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:')
         const controller = new AbortController()
@@ -488,7 +499,7 @@ class WebSocketService {
      * Sends a request and waits for a response matched by correlation_id
      * @returns {Promise}
      */
-    _sendRequest(type, payload, timeoutMs = 10000) {
+    _sendRequest(type, payload, timeoutMs = WebSocketService.REQUEST_TIMEOUTS.DEFAULT) {
         return new Promise((resolve, reject) => {
             if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
                 return reject(new Error('WebSocket not connected'))
@@ -513,7 +524,7 @@ class WebSocketService {
         })
     }
 
-    async request(type, payload, timeoutMs = 10000) {
+    async request(type, payload, timeoutMs = WebSocketService.REQUEST_TIMEOUTS.DEFAULT) {
         if (this.isConnected()) {
             return this._sendRequest(type, payload, timeoutMs)
         }
@@ -539,11 +550,11 @@ class WebSocketService {
     }
 
     // Command shortcuts (now returning promises where appropriate)
-    startRun(questionSetId, agentIds = []) {
-        return this.request('CMD_START_RUN', { question_set_id: questionSetId, agent_ids: agentIds })
+    startRun(questionSetId, agentIds = [], timeoutMs = WebSocketService.REQUEST_TIMEOUTS.START_RUN) {
+        return this.request('CMD_START_RUN', { question_set_id: questionSetId, agent_ids: agentIds }, timeoutMs)
     }
 
-    rerunTask(runId, agentId, questionId, options = {}) {
+    rerunTask(runId, agentId, questionId, options = {}, timeoutMs = WebSocketService.REQUEST_TIMEOUTS.RERUN_TASK) {
         return this.request('CMD_RERUN_TASK', {
             run_id: runId,
             agent_id: agentId,
@@ -552,19 +563,19 @@ class WebSocketService {
             result_id: options.resultId || '',
             original_question: options.originalQuestion || '',
             expected_answer: options.expectedAnswer || ''
-        })
+        }, timeoutMs)
     }
 
     cancelRun(runId) {
         return this.request('CMD_CANCEL_RUN', { run_id: runId })
     }
 
-    runEvaluators(runId, evaluatorAgentIds = []) {
-        return this.request('CMD_RUN_EVALUATORS', { run_id: runId, evaluator_agent_ids: evaluatorAgentIds })
+    runEvaluators(runId, evaluatorAgentIds = [], timeoutMs = WebSocketService.REQUEST_TIMEOUTS.RUN_EVALUATORS) {
+        return this.request('CMD_RUN_EVALUATORS', { run_id: runId, evaluator_agent_ids: evaluatorAgentIds }, timeoutMs)
     }
 
-    updateAgent(agentId, data) {
-        return this.request('REQ_UPDATE_AGENT', { id: agentId, ...data })
+    updateAgent(agentId, data, timeoutMs = WebSocketService.REQUEST_TIMEOUTS.UPDATE_AGENT) {
+        return this.request('REQ_UPDATE_AGENT', { id: agentId, ...data }, timeoutMs)
     }
 
     importQuestionSet(clientId, data) {
@@ -587,6 +598,10 @@ class WebSocketService {
         return this.request('REQ_UPDATE_QUESTION_SET_AGENTS', { question_set_id: questionSetId, agents })
     }
 
+    getQuestionSetAgentEnvelope(questionSetId) {
+        return this.request('REQ_GET_QUESTION_SET_AGENT_ENVELOPE', { question_set_id: questionSetId })
+    }
+
     createAgent(workspaceId, data) {
         return this.request('REQ_CREATE_AGENT', { workspace_id: workspaceId, ...data })
     }
@@ -604,8 +619,8 @@ class WebSocketService {
         return this.request('REQ_GET_MANAGER_USERS', {})
     }
 
-    getRunDetails(runId) {
-        return this.request('REQ_GET_RUN_DETAILS', { run_id: runId })
+    getRunDetails(runId, timeoutMs = WebSocketService.REQUEST_TIMEOUTS.RUN_DETAILS) {
+        return this.request('REQ_GET_RUN_DETAILS', { run_id: runId }, timeoutMs)
     }
 
     deleteRun(runId) {
@@ -616,12 +631,12 @@ class WebSocketService {
         return this.request('REQ_DELETE_ALL_RUNS', {})
     }
 
-    getRunLite(runId) {
-        return this.request('REQ_GET_RUN_LITE', { run_id: runId })
+    getRunLite(runId, timeoutMs = WebSocketService.REQUEST_TIMEOUTS.RUN_LITE) {
+        return this.request('REQ_GET_RUN_LITE', { run_id: runId }, timeoutMs)
     }
 
-    getLatestRunByQuestionSet(questionSetId) {
-        return this.request('REQ_GET_LATEST_RUN_BY_QS', { question_set_id: questionSetId })
+    getLatestRunByQuestionSet(questionSetId, timeoutMs = WebSocketService.REQUEST_TIMEOUTS.LATEST_RUN_BY_QS) {
+        return this.request('REQ_GET_LATEST_RUN_BY_QS', { question_set_id: questionSetId }, timeoutMs)
     }
 
     getResultDetails(resultIds) {

@@ -89,6 +89,8 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 		h.handleCreateQuestionSet(c, env)
 	case ReqUpdateQuestionSetAgents:
 		h.handleUpdateQuestionSetAgents(c, env)
+	case ReqGetQuestionSetAgentEnvelope:
+		h.handleGetQuestionSetAgentEnvelope(c, env)
 	case ReqCreateAgent:
 		h.handleCreateAgent(c, env)
 	case ReqDeleteAgent:
