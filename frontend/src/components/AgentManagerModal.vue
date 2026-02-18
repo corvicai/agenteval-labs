@@ -75,61 +75,326 @@
                   <input v-model="agent.config.project_id" placeholder="proj_..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
                 </div>
               </div>
-              <div v-else-if="agent.provider_type === 'evaluator'" class="config-fields">
-                <!-- Evaluator is explicitly OpenAI, so we also need API Key here if not global -->
-                <div class="field full-width">
-                  <label>OpenAI Mode</label>
-                  <select
-                    v-model="agent.config.openai_mode"
-                    @focus="startEditing"
-                    @blur="saveAgent(agent); stopEditing()"
-                    @change="markPendingChanges(agent)"
-                  >
-                    <option value="managed">Managed Prompt</option>
-                    <option value="standard">Standard API</option>
-                  </select>
-                  <small class="field-hint">
-                    Managed uses Prompt ID on OpenAI. Standard injects a system prompt on every call.
-                  </small>
+              <div v-else-if="agent.provider_type === 'nvidia'" class="config-fields">
+                <div class="field">
+                  <label>NVIDIA API Key</label>
+                  <input v-model="agent.config.api_key" type="password" placeholder="nvapi-..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
                 </div>
                 <div class="field">
-                  <label>OpenAI API Key</label>
-                  <input v-model="agent.config.api_key" type="password" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" placeholder="sk-..." />
+                  <label>Model</label>
+                  <input v-model="agent.config.model" placeholder="meta/llama-3.1-8b-instruct" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
                 </div>
-                <template v-if="getEvaluatorMode(agent) === 'managed'">
-                  <div class="field">
-                    <label>Prompt ID (Required)</label>
-                    <input v-model="agent.config.prompt_id" placeholder="prompt_..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
-                  </div>
-                  <div class="field">
-                    <label>Prompt Version (Optional)</label>
-                    <input v-model="agent.config.prompt_version" placeholder="e.g. v1" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
-                  </div>
-                  <div class="field">
-                    <label>Project ID (Optional)</label>
-                    <input v-model="agent.config.project_id" placeholder="proj_..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
-                  </div>
-                </template>
-                <template v-else>
-                  <div class="field">
-                    <label>Model</label>
-                    <input v-model="agent.config.model" placeholder="gpt-4o-mini" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
-                  </div>
-                  <div class="field">
-                    <label>Project ID (Optional)</label>
-                    <input v-model="agent.config.project_id" placeholder="proj_..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                <div class="field full-width">
+                  <label>Base URL (Optional)</label>
+                  <input v-model="agent.config.base_url" placeholder="https://integrate.api.nvidia.com/v1" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  <small class="field-hint">Leave empty to use the default NVIDIA NIM endpoint.</small>
+                </div>
+                <div class="field full-width">
+                  <label>System Prompt (Optional)</label>
+                  <textarea
+                    v-model="agent.config.system_prompt"
+                    rows="3"
+                    placeholder="Optional system instructions"
+                    @focus="startEditing"
+                    @blur="saveAgent(agent); stopEditing()"
+                    @input="markPendingChanges(agent)"
+                  />
+                </div>
+              </div>
+              <div v-else-if="agent.provider_type === 'openrouter'" class="config-fields">
+                <div class="field">
+                  <label>OpenRouter API Key</label>
+                  <input v-model="agent.config.openrouter_api_key" type="password" placeholder="sk-or-v1-..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                </div>
+                <div class="field">
+                  <label>Model</label>
+                  <input v-model="agent.config.openrouter_model" placeholder="openai/gpt-4o-mini" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                </div>
+                <div class="field full-width">
+                  <label>Base URL (Optional)</label>
+                  <input v-model="agent.config.openrouter_base_url" placeholder="https://openrouter.ai/api/v1" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                </div>
+                <div class="field">
+                  <label>HTTP-Referer (Optional)</label>
+                  <input v-model="agent.config.openrouter_http_referer" placeholder="https://your-app.example" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                </div>
+                <div class="field">
+                  <label>X-Title (Optional)</label>
+                  <input v-model="agent.config.openrouter_x_title" placeholder="Agenteval Labs" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                </div>
+                <div class="field full-width">
+                  <label>System Prompt (Optional)</label>
+                  <textarea
+                    v-model="agent.config.openrouter_system_prompt"
+                    rows="3"
+                    placeholder="Optional system instructions"
+                    @focus="startEditing"
+                    @blur="saveAgent(agent); stopEditing()"
+                    @input="markPendingChanges(agent)"
+                  />
+                </div>
+              </div>
+              <div v-else-if="agent.provider_type === 'openai_compatible'" class="config-fields">
+                <div class="field">
+                  <label>API Key</label>
+                  <input v-model="agent.config.compatible_api_key" type="password" placeholder="token..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                </div>
+                <div class="field">
+                  <label>Model</label>
+                  <input v-model="agent.config.compatible_model" placeholder="gpt-4o-mini" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                </div>
+                <div class="field full-width">
+                  <label>Base URL (Required)</label>
+                  <input v-model="agent.config.compatible_base_url" placeholder="https://your-provider.example/v1" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                </div>
+                <div class="field full-width">
+                  <label>System Prompt (Optional)</label>
+                  <textarea
+                    v-model="agent.config.compatible_system_prompt"
+                    rows="3"
+                    placeholder="Optional system instructions"
+                    @focus="startEditing"
+                    @blur="saveAgent(agent); stopEditing()"
+                    @input="markPendingChanges(agent)"
+                  />
+                </div>
+              </div>
+              <div v-else-if="agent.provider_type === 'anthropic'" class="config-fields">
+                <div class="field">
+                  <label>Anthropic API Key</label>
+                  <input v-model="agent.config.anthropic_api_key" type="password" placeholder="sk-ant-..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                </div>
+                <div class="field">
+                  <label>Model</label>
+                  <input v-model="agent.config.anthropic_model" placeholder="claude-3-5-sonnet-latest" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                </div>
+                <div class="field full-width">
+                  <label>Base URL (Optional)</label>
+                  <input v-model="agent.config.anthropic_base_url" placeholder="https://api.anthropic.com/v1" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                </div>
+                <div class="field">
+                  <label>Anthropic Version (Optional)</label>
+                  <input v-model="agent.config.anthropic_version" placeholder="2023-06-01" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                </div>
+                <div class="field full-width">
+                  <label>System Prompt (Optional)</label>
+                  <textarea
+                    v-model="agent.config.anthropic_system_prompt"
+                    rows="3"
+                    placeholder="Optional system instructions"
+                    @focus="startEditing"
+                    @blur="saveAgent(agent); stopEditing()"
+                    @input="markPendingChanges(agent)"
+                  />
+                </div>
+              </div>
+              <div v-else-if="agent.provider_type === 'evaluator'" class="config-fields">
+                <div class="field full-width">
+                  <label>Evaluator Provider</label>
+                  <select
+                    v-model="agent.config.llm_provider"
+                    @focus="startEditing"
+                    @blur="saveAgent(agent); stopEditing()"
+                    @change="onEvaluatorProviderChange(agent)"
+                  >
+                    <option value="openai">OpenAI</option>
+                    <option value="nvidia">NVIDIA NIM</option>
+                    <option value="anthropic">Claude (Anthropic)</option>
+                    <option value="openrouter">OpenRouter</option>
+                    <option value="openai_compatible">OpenAI-Compatible</option>
+                    <option value="auto">Auto (Legacy Fallback)</option>
+                  </select>
+                  <small class="field-hint">
+                    Pick the provider explicitly. Use OpenAI-Compatible for custom endpoints not listed here.
+                  </small>
+                </div>
+
+                <template v-if="showOpenAIEvaluatorFields(agent)">
+                  <div class="field full-width" v-if="getEvaluatorProvider(agent) === 'auto'">
+                    <label>OpenAI Settings</label>
                   </div>
                   <div class="field full-width">
-                    <label>System Prompt (Injected on every request)</label>
+                    <label>OpenAI Mode</label>
+                    <select
+                      v-model="agent.config.openai_mode"
+                      @focus="startEditing"
+                      @blur="saveAgent(agent); stopEditing()"
+                      @change="markPendingChanges(agent)"
+                    >
+                      <option value="managed">Managed Prompt</option>
+                      <option value="standard">Standard API</option>
+                    </select>
+                    <small class="field-hint">
+                      Managed uses Prompt ID on OpenAI. Standard injects a system prompt on every call.
+                    </small>
+                  </div>
+                  <div class="field">
+                    <label>OpenAI API Key</label>
+                    <input v-model="agent.config.openai_api_key" type="password" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" placeholder="sk-..." />
+                  </div>
+                  <template v-if="getEvaluatorMode(agent) === 'managed'">
+                    <div class="field">
+                      <label>Prompt ID (Required)</label>
+                      <input v-model="agent.config.openai_prompt_id" placeholder="prompt_..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                    </div>
+                    <div class="field">
+                      <label>Prompt Version (Optional)</label>
+                      <input v-model="agent.config.openai_prompt_version" placeholder="e.g. v1" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                    </div>
+                    <div class="field">
+                      <label>Project ID (Optional)</label>
+                      <input v-model="agent.config.openai_project_id" placeholder="proj_..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                    </div>
+                  </template>
+                  <template v-else>
+                    <div class="field">
+                      <label>Model</label>
+                      <input v-model="agent.config.openai_model" placeholder="gpt-4o-mini" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                    </div>
+                    <div class="field">
+                      <label>Project ID (Optional)</label>
+                      <input v-model="agent.config.openai_project_id" placeholder="proj_..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                    </div>
+                    <div class="field full-width">
+                      <label>System Prompt (Injected on every request)</label>
+                      <textarea
+                        v-model="agent.config.openai_system_prompt"
+                        rows="4"
+                        placeholder="Optional. Leave blank to use the platform default evaluator prompt."
+                        @focus="startEditing"
+                        @blur="saveAgent(agent); stopEditing()"
+                        @input="markPendingChanges(agent)"
+                      />
+                      <small class="field-hint">If empty, the API uses the backend default evaluator prompt.</small>
+                    </div>
+                  </template>
+                </template>
+
+                <template v-if="showNVIDIAEvaluatorFields(agent)">
+                  <div class="field full-width" v-if="getEvaluatorProvider(agent) === 'auto'">
+                    <label>NVIDIA Settings</label>
+                  </div>
+                  <div class="field">
+                    <label>NVIDIA API Key</label>
+                    <input v-model="agent.config.nvidia_api_key" type="password" placeholder="nvapi-..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field">
+                    <label>Model</label>
+                    <input v-model="agent.config.nvidia_model" placeholder="meta/llama-3.1-8b-instruct" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field full-width">
+                    <label>Base URL (Optional)</label>
+                    <input v-model="agent.config.nvidia_base_url" placeholder="https://integrate.api.nvidia.com/v1" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field full-width">
+                    <label>System Prompt (Optional)</label>
                     <textarea
-                      v-model="agent.config.system_prompt"
+                      v-model="agent.config.nvidia_system_prompt"
                       rows="4"
-                      placeholder="Optional. Leave blank to use the platform default evaluator prompt."
+                      placeholder="Optional NVIDIA evaluator system instructions."
                       @focus="startEditing"
                       @blur="saveAgent(agent); stopEditing()"
                       @input="markPendingChanges(agent)"
                     />
-                    <small class="field-hint">If empty, the API uses the backend default evaluator prompt.</small>
+                  </div>
+                </template>
+
+                <template v-if="showOpenRouterEvaluatorFields(agent)">
+                  <div class="field full-width" v-if="getEvaluatorProvider(agent) === 'auto'">
+                    <label>OpenRouter Settings</label>
+                  </div>
+                  <div class="field">
+                    <label>OpenRouter API Key</label>
+                    <input v-model="agent.config.openrouter_api_key" type="password" placeholder="sk-or-v1-..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field">
+                    <label>Model</label>
+                    <input v-model="agent.config.openrouter_model" placeholder="openai/gpt-4o-mini" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field full-width">
+                    <label>Base URL (Optional)</label>
+                    <input v-model="agent.config.openrouter_base_url" placeholder="https://openrouter.ai/api/v1" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field">
+                    <label>HTTP-Referer (Optional)</label>
+                    <input v-model="agent.config.openrouter_http_referer" placeholder="https://your-app.example" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field">
+                    <label>X-Title (Optional)</label>
+                    <input v-model="agent.config.openrouter_x_title" placeholder="Agenteval Labs" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field full-width">
+                    <label>System Prompt (Optional)</label>
+                    <textarea
+                      v-model="agent.config.openrouter_system_prompt"
+                      rows="4"
+                      placeholder="Optional OpenRouter evaluator system instructions."
+                      @focus="startEditing"
+                      @blur="saveAgent(agent); stopEditing()"
+                      @input="markPendingChanges(agent)"
+                    />
+                  </div>
+                </template>
+
+                <template v-if="showAnthropicEvaluatorFields(agent)">
+                  <div class="field full-width" v-if="getEvaluatorProvider(agent) === 'auto'">
+                    <label>Claude / Anthropic Settings</label>
+                  </div>
+                  <div class="field">
+                    <label>Anthropic API Key</label>
+                    <input v-model="agent.config.anthropic_api_key" type="password" placeholder="sk-ant-..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field">
+                    <label>Model</label>
+                    <input v-model="agent.config.anthropic_model" placeholder="claude-3-5-sonnet-latest" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field full-width">
+                    <label>Base URL (Optional)</label>
+                    <input v-model="agent.config.anthropic_base_url" placeholder="https://api.anthropic.com/v1" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field">
+                    <label>Anthropic Version (Optional)</label>
+                    <input v-model="agent.config.anthropic_version" placeholder="2023-06-01" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field full-width">
+                    <label>System Prompt (Optional)</label>
+                    <textarea
+                      v-model="agent.config.anthropic_system_prompt"
+                      rows="4"
+                      placeholder="Optional Anthropic evaluator system instructions."
+                      @focus="startEditing"
+                      @blur="saveAgent(agent); stopEditing()"
+                      @input="markPendingChanges(agent)"
+                    />
+                  </div>
+                </template>
+
+                <template v-if="showCompatibleEvaluatorFields(agent)">
+                  <div class="field full-width" v-if="getEvaluatorProvider(agent) === 'auto'">
+                    <label>OpenAI-Compatible Settings</label>
+                  </div>
+                  <div class="field">
+                    <label>API Key</label>
+                    <input v-model="agent.config.compatible_api_key" type="password" placeholder="token..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field">
+                    <label>Model</label>
+                    <input v-model="agent.config.compatible_model" placeholder="gpt-4o-mini" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field full-width">
+                    <label>Base URL (Required)</label>
+                    <input v-model="agent.config.compatible_base_url" placeholder="https://your-provider.example/v1" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  </div>
+                  <div class="field full-width">
+                    <label>System Prompt (Optional)</label>
+                    <textarea
+                      v-model="agent.config.compatible_system_prompt"
+                      rows="4"
+                      placeholder="Optional OpenAI-compatible evaluator system instructions."
+                      @focus="startEditing"
+                      @blur="saveAgent(agent); stopEditing()"
+                      @input="markPendingChanges(agent)"
+                    />
                   </div>
                 </template>
               </div>
@@ -179,22 +444,50 @@
           </div>
           <div class="modal-body">
             <p class="evaluator-mode-intro">
-              <strong>Both options are OpenAI-compatible evaluators.</strong>
-              Choose how prompt instructions are provided.
+              <strong>Choose one evaluator provider.</strong>
+              Known providers are pre-configured; for others use OpenAI-Compatible with custom base URL.
             </p>
             <div class="evaluator-mode-grid">
               <button class="evaluator-mode-card" @click="selectEvaluatorMode('managed')">
-                <span class="mode-title">Eval Managed</span>
+                <span class="mode-title">Eval OpenAI Managed</span>
                 <span class="mode-subtitle">Prompt ID / Prompt Version</span>
                 <span class="mode-description">
                   Uses a managed prompt stored in OpenAI. Good when prompt governance is centralized.
                 </span>
               </button>
               <button class="evaluator-mode-card" @click="selectEvaluatorMode('standard')">
-                <span class="mode-title">Eval Standard</span>
+                <span class="mode-title">Eval OpenAI Standard</span>
                 <span class="mode-subtitle">Model + System Prompt</span>
                 <span class="mode-description">
                   Sends model input with system prompt injected on every request.
+                </span>
+              </button>
+              <button class="evaluator-mode-card" @click="selectEvaluatorMode('nvidia')">
+                <span class="mode-title">Eval NVIDIA</span>
+                <span class="mode-subtitle">NIM API</span>
+                <span class="mode-description">
+                  Uses NVIDIA NIM models with your NVIDIA API key.
+                </span>
+              </button>
+              <button class="evaluator-mode-card" @click="selectEvaluatorMode('openrouter')">
+                <span class="mode-title">Eval OpenRouter</span>
+                <span class="mode-subtitle">OpenRouter API</span>
+                <span class="mode-description">
+                  Uses OpenRouter endpoint and model catalog.
+                </span>
+              </button>
+              <button class="evaluator-mode-card" @click="selectEvaluatorMode('anthropic')">
+                <span class="mode-title">Eval Claude</span>
+                <span class="mode-subtitle">Anthropic Messages API</span>
+                <span class="mode-description">
+                  Uses Anthropic Claude models with native Messages API.
+                </span>
+              </button>
+              <button class="evaluator-mode-card" @click="selectEvaluatorMode('openai_compatible')">
+                <span class="mode-title">Eval Compatible</span>
+                <span class="mode-subtitle">Custom OpenAI-like API</span>
+                <span class="mode-description">
+                  For providers with OpenAI-compatible chat/completions endpoints.
                 </span>
               </button>
             </div>
@@ -214,7 +507,7 @@
           </div>
           <div class="modal-body">
             <p class="modal-description">
-              This shows what will be sent to the Python runner (secrets are redacted):
+              This shows what will be sent to the Go runner (secrets are redacted):
             </p>
             <pre class="payload-content">{{ JSON.stringify(spyPayload, null, 2) }}</pre>
           </div>
@@ -276,6 +569,14 @@ function normalizeConfig(rawConfig, providerType) {
       token: '',
       ...config
     }
+  } else if (providerType === 'nvidia') {
+    config = {
+      api_key: '',
+      model: 'meta/llama-3.1-8b-instruct',
+      base_url: '',
+      system_prompt: '',
+      ...config
+    }
   } else if (providerType === 'openai') {
     config = {
       api_key: '',
@@ -284,69 +585,339 @@ function normalizeConfig(rawConfig, providerType) {
       project_id: '',
       ...config
     }
+  } else if (providerType === 'openrouter') {
+    const apiKey = typeof config.openrouter_api_key === 'string'
+      ? config.openrouter_api_key
+      : (typeof config.api_key === 'string' ? config.api_key : '')
+    const model = typeof config.openrouter_model === 'string'
+      ? config.openrouter_model
+      : (typeof config.model === 'string' && config.model.trim() !== '' ? config.model : 'openai/gpt-4o-mini')
+    const baseURL = typeof config.openrouter_base_url === 'string'
+      ? config.openrouter_base_url
+      : (typeof config.base_url === 'string' && config.base_url.trim() !== '' ? config.base_url : 'https://openrouter.ai/api/v1')
+    const systemPrompt = typeof config.openrouter_system_prompt === 'string'
+      ? config.openrouter_system_prompt
+      : (typeof config.system_prompt === 'string' ? config.system_prompt : '')
+
+    config = {
+      openrouter_api_key: apiKey,
+      openrouter_model: model,
+      openrouter_base_url: baseURL,
+      openrouter_system_prompt: systemPrompt,
+      openrouter_http_referer: typeof config.openrouter_http_referer === 'string'
+        ? config.openrouter_http_referer
+        : (typeof config.http_referer === 'string' ? config.http_referer : ''),
+      openrouter_x_title: typeof config.openrouter_x_title === 'string'
+        ? config.openrouter_x_title
+        : (typeof config.x_title === 'string' ? config.x_title : ''),
+      api_key: apiKey,
+      model,
+      base_url: baseURL,
+      system_prompt: systemPrompt,
+      ...config
+    }
+  } else if (providerType === 'openai_compatible') {
+    const apiKey = typeof config.compatible_api_key === 'string'
+      ? config.compatible_api_key
+      : (typeof config.api_key === 'string' ? config.api_key : '')
+    const model = typeof config.compatible_model === 'string'
+      ? config.compatible_model
+      : (typeof config.model === 'string' && config.model.trim() !== '' ? config.model : 'gpt-4o-mini')
+    const baseURL = typeof config.compatible_base_url === 'string'
+      ? config.compatible_base_url
+      : (typeof config.base_url === 'string' ? config.base_url : '')
+    const systemPrompt = typeof config.compatible_system_prompt === 'string'
+      ? config.compatible_system_prompt
+      : (typeof config.system_prompt === 'string' ? config.system_prompt : '')
+
+    config = {
+      compatible_api_key: apiKey,
+      compatible_model: model,
+      compatible_base_url: baseURL,
+      compatible_system_prompt: systemPrompt,
+      api_key: apiKey,
+      model,
+      base_url: baseURL,
+      system_prompt: systemPrompt,
+      ...config
+    }
+  } else if (providerType === 'anthropic') {
+    const apiKey = typeof config.anthropic_api_key === 'string'
+      ? config.anthropic_api_key
+      : (typeof config.api_key === 'string' ? config.api_key : '')
+    const model = typeof config.anthropic_model === 'string'
+      ? config.anthropic_model
+      : (typeof config.model === 'string' && config.model.trim() !== '' ? config.model : 'claude-3-5-sonnet-latest')
+    const baseURL = typeof config.anthropic_base_url === 'string'
+      ? config.anthropic_base_url
+      : (typeof config.base_url === 'string' && config.base_url.trim() !== '' ? config.base_url : 'https://api.anthropic.com/v1')
+    const systemPrompt = typeof config.anthropic_system_prompt === 'string'
+      ? config.anthropic_system_prompt
+      : (typeof config.system_prompt === 'string' ? config.system_prompt : '')
+    const version = typeof config.anthropic_version === 'string'
+      ? config.anthropic_version
+      : '2023-06-01'
+
+    config = {
+      anthropic_api_key: apiKey,
+      anthropic_model: model,
+      anthropic_base_url: baseURL,
+      anthropic_system_prompt: systemPrompt,
+      anthropic_version: version,
+      api_key: apiKey,
+      model,
+      base_url: baseURL,
+      system_prompt: systemPrompt,
+      ...config
+    }
   } else if (providerType === 'evaluator') {
+    const currentProvider = typeof config.llm_provider === 'string'
+      ? config.llm_provider.trim().toLowerCase()
+      : ''
+    const inferredProvider = ['openai', 'nvidia', 'openrouter', 'anthropic', 'openai_compatible', 'auto'].includes(currentProvider)
+      ? currentProvider
+      : 'openai'
+
+    const legacyApiKey = typeof config.api_key === 'string' ? config.api_key : ''
+    const legacyModel = typeof config.model === 'string' ? config.model : ''
+    const legacySystemPrompt = typeof config.system_prompt === 'string' ? config.system_prompt : ''
+    const legacyBaseURL = typeof config.base_url === 'string' ? config.base_url : ''
+    const legacyPromptID = typeof config.prompt_id === 'string' ? config.prompt_id : ''
+    const legacyPromptVersion = typeof config.prompt_version === 'string' ? config.prompt_version : ''
+    const legacyProjectID = typeof config.project_id === 'string' ? config.project_id : ''
+
+    const openaiAPIKey = typeof config.openai_api_key === 'string'
+      ? config.openai_api_key
+      : ((inferredProvider === 'openai' || inferredProvider === 'auto') && legacyApiKey ? legacyApiKey : '')
+    const nvidiaAPIKey = typeof config.nvidia_api_key === 'string'
+      ? config.nvidia_api_key
+      : ((inferredProvider === 'nvidia' && legacyApiKey) ? legacyApiKey : '')
+    const openaiPromptID = typeof config.openai_prompt_id === 'string'
+      ? config.openai_prompt_id
+      : legacyPromptID
+    const openaiPromptVersion = typeof config.openai_prompt_version === 'string'
+      ? config.openai_prompt_version
+      : legacyPromptVersion
+    const openaiProjectID = typeof config.openai_project_id === 'string'
+      ? config.openai_project_id
+      : legacyProjectID
+
+    const openrouterAPIKey = typeof config.openrouter_api_key === 'string'
+      ? config.openrouter_api_key
+      : ((inferredProvider === 'openrouter' && legacyApiKey) ? legacyApiKey : '')
+    const openrouterModel = typeof config.openrouter_model === 'string'
+      ? config.openrouter_model
+      : ((inferredProvider === 'openrouter' && legacyModel) ? legacyModel : 'openai/gpt-4o-mini')
+    const openrouterSystemPrompt = typeof config.openrouter_system_prompt === 'string'
+      ? config.openrouter_system_prompt
+      : ((inferredProvider === 'openrouter' && legacySystemPrompt) ? legacySystemPrompt : '')
+    const openrouterBaseURL = typeof config.openrouter_base_url === 'string'
+      ? config.openrouter_base_url
+      : ((inferredProvider === 'openrouter' && legacyBaseURL) ? legacyBaseURL : 'https://openrouter.ai/api/v1')
+    const openrouterHTTPReferer = typeof config.openrouter_http_referer === 'string'
+      ? config.openrouter_http_referer
+      : (typeof config.http_referer === 'string' ? config.http_referer : '')
+    const openrouterXTitle = typeof config.openrouter_x_title === 'string'
+      ? config.openrouter_x_title
+      : (typeof config.x_title === 'string' ? config.x_title : '')
+
+    const compatibleAPIKey = typeof config.compatible_api_key === 'string'
+      ? config.compatible_api_key
+      : ((inferredProvider === 'openai_compatible' && legacyApiKey) ? legacyApiKey : '')
+    const compatibleModel = typeof config.compatible_model === 'string'
+      ? config.compatible_model
+      : ((inferredProvider === 'openai_compatible' && legacyModel) ? legacyModel : 'gpt-4o-mini')
+    const compatibleSystemPrompt = typeof config.compatible_system_prompt === 'string'
+      ? config.compatible_system_prompt
+      : ((inferredProvider === 'openai_compatible' && legacySystemPrompt) ? legacySystemPrompt : '')
+    const compatibleBaseURL = typeof config.compatible_base_url === 'string'
+      ? config.compatible_base_url
+      : ((inferredProvider === 'openai_compatible' && legacyBaseURL) ? legacyBaseURL : '')
+
+    const anthropicAPIKey = typeof config.anthropic_api_key === 'string'
+      ? config.anthropic_api_key
+      : ((inferredProvider === 'anthropic' && legacyApiKey) ? legacyApiKey : '')
+    const anthropicModel = typeof config.anthropic_model === 'string'
+      ? config.anthropic_model
+      : ((inferredProvider === 'anthropic' && legacyModel) ? legacyModel : 'claude-3-5-sonnet-latest')
+    const anthropicSystemPrompt = typeof config.anthropic_system_prompt === 'string'
+      ? config.anthropic_system_prompt
+      : ((inferredProvider === 'anthropic' && legacySystemPrompt) ? legacySystemPrompt : '')
+    const anthropicBaseURL = typeof config.anthropic_base_url === 'string'
+      ? config.anthropic_base_url
+      : ((inferredProvider === 'anthropic' && legacyBaseURL) ? legacyBaseURL : 'https://api.anthropic.com/v1')
+    const anthropicVersion = typeof config.anthropic_version === 'string'
+      ? config.anthropic_version
+      : '2023-06-01'
+
     const currentMode = typeof config.openai_mode === 'string'
       ? config.openai_mode.trim().toLowerCase()
       : ''
     const inferredMode = (currentMode === 'managed' || currentMode === 'standard')
       ? currentMode
-      : ((typeof config.prompt_id === 'string' && config.prompt_id.trim() !== '') ? 'managed' : 'standard')
+      : (openaiPromptID.trim() !== '' ? 'managed' : 'standard')
+    const openaiModel = typeof config.openai_model === 'string'
+      ? config.openai_model
+      : ((inferredProvider === 'openai' || inferredProvider === 'auto') && legacyModel ? legacyModel : 'gpt-4o-mini')
+    const openaiSystemPrompt = typeof config.openai_system_prompt === 'string'
+      ? config.openai_system_prompt
+      : ((inferredProvider === 'openai' || inferredProvider === 'auto') && legacySystemPrompt ? legacySystemPrompt : '')
+    const nvidiaModel = typeof config.nvidia_model === 'string'
+      ? config.nvidia_model
+      : ((inferredProvider === 'nvidia' && legacyModel) ? legacyModel : 'meta/llama-3.1-8b-instruct')
+    const nvidiaBaseURL = typeof config.nvidia_base_url === 'string'
+      ? config.nvidia_base_url
+      : ((inferredProvider === 'nvidia' && legacyBaseURL) ? legacyBaseURL : '')
+    const nvidiaSystemPrompt = typeof config.nvidia_system_prompt === 'string'
+      ? config.nvidia_system_prompt
+      : ((inferredProvider === 'nvidia' && legacySystemPrompt) ? legacySystemPrompt : '')
 
     config = {
       target_agent_id: '',
+      llm_provider: inferredProvider,
       openai_mode: inferredMode,
-      api_key: '',
-      model: 'gpt-4o-mini',
-      system_prompt: '',
-      prompt_id: '',
-      prompt_version: '',
-      project_id: '',
+      openai_api_key: openaiAPIKey,
+      openai_model: openaiModel,
+      openai_system_prompt: openaiSystemPrompt,
+      openai_prompt_id: openaiPromptID,
+      openai_prompt_version: openaiPromptVersion,
+      openai_project_id: openaiProjectID,
+      nvidia_api_key: nvidiaAPIKey,
+      nvidia_model: nvidiaModel,
+      nvidia_base_url: nvidiaBaseURL,
+      nvidia_system_prompt: nvidiaSystemPrompt,
+      openrouter_api_key: openrouterAPIKey,
+      openrouter_model: openrouterModel,
+      openrouter_base_url: openrouterBaseURL,
+      openrouter_system_prompt: openrouterSystemPrompt,
+      openrouter_http_referer: openrouterHTTPReferer,
+      openrouter_x_title: openrouterXTitle,
+      compatible_api_key: compatibleAPIKey,
+      compatible_model: compatibleModel,
+      compatible_base_url: compatibleBaseURL,
+      compatible_system_prompt: compatibleSystemPrompt,
+      anthropic_api_key: anthropicAPIKey,
+      anthropic_model: anthropicModel,
+      anthropic_base_url: anthropicBaseURL,
+      anthropic_system_prompt: anthropicSystemPrompt,
+      anthropic_version: anthropicVersion,
+      api_key: legacyApiKey,
+      model: legacyModel,
+      system_prompt: legacySystemPrompt,
+      base_url: legacyBaseURL,
+      prompt_id: legacyPromptID,
+      prompt_version: legacyPromptVersion,
+      project_id: legacyProjectID,
       ...config,
-      openai_mode: inferredMode
+      llm_provider: inferredProvider,
+      openai_mode: inferredMode,
+      openai_api_key: openaiAPIKey,
+      openai_model: openaiModel || 'gpt-4o-mini',
+      openai_system_prompt: openaiSystemPrompt,
+      openai_prompt_id: openaiPromptID,
+      openai_prompt_version: openaiPromptVersion,
+      openai_project_id: openaiProjectID,
+      nvidia_api_key: nvidiaAPIKey,
+      nvidia_model: nvidiaModel || 'meta/llama-3.1-8b-instruct',
+      nvidia_base_url: nvidiaBaseURL,
+      nvidia_system_prompt: nvidiaSystemPrompt,
+      openrouter_api_key: openrouterAPIKey,
+      openrouter_model: openrouterModel || 'openai/gpt-4o-mini',
+      openrouter_base_url: openrouterBaseURL,
+      openrouter_system_prompt: openrouterSystemPrompt,
+      openrouter_http_referer: openrouterHTTPReferer,
+      openrouter_x_title: openrouterXTitle,
+      compatible_api_key: compatibleAPIKey,
+      compatible_model: compatibleModel || 'gpt-4o-mini',
+      compatible_base_url: compatibleBaseURL,
+      compatible_system_prompt: compatibleSystemPrompt,
+      anthropic_api_key: anthropicAPIKey,
+      anthropic_model: anthropicModel || 'claude-3-5-sonnet-latest',
+      anthropic_base_url: anthropicBaseURL,
+      anthropic_system_prompt: anthropicSystemPrompt,
+      anthropic_version: anthropicVersion
+    }
+
+    const autoResolvedProvider = config.nvidia_api_key && config.nvidia_api_key.trim() !== ''
+      ? 'nvidia'
+      : (config.openrouter_api_key && config.openrouter_api_key.trim() !== ''
+        ? 'openrouter'
+        : (config.anthropic_api_key && config.anthropic_api_key.trim() !== ''
+          ? 'anthropic'
+        : (config.openai_api_key && config.openai_api_key.trim() !== ''
+          ? 'openai'
+          : (config.compatible_api_key && config.compatible_api_key.trim() !== '' ? 'openai_compatible' : 'openai'))))
+
+    const legacyProvider = inferredProvider === 'auto'
+      ? autoResolvedProvider
+      : inferredProvider
+
+    if (legacyProvider === 'nvidia') {
+      config.api_key = config.nvidia_api_key || ''
+      config.model = config.nvidia_model || ''
+      config.system_prompt = config.nvidia_system_prompt || ''
+      config.base_url = config.nvidia_base_url || ''
+      config.prompt_id = ''
+      config.prompt_version = ''
+      config.project_id = ''
+    } else if (legacyProvider === 'openrouter') {
+      config.api_key = config.openrouter_api_key || ''
+      config.model = config.openrouter_model || ''
+      config.system_prompt = config.openrouter_system_prompt || ''
+      config.base_url = config.openrouter_base_url || ''
+      config.prompt_id = ''
+      config.prompt_version = ''
+      config.project_id = ''
+      config.http_referer = config.openrouter_http_referer || ''
+      config.x_title = config.openrouter_x_title || ''
+    } else if (legacyProvider === 'openai_compatible') {
+      config.api_key = config.compatible_api_key || ''
+      config.model = config.compatible_model || ''
+      config.system_prompt = config.compatible_system_prompt || ''
+      config.base_url = config.compatible_base_url || ''
+      config.prompt_id = ''
+      config.prompt_version = ''
+      config.project_id = ''
+    } else if (legacyProvider === 'anthropic') {
+      config.api_key = config.anthropic_api_key || ''
+      config.model = config.anthropic_model || ''
+      config.system_prompt = config.anthropic_system_prompt || ''
+      config.base_url = config.anthropic_base_url || ''
+      config.prompt_id = ''
+      config.prompt_version = ''
+      config.project_id = ''
+    } else {
+      config.api_key = config.openai_api_key || ''
+      config.model = config.openai_model || ''
+      config.system_prompt = config.openai_system_prompt || ''
+      config.base_url = ''
+      config.prompt_id = config.openai_prompt_id || ''
+      config.prompt_version = config.openai_prompt_version || ''
+      config.project_id = config.openai_project_id || ''
     }
   }
 
   return config
 }
 
-function mergeAgentsWithOverrides(globalAgents, qs) {
+function normalizeManagerAgents(globalAgents) {
   if (!globalAgents) return []
-  // For AgentManagerModal, we show workspace-level enabled status.
-  // Question-set overrides only affect config and position, NOT enabled status.
-  // The enabled toggle here is global (workspace-level).
-  if (!qs?.agents || qs.agents.length === 0) {
-    return (globalAgents || []).map(a => ({
+  return (globalAgents || [])
+    .map(a => ({
       ...a,
       config: normalizeConfig(a.config, a.provider_type)
     }))
-  }
-
-  const overrideMap = {}
-  qs.agents.forEach(oa => {
-    overrideMap[oa.agent_id] = oa
-  })
-
-  return globalAgents.map(a => {
-    const override = overrideMap[a.id]
-    // Note: We intentionally use a.enabled (workspace-level), NOT override.enabled
-    // Question-set selection is handled in RunSetupModal, not here.
-    return {
-      ...a,
-      enabled: a.enabled, // Always use workspace-level enabled
-      position: override?.position !== undefined ? override.position : a.position,
-      config: normalizeConfig(override?.config || a.config, a.provider_type)
-    }
-  }).sort((a, b) => (a.position || 0) - (b.position || 0))
+    .sort((a, b) => (a.position || 0) - (b.position || 0))
 }
 
-watch([() => props.agents, () => props.questionSet], ([newAgents, newQS]) => {
+watch(() => props.agents, (newAgents) => {
   // Don't overwrite local state if user is currently editing
   if (isEditing.value) {
     console.log('[AgentManagerModal] Skipping sync while editing')
     return
   }
   
-  const merged = mergeAgentsWithOverrides(newAgents, newQS)
+  const merged = normalizeManagerAgents(newAgents)
   const mergedIds = new Set(merged.map(a => a.id))
 
   // Preserve pending creates that haven't hit the server/broadcast yet
@@ -381,13 +952,74 @@ async function addAgent(providerType) {
   
   const defaultConfigs = {
     mcp: { mode: 'http', endpoint: '', token: '' },
+    nvidia: { api_key: '', model: 'meta/llama-3.1-8b-instruct', base_url: '', system_prompt: '' },
+    anthropic: {
+      anthropic_api_key: '',
+      anthropic_model: 'claude-3-5-sonnet-latest',
+      anthropic_base_url: 'https://api.anthropic.com/v1',
+      anthropic_system_prompt: '',
+      anthropic_version: '2023-06-01',
+      api_key: '',
+      model: 'claude-3-5-sonnet-latest',
+      base_url: 'https://api.anthropic.com/v1',
+      system_prompt: ''
+    },
+    openrouter: {
+      openrouter_api_key: '',
+      openrouter_model: 'openai/gpt-4o-mini',
+      openrouter_base_url: 'https://openrouter.ai/api/v1',
+      openrouter_system_prompt: '',
+      openrouter_http_referer: '',
+      openrouter_x_title: '',
+      api_key: '',
+      model: 'openai/gpt-4o-mini',
+      base_url: 'https://openrouter.ai/api/v1',
+      system_prompt: ''
+    },
+    openai_compatible: {
+      compatible_api_key: '',
+      compatible_model: 'gpt-4o-mini',
+      compatible_base_url: '',
+      compatible_system_prompt: '',
+      api_key: '',
+      model: 'gpt-4o-mini',
+      base_url: '',
+      system_prompt: ''
+    },
     openai: { api_key: '', prompt_id: '', prompt_version: '' },
     evaluator: {
       target_agent_id: '',
-      openai_mode: 'managed',
+      llm_provider: 'openai',
+      openai_mode: 'standard',
+      openai_api_key: '',
+      openai_model: 'gpt-4o-mini',
+      openai_system_prompt: '',
+      openai_prompt_id: '',
+      openai_prompt_version: '',
+      openai_project_id: '',
+      nvidia_api_key: '',
+      nvidia_model: 'meta/llama-3.1-8b-instruct',
+      nvidia_base_url: '',
+      nvidia_system_prompt: '',
+      openrouter_api_key: '',
+      openrouter_model: 'openai/gpt-4o-mini',
+      openrouter_base_url: 'https://openrouter.ai/api/v1',
+      openrouter_system_prompt: '',
+      openrouter_http_referer: '',
+      openrouter_x_title: '',
+      compatible_api_key: '',
+      compatible_model: 'gpt-4o-mini',
+      compatible_base_url: '',
+      compatible_system_prompt: '',
+      anthropic_api_key: '',
+      anthropic_model: 'claude-3-5-sonnet-latest',
+      anthropic_base_url: 'https://api.anthropic.com/v1',
+      anthropic_system_prompt: '',
+      anthropic_version: '2023-06-01',
       api_key: '',
       model: 'gpt-4o-mini',
       system_prompt: '',
+      base_url: '',
       prompt_id: '',
       prompt_version: '',
       project_id: ''
@@ -397,29 +1029,50 @@ async function addAgent(providerType) {
   return addAgentWithConfig(providerType, defaultConfigs[providerType] || {})
 }
 
-function addEvaluator(mode = 'managed') {
-  const selectedMode = mode === 'standard' ? 'standard' : 'managed'
-  const evaluatorConfig = selectedMode === 'managed'
-    ? {
-      target_agent_id: '',
-      openai_mode: 'managed',
-      api_key: '',
-      prompt_id: '',
-      prompt_version: '',
-      project_id: '',
-      model: 'gpt-4o-mini',
-      system_prompt: ''
-    }
-    : {
-      target_agent_id: '',
-      openai_mode: 'standard',
-      api_key: '',
-      model: 'gpt-4o-mini',
-      system_prompt: '',
-      prompt_id: '',
-      prompt_version: '',
-      project_id: ''
-    }
+function addEvaluator(mode = 'standard') {
+  const selectedMode = ['managed', 'standard', 'nvidia', 'openrouter', 'anthropic', 'openai_compatible', 'auto'].includes(mode)
+    ? mode
+    : 'standard'
+  const llmProvider = selectedMode === 'managed' || selectedMode === 'standard'
+    ? 'openai'
+    : selectedMode
+  const evaluatorConfig = {
+    target_agent_id: '',
+    llm_provider: llmProvider,
+    openai_mode: selectedMode === 'managed' ? 'managed' : 'standard',
+    openai_api_key: '',
+    openai_model: 'gpt-4o-mini',
+    openai_system_prompt: '',
+    openai_prompt_id: '',
+    openai_prompt_version: '',
+    openai_project_id: '',
+    nvidia_api_key: '',
+    nvidia_model: 'meta/llama-3.1-8b-instruct',
+    nvidia_base_url: '',
+    nvidia_system_prompt: '',
+    openrouter_api_key: '',
+    openrouter_model: 'openai/gpt-4o-mini',
+    openrouter_base_url: 'https://openrouter.ai/api/v1',
+    openrouter_system_prompt: '',
+    openrouter_http_referer: '',
+    openrouter_x_title: '',
+    compatible_api_key: '',
+    compatible_model: 'gpt-4o-mini',
+    compatible_base_url: '',
+    compatible_system_prompt: '',
+    anthropic_api_key: '',
+    anthropic_model: 'claude-3-5-sonnet-latest',
+    anthropic_base_url: 'https://api.anthropic.com/v1',
+    anthropic_system_prompt: '',
+    anthropic_version: '2023-06-01',
+    api_key: '',
+    model: 'gpt-4o-mini',
+    system_prompt: '',
+    base_url: '',
+    prompt_id: '',
+    prompt_version: '',
+    project_id: ''
+  }
 
   return addAgentWithConfig('evaluator', evaluatorConfig)
 }
@@ -452,21 +1105,83 @@ async function addAgentWithConfig(providerType, customConfig) {
       config: normalizeConfig(newAgent.config, newAgent.provider_type || providerType),
       enabled: true
     }
-    if (newAgent?.id) {
-      pendingCreateIds.value.add(newAgent.id)
-    }
-    localAgents.value.unshift(newAgentWithParsedConfig)
+	    if (newAgent?.id) {
+	      pendingCreateIds.value.add(newAgent.id)
+	    }
+	    localAgents.value.unshift(newAgentWithParsedConfig)
 
-    if (props.questionSet?.id) {
-      await saveQuestionSetAgents()
-    }
-
-    emit('update')
-    showSaveStatus('saved', 'Agent created!')
+	    emit('update')
+	    showSaveStatus('saved', 'Agent created!')
   } catch (e) {
     console.error('Failed to create agent:', e)
     showSaveStatus('error', 'Failed to create')
   }
+}
+
+function getEvaluatorProvider(agent) {
+  if (!agent || !agent.config) return 'openai'
+  const provider = typeof agent.config.llm_provider === 'string'
+    ? agent.config.llm_provider.trim().toLowerCase()
+    : ''
+  if (provider === 'nvidia' || provider === 'openai' || provider === 'openrouter' || provider === 'anthropic' || provider === 'openai_compatible' || provider === 'auto') {
+    return provider
+  }
+  return 'openai'
+}
+
+function showOpenAIEvaluatorFields(agent) {
+  const provider = getEvaluatorProvider(agent)
+  return provider === 'openai' || provider === 'auto'
+}
+
+function showNVIDIAEvaluatorFields(agent) {
+  const provider = getEvaluatorProvider(agent)
+  return provider === 'nvidia' || provider === 'auto'
+}
+
+function showOpenRouterEvaluatorFields(agent) {
+  const provider = getEvaluatorProvider(agent)
+  return provider === 'openrouter' || provider === 'auto'
+}
+
+function showAnthropicEvaluatorFields(agent) {
+  const provider = getEvaluatorProvider(agent)
+  return provider === 'anthropic' || provider === 'auto'
+}
+
+function showCompatibleEvaluatorFields(agent) {
+  const provider = getEvaluatorProvider(agent)
+  return provider === 'openai_compatible' || provider === 'auto'
+}
+
+function onEvaluatorProviderChange(agent) {
+  if (!agent || !agent.config) return
+  const provider = getEvaluatorProvider(agent)
+  if (!agent.config.openai_mode) {
+    agent.config.openai_mode = 'standard'
+  }
+  if (!agent.config.openai_model) {
+    agent.config.openai_model = 'gpt-4o-mini'
+  }
+  if (!agent.config.nvidia_model) {
+    agent.config.nvidia_model = 'meta/llama-3.1-8b-instruct'
+  }
+  if (!agent.config.openrouter_model) {
+    agent.config.openrouter_model = 'openai/gpt-4o-mini'
+  }
+  if (!agent.config.compatible_model) {
+    agent.config.compatible_model = 'gpt-4o-mini'
+  }
+  if (!agent.config.anthropic_model) {
+    agent.config.anthropic_model = 'claude-3-5-sonnet-latest'
+  }
+  if (!agent.config.anthropic_version) {
+    agent.config.anthropic_version = '2023-06-01'
+  }
+  if (provider === 'nvidia' || provider === 'openrouter' || provider === 'anthropic' || provider === 'openai_compatible') {
+    agent.config.openai_mode = 'standard'
+  }
+  markPendingChanges(agent)
 }
 
 function getEvaluatorMode(agent) {
@@ -477,14 +1192,26 @@ function getEvaluatorMode(agent) {
   if (mode === 'managed' || mode === 'standard') {
     return mode
   }
-  const promptID = typeof agent.config.prompt_id === 'string' ? agent.config.prompt_id.trim() : ''
+  const promptID = typeof agent.config.openai_prompt_id === 'string'
+    ? agent.config.openai_prompt_id.trim()
+    : (typeof agent.config.prompt_id === 'string' ? agent.config.prompt_id.trim() : '')
   return promptID ? 'managed' : 'standard'
 }
 
 function getAgentTypeLabel(agent) {
   if (!agent) return 'agent'
   if (agent.provider_type === 'mcp') return 'Corvic'
+  if (agent.provider_type === 'nvidia') return 'NVIDIA NIM'
+  if (agent.provider_type === 'anthropic') return 'Claude'
+  if (agent.provider_type === 'openrouter') return 'OpenRouter'
+  if (agent.provider_type === 'openai_compatible') return 'OpenAI-Compatible'
   if (agent.provider_type === 'evaluator') {
+    const provider = getEvaluatorProvider(agent)
+    if (provider === 'auto') return 'Eval Legacy Auto'
+    if (provider === 'nvidia') return 'Eval NVIDIA'
+    if (provider === 'anthropic') return 'Eval Claude'
+    if (provider === 'openrouter') return 'Eval OpenRouter'
+    if (provider === 'openai_compatible') return 'Eval Compatible'
     return getEvaluatorMode(agent) === 'managed' ? 'Eval Managed' : 'Eval Standard'
   }
   return agent.provider_type
@@ -513,17 +1240,6 @@ function clearPendingChanges(agentId) {
   pendingChanges.value = dirtyAgentIds.value.size > 0
 }
 
-async function saveQuestionSetAgents() {
-  if (!props.questionSet?.id) return
-  const payload = localAgents.value.map((a, i) => ({
-    agent_id: a.id,
-    enabled: a.enabled !== undefined ? a.enabled : true,
-    position: i,
-    config: normalizeConfig(a.config, a.provider_type)
-  }))
-  await wsService.updateQuestionSetAgents(props.questionSet.id, payload)
-}
-
 async function handleClose() {
   // Save any pending changes before closing
   if (pendingChanges.value && localAgents.value.length > 0) {
@@ -540,22 +1256,17 @@ async function saveAgent(agent) {
   try {
     agent.config = normalizeConfig(agent.config, agent.provider_type)
     // Always persist agent config/credentials at the workspace level
-    await wsService.updateAgent(agent.id, {
-      name: agent.name,
-      provider_type: agent.provider_type,
-      config: agent.config,
-      enabled: agent.enabled,
-      position: agent.position,
-      max_concurrency: agent.max_concurrency || 5
-    })
-
-    // Keep question-set mapping in sync when applicable
-    if (props.questionSet?.id) {
-      await saveQuestionSetAgents()
-    }
-    // NOTE: We intentionally do NOT emit('update') here to avoid the watcher
-    // overwriting localAgents with stale server data. Updates are synced on close.
-    clearPendingChanges(agent.id)
+	    await wsService.updateAgent(agent.id, {
+	      name: agent.name,
+	      provider_type: agent.provider_type,
+	      config: agent.config,
+	      enabled: agent.enabled,
+	      position: agent.position,
+	      max_concurrency: agent.max_concurrency || 5
+	    })
+	    // NOTE: We intentionally do NOT emit('update') here to avoid the watcher
+	    // overwriting localAgents with stale server data. Updates are synced on close.
+	    clearPendingChanges(agent.id)
     showSaveStatus('saved', 'Saved ✓')
   } catch (e) {
     console.error('Failed to save agent:', e)
@@ -574,24 +1285,20 @@ async function saveAllAgents() {
       ? localAgents.value.filter(a => dirtyIds.includes(a.id))
       : localAgents.value
 
-    for (const agent of agentsToSave) {
-      agent.config = normalizeConfig(agent.config, agent.provider_type)
-      await wsService.updateAgent(agent.id, {
-        name: agent.name,
-        provider_type: agent.provider_type,
+	    for (const agent of agentsToSave) {
+	      agent.config = normalizeConfig(agent.config, agent.provider_type)
+	      await wsService.updateAgent(agent.id, {
+	        name: agent.name,
+	        provider_type: agent.provider_type,
         config: agent.config,
         enabled: agent.enabled,
         position: agent.position,
         max_concurrency: agent.max_concurrency || 5
-      })
-    }
+	      })
+	    }
 
-    if (props.questionSetId) {
-      await saveQuestionSetAgents()
-    }
-
-    dirtyAgentIds.value.clear()
-    pendingChanges.value = false
+	    dirtyAgentIds.value.clear()
+	    pendingChanges.value = false
     emit('update')
     showSaveStatus('saved', 'All changes saved')
     return true
@@ -632,7 +1339,6 @@ async function toggleAgent(agent) {
       position: agent.position,
       max_concurrency: agent.max_concurrency || 5
     })
-    // NOTE: We do NOT call saveQuestionSetAgents() here.
     // This is a global (workspace-level) toggle only.
     showSaveStatus('saved', `Agent ${action}d ✓`)
   } catch (e) {
@@ -768,6 +1474,26 @@ function startDrag(index) {
 .agent-type-badge.openai {
   background: #dcfce7;
   color: #166534;
+}
+
+.agent-type-badge.nvidia {
+  background: #dcfce7;
+  color: #14532d;
+}
+
+.agent-type-badge.anthropic {
+  background: #f3e8ff;
+  color: #6b21a8;
+}
+
+.agent-type-badge.openrouter {
+  background: #e0f2fe;
+  color: #075985;
+}
+
+.agent-type-badge.openai_compatible {
+  background: #ecfccb;
+  color: #3f6212;
 }
 
 .agent-type-badge.evaluator {

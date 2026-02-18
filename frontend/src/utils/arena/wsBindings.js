@@ -222,7 +222,7 @@ export function registerArenaWsEvents(options = {}) {
       maybeStopRunningWhenIdle()
 
       if (currentQuestionSet.value?.id) {
-        fetchLatestResultsForQS(currentQuestionSet.value.id)
+        fetchLatestResultsForQS(currentQuestionSet.value.id, { force: true })
       }
     }
   }

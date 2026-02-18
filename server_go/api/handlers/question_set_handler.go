@@ -265,8 +265,11 @@ func (h *QuestionSetHandler) GetAgents(c echo.Context) error {
 		// Return QS-specific agents
 		agents := make([]models.Agent, 0)
 		for _, qsa := range qsAgents {
+			if !qsa.Enabled {
+				continue
+			}
 			agent := qsa.Agent
-			agent.Enabled = qsa.Enabled
+			agent.Enabled = true
 			agent.Position = qsa.Position
 			// Override config if present in junction table
 			if qsa.Config != nil {
@@ -319,6 +322,9 @@ func (h *QuestionSetHandler) UpdateAgents(c echo.Context) error {
 
 	// Insert new configurations
 	for _, ac := range req.Agents {
+		if !ac.Enabled {
+			continue
+		}
 		agentID, err := uuid.Parse(ac.AgentID)
 		if err != nil {
 			continue
@@ -326,7 +332,7 @@ func (h *QuestionSetHandler) UpdateAgents(c echo.Context) error {
 		qsAgent := models.QuestionSetAgent{
 			QuestionSetID: id,
 			AgentID:       agentID,
-			Enabled:       ac.Enabled,
+			Enabled:       true,
 			Position:      ac.Position,
 			Config:        ac.Config,
 		}

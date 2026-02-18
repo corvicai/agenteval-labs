@@ -193,7 +193,9 @@ func isAgentConfigured(agent models.Agent) bool {
 		if endpoint == "" || token == "" {
 			return false
 		}
-	case "openai", "evaluator":
+	case "evaluator":
+		return orchestrator.IsSelectedEvaluatorProviderConfigured(config)
+	case "openai":
 		apiKey := strings.TrimSpace(getConfigString(config, "api_key"))
 		if apiKey == "" {
 			return false
@@ -208,6 +210,39 @@ func isAgentConfigured(agent models.Agent) bool {
 			}
 		}
 		if mode == "managed" && promptID == "" {
+			return false
+		}
+	case "anthropic":
+		apiKey := strings.TrimSpace(getConfigString(config, "anthropic_api_key"))
+		if apiKey == "" {
+			apiKey = strings.TrimSpace(getConfigString(config, "api_key"))
+		}
+		if apiKey == "" {
+			return false
+		}
+	case "openrouter":
+		apiKey := strings.TrimSpace(getConfigString(config, "openrouter_api_key"))
+		if apiKey == "" {
+			apiKey = strings.TrimSpace(getConfigString(config, "api_key"))
+		}
+		if apiKey == "" {
+			return false
+		}
+	case "openai_compatible":
+		apiKey := strings.TrimSpace(getConfigString(config, "compatible_api_key"))
+		if apiKey == "" {
+			apiKey = strings.TrimSpace(getConfigString(config, "api_key"))
+		}
+		baseURL := strings.TrimSpace(getConfigString(config, "compatible_base_url"))
+		if baseURL == "" {
+			baseURL = strings.TrimSpace(getConfigString(config, "base_url"))
+		}
+		if apiKey == "" || baseURL == "" {
+			return false
+		}
+	case "nvidia":
+		apiKey := strings.TrimSpace(getConfigString(config, "api_key"))
+		if apiKey == "" {
 			return false
 		}
 	}
