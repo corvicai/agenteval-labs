@@ -314,7 +314,7 @@ func (e *Engine) executeTask(task *Task) {
 
 	providerType := task.ProviderType
 	if providerType == "evaluator" {
-		providerType = "openai"
+		providerType = ResolveEvaluatorProvider(task.AgentConfig)
 	}
 
 	payload := map[string]any{
@@ -324,6 +324,7 @@ func (e *Engine) executeTask(task *Task) {
 		"agent_answer":      task.AgentAnswer, // For evaluators: the response to evaluate
 		"answer":            task.AgentAnswer, // Alias for clarity in evaluator payloads
 		"response":          task.AgentAnswer, // Extra alias for clarity in evaluator payloads
+		"is_evaluator_task": task.ProviderType == "evaluator" || task.TargetRunResultID != uuid.Nil || strings.HasPrefix(strings.TrimSpace(task.QuestionID), "eval-"),
 	}
 
 	// For evaluator tasks, send both explicit question and answer fields
@@ -1048,27 +1049,28 @@ func (e *Engine) StartRun(workspaceID uuid.UUID, questionSetID uuid.UUID, agentI
 	// Get agents
 	var agents []models.Agent
 	if len(agentIDs) > 0 {
-		e.db.Where("id IN ? AND workspace_id = ? AND enabled = true", agentIDs, workspaceID).Find(&agents)
+		e.db.Where("id IN ? AND workspace_id = ?", agentIDs, workspaceID).Find(&agents)
 	} else {
-		// Get all enabled primary agents (not evaluators)
+		// Load all primary agents; question-set overrides become the source of truth when present.
 		var workspaceAgents []models.Agent
-		e.db.Where("workspace_id = ? AND enabled = true AND provider_type != 'evaluator'", workspaceID).Order("position ASC").Find(&workspaceAgents)
+		e.db.Where("workspace_id = ? AND provider_type != 'evaluator'", workspaceID).Order("position ASC").Find(&workspaceAgents)
 
-		// Filter based on overrides if any exist
+		// When mappings exist, use only mapped and enabled agents for this question set.
 		if len(overrides) > 0 {
 			for _, wa := range workspaceAgents {
 				if o, ok := overrideMap[wa.ID]; ok {
 					if o.Enabled {
 						agents = append(agents, wa)
 					}
-				} else {
-					// No override means enabled by default (compatibility with older question sets)
-					agents = append(agents, wa)
 				}
 			}
 		} else {
-			// No overrides at all - use all workspace agents
-			agents = workspaceAgents
+			// Legacy fallback for old question sets with no mapping yet.
+			for _, wa := range workspaceAgents {
+				if wa.Enabled {
+					agents = append(agents, wa)
+				}
+			}
 		}
 	}
 
@@ -1427,7 +1429,8 @@ func (e *Engine) validateEvaluatorConfig(evaluator models.Agent) error {
 		return fmt.Errorf("invalid evaluator config for %s: %v", evaluator.Name, err)
 	}
 
-	apiKey, _ := config["api_key"].(string)
+	preferredProvider := PreferredEvaluatorProvider(config)
+	resolvedProvider := ResolveEvaluatorProvider(config)
 
 	// If "MOCK" or "DRYRUN" is explicitly present anywhere in the config (case insensitive), we allow it
 	upperConfig := strings.ToUpper(configStr)
@@ -1435,9 +1438,38 @@ func (e *Engine) validateEvaluatorConfig(evaluator models.Agent) error {
 		return nil
 	}
 
-	// Otherwise, it must be a real configuration
-	if apiKey == "" {
-		return fmt.Errorf("Evaluator Agent '%s' is not configured. Please set a valid OpenAI API Key in Agent Settings or use 'MOCK' for testing.", evaluator.Name)
+	// Otherwise, it must be a real configuration for the selected provider.
+	if IsSelectedEvaluatorProviderConfigured(config) {
+		return nil
 	}
-	return nil
+
+	switch preferredProvider {
+	case EvaluatorProviderNVIDIA:
+		return fmt.Errorf("Evaluator Agent '%s' is not configured. Please set nvidia_api_key (or legacy api_key) in Agent Settings, or use 'MOCK' for testing.", evaluator.Name)
+	case EvaluatorProviderOpenRouter:
+		return fmt.Errorf("Evaluator Agent '%s' is not configured. Please set openrouter_api_key (or legacy api_key) in Agent Settings, or use 'MOCK' for testing.", evaluator.Name)
+	case EvaluatorProviderAnthropic:
+		return fmt.Errorf("Evaluator Agent '%s' is not configured. Please set anthropic_api_key (or legacy api_key) in Agent Settings, or use 'MOCK' for testing.", evaluator.Name)
+	case EvaluatorProviderOpenAICompatible:
+		return fmt.Errorf("Evaluator Agent '%s' is not configured. OpenAI-compatible mode requires compatible_api_key and compatible_base_url (or legacy api_key/base_url).", evaluator.Name)
+	case EvaluatorProviderAuto:
+		return fmt.Errorf("Evaluator Agent '%s' is not configured. In auto mode, configure at least one provider: nvidia_api_key, openrouter_api_key, anthropic_api_key, openai_api_key, or compatible_api_key+compatible_base_url.", evaluator.Name)
+	default:
+		if resolvedProvider == EvaluatorProviderNVIDIA {
+			return fmt.Errorf("Evaluator Agent '%s' is not configured. Please set nvidia_api_key (or legacy api_key) in Agent Settings, or use 'MOCK' for testing.", evaluator.Name)
+		}
+		if resolvedProvider == EvaluatorProviderOpenRouter {
+			return fmt.Errorf("Evaluator Agent '%s' is not configured. Please set openrouter_api_key (or legacy api_key) in Agent Settings, or use 'MOCK' for testing.", evaluator.Name)
+		}
+		if resolvedProvider == EvaluatorProviderAnthropic {
+			return fmt.Errorf("Evaluator Agent '%s' is not configured. Please set anthropic_api_key (or legacy api_key) in Agent Settings, or use 'MOCK' for testing.", evaluator.Name)
+		}
+		if resolvedProvider == EvaluatorProviderOpenAICompatible {
+			return fmt.Errorf("Evaluator Agent '%s' is not configured. OpenAI-compatible mode requires compatible_api_key and compatible_base_url (or legacy api_key/base_url).", evaluator.Name)
+		}
+		if EvaluatorOpenAIMode(config) == "managed" {
+			return fmt.Errorf("Evaluator Agent '%s' is not configured. OpenAI managed mode requires openai_api_key (or api_key) and prompt_id/openai_prompt_id.", evaluator.Name)
+		}
+		return fmt.Errorf("Evaluator Agent '%s' is not configured. Please set openai_api_key (or legacy api_key) in Agent Settings, or use 'MOCK' for testing.", evaluator.Name)
+	}
 }
