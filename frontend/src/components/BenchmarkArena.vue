@@ -145,13 +145,13 @@
                   <span class="metric-label">{{ agentStat.isEvaluator ? 'Evaluations' : 'Avg Eval' }}</span>
                 </div>
               </div>
-              <div v-if="!agentStat.isEvaluator && agentStat.stats.percentages" class="validations-bar-small">
+              <div v-if="!agentStat.isEvaluator && agentStat.stats.percentages && agentStat.hasAnyEvaluations" class="validations-bar-small">
                 <div class="v-segment-small pos" :style="{ width: agentStat.stats.percentages.positive + '%' }"></div>
                 <div class="v-segment-small alt" :style="{ width: agentStat.stats.percentages.alternative + '%' }"></div>
                 <div class="v-segment-small par" :style="{ width: agentStat.stats.percentages.partial + '%' }"></div>
                 <div class="v-segment-small neg" :style="{ width: agentStat.stats.percentages.negative + '%' }"></div>
               </div>
-              <div v-if="!agentStat.isEvaluator && agentStat.stats.percentages" class="validations-legend-small">
+              <div v-if="!agentStat.isEvaluator && agentStat.stats.percentages && agentStat.hasAnyEvaluations" class="validations-legend-small">
                 <span class="legend-item-small pos">Positive {{ agentStat.stats.percentages.positive }}%</span>
                 <span class="legend-item-small alt">Alternative {{ agentStat.stats.percentages.alternative }}%</span>
                 <span class="legend-item-small par">Partial {{ agentStat.stats.percentages.partial }}%</span>
@@ -326,19 +326,20 @@ import { useWSStore } from '../stores/wsStore'
 import { processContent } from '../utils/markdown.js'
 import { isEvaluatorAgentObject, toAgentID, uniqueStringIDs, mergeAgentIDs } from '../utils/arena/agents.js'
 import { mergeQuestionSetForUI, getRunQuestionSetID } from '../utils/arena/questionSet.js'
-import { parseEvaluatorTaskQuestionID, extractScoreOutOfTen, truncatePreviewText, extractQuestionIdsFromQuestionSet } from '../utils/arena/parsing.js'
+import { extractScoreOutOfTen, truncatePreviewText, extractQuestionIdsFromQuestionSet } from '../utils/arena/parsing.js'
 import { calculateStats, calculateAverageEvaluationScore, formatDuration } from '../utils/arena/stats.js'
 import { flattenQuestionSetQuestions, hasQuestionBeenRun as hasQuestionBeenRunUtil, getQuestionStatus as getQuestionStatusUtil, isQuestionLoading as isQuestionLoadingUtil, getQuestionStatusText as getQuestionStatusTextUtil, getQuestionStatusTooltip as getQuestionStatusTooltipUtil } from '../utils/arena/questions.js'
 import { getPrimaryResponseEntry as getPrimaryResponseEntryUtil, getQuestionResponse as getQuestionResponseUtil, getQuestionEvaluation as getQuestionEvaluationUtil } from '../utils/arena/responses.js'
 import { splitSelectedAgents as splitSelectedAgentsUtil, getEvaluatorIdsForRun as getEvaluatorIdsForRunUtil, hasEvaluatorResultsLoaded as hasEvaluatorResultsLoadedUtil, resolveRunAgentIds as resolveRunAgentIdsUtil } from '../utils/arena/runs.js'
 import { saveRunProgress as saveRunProgressUtil, loadRunProgress as loadRunProgressUtil, clearRunProgress as clearRunProgressUtil, hasLoadingResults as hasLoadingResultsUtil, waitForResultsToLoad as waitForResultsToLoadUtil } from '../utils/arena/progress.js'
-import { getAgentResults as getAgentResultsUtil, collectResultIDsForQuestion } from '../utils/arena/results.js'
-import { getRecentRunIdForQuestionSet, getCachedRunForQuestionSet, setCachedRunForQuestionSet } from '../utils/arena/cache.js'
+import { getAgentResults as getAgentResultsUtil } from '../utils/arena/results.js'
 import { registerArenaWsEvents } from '../utils/arena/wsBindings.js'
 import { useArenaRetryTracking } from '../composables/useArenaRetryTracking.js'
 import { useArenaEvaluatorRuns } from '../composables/useArenaEvaluatorRuns.js'
 import { useArenaRetryReconciliation } from '../composables/useArenaRetryReconciliation.js'
 import { useArenaRunRestoration } from '../composables/useArenaRunRestoration.js'
+import { useArenaRunExecution } from '../composables/useArenaRunExecution.js'
+import { useArenaRunResultsLoader } from '../composables/useArenaRunResultsLoader.js'
 
 const props = defineProps({
   workspaceId: String,
@@ -408,6 +409,29 @@ const {
   workspaceId: () => props.workspaceId,
   getRunId: () => currentRun.value?.id || '',
   getQuestionSetId: () => currentQuestionSet.value?.id || ''
+})
+
+const {
+  getRecentRunIdForQS,
+  getCachedRunForQS,
+  setCachedRunForQS,
+  prioritizeQuestionInQueue,
+  applyRunLiteData,
+  fetchLatestResultsForQS
+} = useArenaRunResultsLoader({
+  wsService,
+  wsState,
+  workspaceId: () => props.workspaceId,
+  isLoadingResults,
+  latestRunCache,
+  downloadManager,
+  contentCache,
+  runResults,
+  taskProgress,
+  currentRun,
+  totalTasks,
+  completedTasks,
+  getSelectedQuestionId: () => selectedQuestionId.value
 })
 
 const {
@@ -663,45 +687,28 @@ const mergedAgents = computed(() => {
   const qs = currentQuestionSet.value
   if (!qs) return props.agents
 
-  // If the question set has NO agents array at all, it's definitely uninitialized
-  if (!qs.agents || !Array.isArray(qs.agents)) {
+  if (!qs.agents || !Array.isArray(qs.agents) || qs.agents.length === 0) {
     return props.agents
   }
 
-  // If it has an agents array but it's empty, we must decide:
-  // Is it empty because nothing was ever saved, or because the user saved "nothing enabled"?
-  // Usually, saveSelection sends ALL agents. So an empty array means "never saved".
-  if (qs.agents.length === 0) {
-    return props.agents
-  }
-
-  console.log(`[Arena] mergedAgents: Merging ${qs.agents.length} overrides for QS "${qs.name}"`)
-
-  // Map of overrides for fast lookup
   const overrideMap = {}
-  qs.agents.forEach(oa => {
-    // Check both agent_id and agentID just in case of inconsistency
-    const aid = oa.agent_id || oa.agentID || oa.id
-    if (aid) overrideMap[aid] = oa
+  qs.agents.forEach((row) => {
+    const aid = row.agent_id || row.agentID || row.id
+    if (aid) overrideMap[aid] = row
   })
 
-  const merged = props.agents.map(a => {
+  return props.agents.map((a) => {
     const override = overrideMap[a.id]
-    if (override) {
-      return {
-        ...a,
-        enabled: override.enabled !== undefined ? !!override.enabled : !!a.enabled,
-        position: override.position !== undefined ? override.position : a.position,
-        config: override.config || a.config
-      }
+    if (!override) {
+      return { ...a, enabled: false }
     }
-    // If not in overrides list (e.g. new agent added to workspace after this QS was saved),
-    // respect its global enabled state instead of forcing it false.
-    // This fixed the "I added an agent but it's disabled" confusion.
-    return { ...a, enabled: a.enabled }
+    return {
+      ...a,
+      enabled: override.enabled !== false,
+      position: override.position !== undefined ? override.position : a.position,
+      config: override.config || a.config
+    }
   })
-
-  return merged
 })
 
 function getAgentById(agentId) {
@@ -821,6 +828,10 @@ const agentStats = computed(() => {
     const stats = calculateStats(results)
     const isEvaluator = isEvaluatorAgentObject(agent)
     const evalSummary = calculateAverageEvaluationScore(results)
+    const hasAnyEvaluations = results.some((result) => {
+      if (result?.humanValidation && String(result.humanValidation).trim() !== '') return true
+      return Array.isArray(result?.evaluations) && result.evaluations.length > 0
+    })
     
     // Calculate quality score (same logic as PDF export)
     const totalValidations = stats.validations.positive + 
@@ -840,6 +851,7 @@ const agentStats = computed(() => {
       name: agent.name || agent.config?.name || 'Agent',
       provider: agent.provider_type,
       isEvaluator,
+      hasAnyEvaluations,
       stats,
       qualityScore,
       avgEvalScoreLabel: evalSummary.count > 0 ? `${evalSummary.avgScore10.toFixed(1)}/10` : '—'
@@ -948,41 +960,6 @@ function formatResponseHtml(text) {
   return processed.html || ''
 }
 
-// Retry a question for all agents
-async function retryQuestionForAllAgents(questionId) {
-  if (!currentRun.value || !questionId) {
-    alert('No active run. Please start a benchmark first.')
-    return
-  }
-  
-  const qIdStr = String(questionId)
-  const enabledAgents = mergedAgents.value.filter((a) => a.enabled && !isEvaluatorAgentObject(a))
-  
-  if (enabledAgents.length === 0) {
-    alert('No enabled agents found. Please enable at least one agent.')
-    return
-  }
-
-  const localRetryIds = {}
-  enabledAgents.forEach(agent => {
-    const localRetryId = `local-${agent.id}-${Date.now()}`
-    localRetryIds[agent.id] = localRetryId
-    markRetryStarted(qIdStr, localRetryId)
-    if (!runResults.value[agent.id]) runResults.value[agent.id] = {}
-    runResults.value[agent.id][qIdStr] = {
-      ...(runResults.value[agent.id][qIdStr] || {}),
-      loading: true,
-      queued: false,
-      error: null
-    }
-  })
-  
-  // Retry for each enabled agent
-  for (const agent of enabledAgents) {
-    await rerunQuestion(agent.id, questionId, localRetryIds[agent.id])
-  }
-}
-
 function selectQuestionSet(qs) {
     currentQuestionSet.value = mergeQuestionSetForUI(qs, currentQuestionSet.value)
     emit('update:currentQuestionSet', currentQuestionSet.value)
@@ -1051,40 +1028,6 @@ function handleShowDetails(agentId, index) {
 }
 
 // Data Fetching & WebSockets
-async function fetchLatestResultsForQS(qsId) {
-  if (!props.workspaceId) return
-  isLoadingResults.value = true
-  downloadManager.cancelAll()
-
-  try {
-    const cached = getCachedRunForQS(qsId)
-    if (cached) {
-      applyRunLiteData(cached)
-      return
-    }
-
-    const data = await wsService.getLatestRunByQuestionSet(qsId)
-    setCachedRunForQS(qsId, data)
-    applyRunLiteData(data)
-  } catch (e) {
-    console.error('[Arena] Failed to load latest results:', e)
-  } finally {
-    isLoadingResults.value = false
-  }
-}
-
-function getRecentRunIdForQS(qsId) {
-  return getRecentRunIdForQuestionSet(wsState.recentRuns, qsId)
-}
-
-function getCachedRunForQS(qsId) {
-  return getCachedRunForQuestionSet(latestRunCache, wsState.recentRuns, qsId)
-}
-
-function setCachedRunForQS(qsId, data) {
-  setCachedRunForQuestionSet(latestRunCache, qsId, data)
-}
-
 function reloadResults() {
   if (currentQuestionSet.value) {
     fetchLatestResultsForQS(currentQuestionSet.value.id)
@@ -1097,59 +1040,6 @@ function ensureResultsLoaded() {
        reloadResults()
     }
   }, 1000)
-}
-
-function applyRunLiteData(data) {
-  runResults.value = {}
-  taskProgress.value = {}
-  currentRun.value = null
-  totalTasks.value = 0
-  completedTasks.value = 0
-
-  if (!data || !data.run || !data.run.id) {
-    return
-  }
-
-  currentRun.value = data.run
-  const skeletonResults = {}
-  const allResultIds = []
-
-  data.results.forEach(res => {
-    const agentId = res.agent_id
-    const qIdStr = String(res.question_id)
-
-    if (!skeletonResults[agentId]) skeletonResults[agentId] = {}
-
-    const cached = contentCache.get(res.content_hash)
-
-    skeletonResults[agentId][qIdStr] = {
-      id: res.id,
-      content_hash: res.content_hash,
-      loading: !cached,
-      success: res.status === 'success',
-      answer: cached ? cached.answer : '',
-      error: res.status === 'error' ? (res.error || 'Error in run') : null,
-      duration: res.duration_ms / 1000,
-      timestamp: res.created_at,
-      evaluations: cached ? (cached.evaluations || []) : [],
-      humanValidation: cached ? cached.evaluations?.find(e => e.rater_type === 'user')?.rating : null,
-      metadata: null
-    }
-
-    if (!cached) allResultIds.push(res.id)
-  })
-
-  runResults.value = skeletonResults
-  totalTasks.value = data.run.total_tasks || 0
-  completedTasks.value = data.run.total_tasks || 0
-
-  if (allResultIds.length > 0) {
-    downloadManager.enqueue(allResultIds)
-  }
-
-  if (selectedQuestionId.value) {
-    prioritizeQuestionInQueue(selectedQuestionId.value)
-  }
 }
 
 watch(() => wsState.recentRuns, () => {
@@ -1186,13 +1076,6 @@ function getAgentResults(agentId, includeAllQuestions = false) {
   })
 }
 
-function prioritizeQuestionInQueue(questionId) {
-    const idsToPrioritize = collectResultIDsForQuestion(runResults.value, questionId)
-    if (idsToPrioritize.length > 0) {
-      downloadManager.prioritize(idsToPrioritize[0])
-    }
-}
-
 watch(selectedQuestionId, (newId) => {
   if (newId) prioritizeQuestionInQueue(newId)
 })
@@ -1209,193 +1092,49 @@ function hasEvaluatorResultsLoaded() {
   return hasEvaluatorResultsLoadedUtil(runResults.value, isEvaluatorAgentID)
 }
 
-async function startEvaluationNow() {
-  if (!canStartEvaluation.value) {
-    if (startEvaluationDisabledReason.value) {
-      alert(startEvaluationDisabledReason.value)
-    }
-    return
-  }
-
-  const questionSetId = currentQuestionSet.value?.id
-  const evaluatorIds = enabledEvaluatorAgents.value.map((a) => a.id)
-  if (!questionSetId || evaluatorIds.length === 0) return
-
-  try {
-    const runId = await resolveLatestRunIDForQuestionSet(questionSetId)
-    if (!runId) {
-      alert('No previous run found for this question set. Run at least one benchmark agent first.')
-      return
-    }
-    await triggerEvaluatorRun(runId, questionSetId, evaluatorIds)
-  } catch (e) {
-    console.error('[Arena] Manual evaluator run failed:', e)
-    setRunError(e?.message || 'Failed to run evaluators.')
-  }
-}
-
-// Actions
-async function handleStartRun(payload) {
-  const { questionSetId } = payload || {}
-  const { primary: primaryAgentIds, evaluators: evaluatorAgentIds } = splitSelectedAgents(payload || {})
-
-  showRunSetup.value = false
-  if (flatQuestions.value.length === 0) {
-    alert('The current question set is empty.')
-    return
-  }
-
-  if (primaryAgentIds.length === 0 && evaluatorAgentIds.length === 0) {
-    alert('Select at least one agent to run.')
-    return
-  }
-
-  if (primaryAgentIds.length === 0 && evaluatorAgentIds.length > 0) {
-    try {
-      const baseRunID = await resolveLatestRunIDForQuestionSet(questionSetId)
-      if (!baseRunID) {
-        alert('No previous run found for this question set. Run at least one benchmark agent first.')
-        return
-      }
-      await triggerEvaluatorRun(baseRunID, questionSetId, evaluatorAgentIds)
-    } catch (e) {
-      console.error('[Arena] Evaluator-only run failed:', e)
-      setRunError(e?.message || 'Failed to run evaluators.')
-    }
-    return
-  }
-
-  const selectedPrimaryCount = primaryAgentIds.length
-  isRunning.value = true
-  activeRunQuestionSetId.value = questionSetId
-  wsStore.setRunningQuestionSetId(questionSetId)
-  startedTasks.value = 0
-  completedTasks.value = 0
-  totalTasks.value = selectedPrimaryCount * flatQuestions.value.length
-  runResults.value = {}
-  taskProgress.value = {}
-  
-  try {
-    const result = await wsService.startRun(questionSetId, primaryAgentIds)
-    const runId = result.run_id || result.id
-    currentRun.value = {
-      id: runId,
-      question_set_id: questionSetId,
-      status: 'running',
-      agentIds: mergeAgentIDs(primaryAgentIds, evaluatorAgentIds)
-    }
-    const backendTotalTasks = Number(result.total_tasks || result.totalTasks || 0)
-    if (backendTotalTasks > 0) {
-      totalTasks.value = backendTotalTasks
-    }
-
-    localStorage.setItem('activeRunId', currentRun.value.id)
-    saveRunProgress(currentRun.value.id)
-    
-    // Process buffered results
-    if (pendingResultsBuffer.value.length > 0) {
-      pendingResultsBuffer.value.forEach(data => {
-        if (data.run_id === currentRun.value.id) {
-          processTaskCompleted(data)
-        }
-      })
-      pendingResultsBuffer.value = []
-    }
-  } catch (e) {
-    console.error('Failed to start run:', e)
-    // Show toast error
-    startRunError.value = e.message || 'Failed to start run. Please check your agent configurations.'
-    // Auto-clear after 5 seconds
-    setTimeout(() => {
-      if (startRunError.value) startRunError.value = null
-    }, 5000)
-    
-    isRunning.value = false
-    pendingResultsBuffer.value = []
-    taskProgress.value = {}
-    activeRunQuestionSetId.value = null
-    wsStore.setRunningQuestionSetId(null)
-  }
-
-}
-
-function processTaskCompleted(data) {
-    completedTasks.value++
-    if (!runResults.value[data.agent_id]) runResults.value[data.agent_id] = {}
-    
-    runResults.value[data.agent_id] = {
-        ...runResults.value[data.agent_id],
-        [data.question_id]: {
-            id: data.run_result_id,
-            loading: false,
-            success: data.success,
-            answer: data.answer,
-            error: data.error,
-            duration: data.duration_ms / 1000,
-            timestamp: new Date().toISOString(),
-            evaluations: data.evaluations || [],
-            metadata: data.metadata || null
-        }
-    }
-    if (taskProgress.value[data.agent_id]) {
-      delete taskProgress.value[data.agent_id][data.question_id]
-      if (Object.keys(taskProgress.value[data.agent_id]).length === 0) {
-        delete taskProgress.value[data.agent_id]
-      }
-    }
-    if (currentRun.value?.id) {
-      saveRunProgress(currentRun.value.id)
-    }
-
-    const qIdStr = String(data.question_id)
-    if (data.retry_id) {
-      markRetryFinished(qIdStr, data.retry_id)
-    }
-
-    if (qIdStr.startsWith('eval-')) {
-      let targetResultId = String(data.target_run_result_id || data.targetRunResultID || '')
-      if (!targetResultId) {
-        const parsed = parseEvaluatorTaskQuestionID(qIdStr)
-        if (parsed) {
-          targetResultId = String(runResults.value?.[parsed.targetAgentId]?.[parsed.questionId]?.id || '')
-        }
-      }
-      if (targetResultId) {
-        void wsService.getResultDetails([targetResultId]).catch((err) => {
-          console.warn('[Arena] Failed to refresh target result after evaluator completion:', err)
-        })
-      }
-    }
-
-    // Check if run completed for this question set.
-    // We also allow completion handling when `isRunning` is false if evaluators are queued.
-    const completedRunId = String(currentRun.value?.id || data.run_id || '')
-    const hasQueuedEvaluators =
-      !!completedRunId &&
-      getPendingEvaluatorIds(completedRunId).length > 0
-    if (totalTasks.value > 0 && completedTasks.value >= totalTasks.value && (isRunning.value || hasQueuedEvaluators)) {
-       const queuedEvaluatorIDs = popPendingEvaluators(completedRunId)
-       if (completedRunId && queuedEvaluatorIDs.length > 0) {
-         const targetQuestionSetID = resolveQuestionSetIdForRun(completedRunId)
-         void triggerEvaluatorRun(completedRunId, targetQuestionSetID, queuedEvaluatorIDs)
-         return
-       }
-
-       isRunning.value = false
-       if (currentRun.value) {
-         currentRun.value.status = 'completed'
-       }
-       if (activeRunQuestionSetId.value === currentQuestionSet.value?.id) {
-         wsStore.setRunningQuestionSetId(null)
-       }
-       activeRunQuestionSetId.value = null
-       localStorage.removeItem('activeRunId')
-       taskProgress.value = {}
-       if (currentRun.value?.id) {
-         clearRunProgress(currentRun.value.id)
-       }
-    }
-}
+const {
+  startEvaluationNow,
+  handleStartRun,
+  processTaskCompleted,
+  cancelBenchmark,
+  rerunQuestion,
+  retryQuestionForAllAgents,
+  onValidation,
+  onRetry
+} = useArenaRunExecution({
+  wsService,
+  wsStore,
+  currentQuestionSet,
+  currentRun,
+  runResults,
+  taskProgress,
+  isRunning,
+  activeRunQuestionSetId,
+  startedTasks,
+  completedTasks,
+  totalTasks,
+  showRunSetup,
+  pendingResultsBuffer,
+  startRunError,
+  canStartEvaluation,
+  startEvaluationDisabledReason,
+  enabledEvaluatorAgents,
+  getFlatQuestions: () => flatQuestions.value,
+  getMergedAgents: () => mergedAgents.value,
+  splitSelectedAgents,
+  resolveLatestRunIDForQuestionSet,
+  triggerEvaluatorRun,
+  setRunError,
+  mergeAgentIDs,
+  saveRunProgress,
+  clearRunProgress,
+  markRetryStarted,
+  markRetryFinished,
+  getPendingEvaluatorIds,
+  popPendingEvaluators,
+  resolveQuestionSetIdForRun,
+  getAgentResults
+})
 
 async function handleRunSave(payload) {
   const savedQuestionSet = payload?.questionSet
@@ -1417,141 +1156,6 @@ async function handleRunSave(payload) {
       ...savedQuestionSet,
       agents: newAgents
     }, currentQuestionSet.value)
-  }
-}
-
-async function cancelBenchmark() {
-  if (!currentRun.value) return
-  try {
-    await wsService.cancelRun(currentRun.value.id)
-    isRunning.value = false
-    currentRun.value.status = 'cancelled'
-    wsStore.setRunningQuestionSetId(null)
-    taskProgress.value = {}
-    clearRunProgress(currentRun.value.id)
-  } catch (e) {
-    console.error('Failed to cancel run:', e)
-  }
-}
-
-async function rerunQuestion(agentId, questionId, localRetryId = null) {
-  if (!currentRun.value) return
-  
-  // Optimistic update
-  const qIdStr = String(questionId)
-  if (runResults.value[agentId] && runResults.value[agentId][qIdStr]) {
-     runResults.value[agentId][qIdStr].loading = true
-     runResults.value[agentId][qIdStr].error = null
-  }
-
-  // Find the question object to get full context
-  const question = flatQuestions.value.find(q => String(q.id) === qIdStr)
-  const resultItem = runResults.value[agentId]?.[qIdStr]
-
-  // Determine if this is an evaluator and if we need to target another result
-  let resultIdToUse = resultItem?.id
-  const agent = mergedAgents.value.find(a => a.id === agentId)
-      
-  if (agent && (isEvaluatorAgentObject(agent) || agent.config?.target_agent_id)) {
-      // It's an evaluator. Use heuristic to find the target answer.
-      const targetAgentId = agent.config?.target_agent_id
-      
-      // Look for candidates in runResults
-      // runResults structure is { agentId: { qId: { ... } } }
-      const candidates = []
-      
-      for (const aid in runResults.value) {
-          if (aid === agentId) continue
-          const res = runResults.value[aid][qIdStr]
-          if (res && res.answer) {
-              candidates.push({ ...res, agent_id: aid })
-          }
-      }
-      
-      let targetMatch = null
-      if (targetAgentId) {
-          targetMatch = candidates.find(c => c.agent_id === targetAgentId)
-      } else if (candidates.length === 1) {
-          targetMatch = candidates[0]
-      } else if (candidates.length > 0) {
-          // Ambiguous
-          targetMatch = candidates[0] 
-      }
-
-      if (targetMatch) {
-          resultIdToUse = targetMatch.id
-      } else {
-          resultIdToUse = '' // Reset to empty so backend heuristic kicks in
-      }
-  }
-
-  try {
-    const response = await wsService.rerunTask(currentRun.value.id, agentId, questionId, {
-      questionSetId: currentQuestionSet.value?.id,
-      resultId: resultIdToUse,
-      originalQuestion: question?.question || '',
-      expectedAnswer: question?.expected || question?.expected_answer || ''
-    })
-    const retryId = response?.retry_id || response?.retryId
-    if (retryId) {
-      markRetryStarted(qIdStr, retryId, {
-        runId: currentRun.value?.id,
-        agentId,
-        questionSetId: currentQuestionSet.value?.id,
-        status: 'queued'
-      })
-      if (localRetryId) {
-        markRetryFinished(qIdStr, localRetryId)
-      }
-    }
-  } catch (e) {
-    console.error('Failed to rerun:', e)
-     // Revert on error
-      if (runResults.value[agentId] && runResults.value[agentId][qIdStr]) {
-         runResults.value[agentId][qIdStr].loading = false
-      }
-      if (localRetryId) {
-        markRetryFinished(qIdStr, localRetryId)
-      }
-  }
-}
-
-async function rateResult(resultId, rating) {
-  try {
-    return await wsService.createEvaluation(resultId, rating)
-  } catch (e) {
-    console.error('Failed to rate:', e)
-    return null
-  }
-}
-
-function onValidation(agentId, index, validation) {
-  const results = getAgentResults(agentId)
-  const result = results[index]
-  if (result && result.id) {
-    const qIdStr = String(result.question.id)
-    rateResult(result.id, validation).then(newEval => {
-      if (runResults.value[agentId] && runResults.value[agentId][qIdStr]) {
-        const item = runResults.value[agentId][qIdStr]
-        item.humanValidation = validation
-        if (newEval) {
-          if (!item.evaluations) item.evaluations = []
-          const existingIdx = item.evaluations.findIndex(e => e.rater_type === 'user')
-          if (existingIdx !== -1) {
-            item.evaluations[existingIdx] = newEval
-          } else {
-            item.evaluations.push(newEval)
-          }
-        }
-      }
-    })
-  }
-}
-
-function onRetry(agentId, index) {
-  const question = flatQuestions.value[index]
-  if (question && currentRun.value) {
-    rerunQuestion(agentId, question.id)
   }
 }
 
@@ -1701,821 +1305,4 @@ defineExpose({
 })
 </script>
 
-<style scoped>
-.benchmark-arena {
-  display: flex;
-  flex-direction: row;
-  height: 100%;
-  width: 100%;
-  overflow: hidden;
-}
-
-.questions-list-view {
-  width: 400px;
-  background: #ffffff;
-  border-right: 1px solid #e2e8f0;
-  padding: 1rem 1.5rem;
-  overflow-y: auto;
-  flex-shrink: 0;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  z-index: 1;
-}
-
-.questions-list-view h3 {
-  margin: 0 0 1rem 0;
-  color: #1e293b;
-  font-size: 1.1rem;
-  font-weight: 600;
-}
-
-.questions-list-view .questions-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  flex: 1;
-  overflow-y: auto;
-}
-
-.questions-list-view .question-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
-  padding: 0.75rem;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  transition: background 0.2s ease;
-}
-
-.questions-list-view .question-item:hover {
-  background: rgba(99, 102, 241, 0.05);
-}
-
-.questions-list-view .question-number {
-  flex-shrink: 0;
-  font-weight: 600;
-  color: #6366f1;
-  min-width: 2rem;
-}
-
-.questions-list-view .question-content-wrapper {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  min-width: 0;
-}
-
-.questions-list-view .question-text {
-  color: #1e293b;
-  line-height: 1.5;
-}
-
-.questions-list-view .question-category {
-  flex-shrink: 0;
-  padding: 0.25rem 0.5rem;
-  background: #6366f1;
-  color: white;
-  border-radius: 4px;
-  font-size: 0.75rem;
-  font-weight: 500;
-  width: fit-content;
-}
-
-.questions-list-view .question-response {
-  margin-top: 0.75rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid #e2e8f0;
-}
-
-.questions-list-view .question-evaluation .response-text {
-  border-left-color: #10b981;
-  background: #f0fdf4;
-}
-
-.questions-list-view .response-label {
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: #64748b;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 0.5rem;
-}
-
-.evaluation-score-chip {
-  display: inline-flex;
-  align-items: center;
-  margin-left: 6px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: #d1fae5;
-  color: #065f46;
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
-.questions-list-view .response-text {
-  font-size: 0.875rem;
-  color: #475569;
-  line-height: 1.5;
-  background: #f8fafc;
-  padding: 0.5rem 0.75rem;
-  border-radius: 6px;
-  border-left: 3px solid #6366f1;
-  word-wrap: break-word;
-}
-
-.questions-list-view .response-text :deep(p) {
-  margin: 0 0 0.5rem 0;
-}
-
-.questions-list-view .response-text :deep(p:last-child) {
-  margin-bottom: 0;
-}
-
-.questions-list-view .response-text :deep(ul),
-.questions-list-view .response-text :deep(ol) {
-  margin: 0.5rem 0;
-  padding-left: 1.5rem;
-  list-style-position: outside;
-}
-
-.questions-list-view .response-text :deep(li) {
-  margin: 0.25rem 0;
-}
-
-.questions-list-view .response-text :deep(code) {
-  background: #f5f5f5;
-  padding: 0.125rem 0.35rem;
-  border-radius: 3px;
-  font-family: 'Monaco', 'Menlo', monospace;
-  font-size: 0.875em;
-  color: #d63384;
-}
-
-.questions-list-view .response-text :deep(pre) {
-  background: #0f172a;
-  color: #e2e8f0;
-  padding: 0.75rem;
-  border-radius: 8px;
-  overflow-x: auto;
-  margin: 0.5rem 0;
-}
-
-.questions-list-view .response-text :deep(pre code) {
-  background: none;
-  padding: 0;
-  color: inherit;
-}
-
-.questions-list-view .response-text :deep(blockquote) {
-  border-left: 3px solid #cbd5e1;
-  padding-left: 0.9rem;
-  margin: 0.5rem 0;
-  color: #64748b;
-  font-style: italic;
-}
-
-.questions-list-view .response-text :deep(a) {
-  color: #49399d;
-  text-decoration: none;
-}
-
-.questions-list-view .response-text :deep(a:hover) {
-  text-decoration: underline;
-}
-
-.questions-list-view .response-image {
-  max-width: 100%;
-  height: auto;
-  margin: 0.5rem 0;
-  border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  display: block;
-}
-
-.questions-list-view .btn-expand-response {
-  display: inline-block;
-  margin-top: 0.5rem;
-  padding: 0.25rem 0.5rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #6366f1;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  text-decoration: underline;
-  transition: color 0.2s ease;
-}
-
-.questions-list-view .btn-expand-response:hover {
-  color: #4f46e5;
-}
-
-.questions-list-view .question-actions {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.5rem;
-  flex-shrink: 0;
-}
-
-.questions-list-view .question-status {
-  font-size: 0.75rem;
-  font-weight: 500;
-  padding: 0.25rem 0.5rem;
-  border-radius: 4px;
-  white-space: nowrap;
-}
-
-.questions-list-view .question-status.status-not-run {
-  background: #e2e8f0;
-  color: #64748b;
-}
-
-.questions-list-view .question-status.status-loading {
-  background: #dbeafe;
-  color: #1e40af;
-}
-
-.questions-list-view .question-status.status-completed {
-  background: #d1fae5;
-  color: #065f46;
-}
-
-.primary-agent-modal {
-  max-width: 420px;
-}
-
-.primary-agent-modal .modal-body {
-  padding: 1.25rem 1.5rem;
-  color: #334155;
-}
-
-.primary-agent-modal .modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.75rem;
-  padding: 0.75rem 1.5rem 1.25rem;
-  border-top: 1px solid #f1f5f9;
-}
-
-.questions-list-view .question-status.status-error {
-  background: #fee2e2;
-  color: #991b1b;
-}
-
-.questions-list-view .btn-retry {
-  padding: 0.25rem 0.5rem;
-  font-size: 0.75rem;
-  background: #6366f1;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background 0.2s ease;
-  white-space: nowrap;
-}
-
-.questions-list-view .btn-retry:hover {
-  background: #4f46e5;
-}
-
-.questions-list-view .btn-retry:active {
-  background: #4338ca;
-}
-
-.questions-list-view .empty-state {
-  padding: 2rem;
-  text-align: center;
-  color: #64748b;
-}
-
-.questions-list-view .empty-state p {
-  margin: 0;
-}
-
-.benchmark-arena-content {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.document-body {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden; /* Container doesn't scroll, child bar does */
-  padding: 1rem;
-  background: #f8fafc;
-  min-height: 0;
-}
-
-/* Scoped styles that were specifically for the runner/arena */
-.main-content-area {
-  position: relative;
-}
-
-/* Running Indicator Dot */
-.running-indicator-dot {
-  width: 8px;
-  height: 8px;
-  background-color: #ef4444;
-  border-radius: 50%;
-  display: inline-block;
-  margin: 0 4px;
-  box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
-  animation: pulse-dot 1.5s infinite;
-}
-
-@keyframes pulse-dot {
-  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
-  70% { transform: scale(1); box-shadow: 0 0 0 5px rgba(239, 68, 68, 0); }
-  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
-}
-
-.chat-container {
-  flex: 1;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.chat-panels-bar {
-  display: flex;
-  gap: 1.5rem;
-  overflow-x: auto;
-  padding: 1rem 0 2rem 0;
-  flex: 1;
-}
-
-.chat-panel-wrapper {
-  min-width: 450px;
-  flex: 1;
-  display: flex;
-}
-
-.loading-overlay {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 2rem;
-  gap: 1rem;
-}
-
-/* Add any other specific styles from App.css if you want them scoped, 
-   otherwise they inherit from global App.css */
-
-.error-toast {
-  position: fixed;
-  top: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #fee2e2;
-  color: #7f1d1d;
-  padding: 1rem 1.5rem;
-  border-radius: 8px;
-  border: 1px solid #fca5a5;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  z-index: 9999;
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  font-weight: 500;
-  max-width: 90vw;
-  animation: slide-down 0.3s ease-out;
-}
-
-.error-toast .icon {
-  font-size: 1.25rem;
-}
-
-.error-toast .close-btn {
-  background: transparent;
-  border: none;
-  color: #991b1b;
-  font-size: 1.5rem;
-  line-height: 1;
-  padding: 0;
-  margin-left: 0.5rem;
-  cursor: pointer;
-  opacity: 0.7;
-  transition: opacity 0.2s;
-}
-
-.error-toast .close-btn:hover {
-  opacity: 1;
-}
-
-@keyframes slide-down {
-  from { top: -50px; opacity: 0; }
-  to { top: 20px; opacity: 1; }
-}
-
-.benchmark-arena {
-  display: flex;
-  height: 100%;
-  overflow: hidden;
-}
-
-/* Main Content Area - Side by side layout */
-.main-content-area {
-  flex: 1;
-  display: flex;
-  flex-direction: row;
-  gap: 16px;
-  overflow: hidden;
-  padding: 16px;
-  position: relative;
-}
-
-.arena-label {
-  position: absolute;
-  top: 16px;
-  left: 16px;
-  font-size: 18px;
-  font-weight: 600;
-  color: #666;
-  z-index: 10;
-  background: rgba(255, 255, 255, 0.9);
-  padding: 8px 16px;
-  border-radius: 6px;
-  border: 1px solid #e0e0e0;
-  pointer-events: none;
-}
-
-/* Questions List View */
-.questions-list-view {
-  flex: auto;
-  overflow-y: auto;
-  padding: 24px;
-  background: #f8f9fa;
-  border-radius: 8px;
-  border: 1px solid #e0e0e0;
-}
-
-.questions-list-header {
-  margin-bottom: 24px;
-  padding-bottom: 16px;
-  border-bottom: 2px solid #e0e0e0;
-}
-
-.questions-list-header h2 {
-  margin: 0 0 8px 0;
-  font-size: 24px;
-  color: #333;
-}
-
-.questions-count {
-  margin: 0;
-  color: #666;
-  font-size: 14px;
-}
-
-/* Stats Section */
-.questions-stats-section {
-  margin-bottom: 24px;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 16px;
-}
-
-.agent-stat-card {
-  background: white;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  padding: 16px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-}
-
-.agent-stat-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-}
-
-.agent-stat-header h4 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  color: #333;
-}
-
-.evaluator-badge-small {
-  font-size: 11px;
-  padding: 4px 8px;
-  background: #fff3cd;
-  color: #856404;
-  border-radius: 4px;
-  font-weight: 500;
-}
-
-.quality-score-badge {
-  font-size: 12px;
-  font-weight: 600;
-  color: #007bff;
-  background: #e7f3ff;
-  padding: 4px 8px;
-  border-radius: 4px;
-  cursor: help;
-}
-
-.agent-stat-metrics {
-  display: flex;
-  gap: 16px;
-  margin-bottom: 12px;
-}
-
-.metric {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-}
-
-.metric-value {
-  font-size: 18px;
-  font-weight: 600;
-  color: #333;
-  line-height: 1.2;
-}
-
-.metric-label {
-  font-size: 11px;
-  color: #666;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-top: 4px;
-}
-
-.validations-bar-small {
-  display: flex;
-  height: 6px;
-  border-radius: 3px;
-  overflow: hidden;
-  background: #f0f0f0;
-}
-
-.validations-legend-small {
-  margin-top: 8px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.legend-item-small {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 999px;
-}
-
-.legend-item-small.pos {
-  background: #dcfce7;
-  color: #166534;
-}
-
-.legend-item-small.alt {
-  background: #dbeafe;
-  color: #1d4ed8;
-}
-
-.legend-item-small.par {
-  background: #fef3c7;
-  color: #92400e;
-}
-
-.legend-item-small.neg {
-  background: #fee2e2;
-  color: #b91c1c;
-}
-
-.v-segment-small {
-  height: 100%;
-  transition: width 0.3s ease;
-}
-
-.v-segment-small.pos {
-  background: #10b981;
-}
-
-.v-segment-small.alt {
-  background: #3b82f6;
-}
-
-.v-segment-small.par {
-  background: #f59e0b;
-}
-
-.v-segment-small.neg {
-  background: #ef4444;
-}
-
-.questions-list-container {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.question-item {
-  background: white;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  padding: 16px;
-  cursor: pointer;
-  transition: all 0.2s;
-  display: flex;
-  gap: 16px;
-}
-
-.question-item:hover {
-  border-color: #007bff;
-  box-shadow: 0 2px 8px rgba(0, 123, 255, 0.1);
-}
-
-.question-item.selected {
-  border-color: #007bff;
-  background: #e7f3ff;
-  box-shadow: 0 2px 8px rgba(0, 123, 255, 0.15);
-}
-
-.question-number {
-  flex-shrink: 0;
-  width: 40px;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #f0f0f0;
-  border-radius: 6px;
-  font-weight: 600;
-  color: #666;
-  font-size: 14px;
-}
-
-.question-item.selected .question-number {
-  background: #007bff;
-  color: white;
-}
-
-.question-content {
-  flex: 1;
-}
-
-.question-text {
-  font-size: 15px;
-  line-height: 1.5;
-  color: #333;
-  margin-bottom: 8px;
-}
-
-.question-category {
-  font-size: 12px;
-  color: #666;
-  font-style: italic;
-}
-
-.action-buttons-row {
-  position: inherit;
-  padding: 2px 16px;
-  background: white;
-  display: flex;
-  gap: 8px;
-  z-index: 100;
-  border-bottom: 1px solid #e0e0e0
-}
-
-.action-buttons-row .btn {
-  padding: 8px 16px;
-  font-size: 14px;
-  position: relative;
-}
-
-.btn-eval {
-  background: #ecfdf3;
-  border: 1px solid #86efac;
-  color: #166534;
-}
-
-.btn-eval:hover:not(:disabled) {
-  background: #dcfce7;
-  border-color: #4ade80;
-}
-
-.btn-eval:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.pdf-loading-spinner {
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: white;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-  margin-right: 4px;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-.btn-pdf:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-.chat-container {
-  flex: 1;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  min-width: 0; /* Allow flex shrinking */
-}
-
-/* Layout normalization: keep question list + agent panels always visible side by side */
-.main-content-area {
-  display: grid;
-  grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
-  gap: 16px;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  align-items: stretch;
-}
-
-.main-content-area.single-panel {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.questions-list-view {
-  width: auto;
-  flex: 0 0 auto;
-  height: 100%;
-  min-width: 0;
-  overflow-y: auto;
-}
-
-.chat-container {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  border-left: 1px solid #e5e7eb;
-  padding-left: 12px;
-}
-
-.chat-panels-bar {
-  display: flex;
-  align-items: stretch;
-  gap: 16px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  flex: 1;
-  height: 100%;
-  min-width: 0;
-}
-
-.chat-panel-wrapper {
-  display: flex;
-  flex: 0 0 min(560px, 100%);
-  height: 100%;
-  min-height: 0;
-  min-width: 380px;
-}
-
-.chat-panel-wrapper > * {
-  flex: 1;
-  min-height: 0;
-}
-
-@media (max-width: 980px) {
-  .main-content-area {
-    grid-template-columns: 1fr;
-    overflow-y: auto;
-    height: auto;
-  }
-
-  .chat-container {
-    border-left: 0;
-    padding-left: 0;
-    min-height: 380px;
-  }
-
-  .chat-panel-wrapper {
-    min-width: 320px;
-  }
-}
-
-</style>
+<style scoped src="./BenchmarkArena.css"></style>
