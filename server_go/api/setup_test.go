@@ -1,7 +1,6 @@
 package api
 
 import (
-	"benchmarking-platform/internal/middleware"
 	"benchmarking-platform/models"
 	"encoding/json"
 	"log"
@@ -91,15 +90,15 @@ func createTestUser(t *testing.T, isAdmin bool) (models.User, string) {
 
 func generateTestToken(userID, workspaceID, orgID uuid.UUID) string {
 	os.Setenv("JWT_SECRET", "test-secret")
-	token, _ := middleware.GenerateToken(
-		userID.String(),
-		workspaceID.String(),
-		orgID.String(),
-		"test@example.com",
-		"test-secret",
-		"",
-	)
-	return token
+	claims := jwt.MapClaims{
+		"user_id":      userID.String(),
+		"workspace_id": workspaceID.String(),
+		"org_id":       orgID.String(),
+		"email":        "test@example.com",
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, _ := token.SignedString([]byte("test-secret"))
+	return signed
 }
 
 // Mocking WS interaction with direct handler calls or simulated structure
