@@ -800,14 +800,20 @@ const displayAgents = computed(() => {
 // 2. Not running - check if we have results to show (History mode)
     const resultAgentIds = Object.keys(runResults.value || {})
     if (resultAgentIds.length > 0) {
-      // In history mode, if an agent has results it must stay visible even if currently disabled.
-      const agentsWithResults = mergedAgents.value.filter(a => resultAgentIds.includes(a.id))
-      const oldAgentIds = resultAgentIds.filter(id => !mergedAgents.value.some(a => a.id === id))
-      const oldAgents = oldAgentIds.map(id => {
-        const found = mergedAgents.value.find(a => a.id === id)
-        return found || { id, name: 'Agent (historical)', provider_type: 'unknown' }
-      })
-      list = [...agentsWithResults, ...oldAgents]
+      const hasExplicitSelection = Array.isArray(currentQuestionSet.value?.agents)
+      if (hasExplicitSelection) {
+        const enabledIdSet = new Set(selectedAgentIdsForQuestionSet.value)
+        const activeAgentsWithResults = mergedAgents.value.filter((agent) =>
+          enabledIdSet.has(agent.id) && resultAgentIds.includes(agent.id)
+        )
+        list = activeAgentsWithResults.length > 0 ? activeAgentsWithResults : [...enabledAgents.value]
+      } else {
+        // Legacy fallback when question set has no explicit agent envelope yet.
+        const agentsWithResults = mergedAgents.value.filter((agent) => resultAgentIds.includes(agent.id))
+        const oldAgentIds = resultAgentIds.filter((id) => !mergedAgents.value.some((agent) => agent.id === id))
+        const oldAgents = oldAgentIds.map((id) => ({ id, name: 'Agent (historical)', provider_type: 'unknown' }))
+        list = [...agentsWithResults, ...oldAgents]
+      }
     } else {
       // 3. Setup mode - show locally enabled agents
       list = [...enabledAgents.value]
@@ -897,7 +903,7 @@ function getPrimaryResponseEntry(questionId) {
   return getPrimaryResponseEntryUtil({
     runResults: runResults.value,
     questionId,
-    mergedAgents: mergedAgents.value,
+    mergedAgents: enabledAgents.value,
     isEvaluatorAgentObject,
     isEvaluatorAgentID,
     isQuestionRetrying
@@ -908,7 +914,7 @@ function getQuestionResponse(questionId, truncated = true) {
   return getQuestionResponseUtil({
     runResults: runResults.value,
     questionId,
-    mergedAgents: mergedAgents.value,
+    mergedAgents: enabledAgents.value,
     isEvaluatorAgentObject,
     isEvaluatorAgentID,
     isQuestionRetrying,
@@ -921,7 +927,7 @@ function getQuestionEvaluation(questionId, truncated = true) {
   return getQuestionEvaluationUtil({
     runResults: runResults.value,
     questionId,
-    mergedAgents: mergedAgents.value,
+    mergedAgents: enabledAgents.value,
     isEvaluatorAgentObject,
     isEvaluatorAgentID,
     isQuestionRetrying,
@@ -1143,13 +1149,11 @@ async function handleRunSave(payload) {
   console.log('[Arena] handleRunSave: Received saved QS with', savedQuestionSet.agents?.length, 'agents')
 
   if (savedQuestionSet.id === currentQuestionSet.value.id) {
-    const savedAgents = Array.isArray(savedQuestionSet.agents) && savedQuestionSet.agents.length > 0
+    const hasSavedAgents = Array.isArray(savedQuestionSet.agents)
+    const hasPayloadAgents = Array.isArray(payload?.agents)
+    const newAgents = hasSavedAgents
       ? savedQuestionSet.agents
-      : null
-    const payloadAgents = Array.isArray(payload?.agents) && payload.agents.length > 0
-      ? payload.agents
-      : null
-    const newAgents = savedAgents || payloadAgents || currentQuestionSet.value.agents
+      : (hasPayloadAgents ? payload.agents : currentQuestionSet.value.agents)
     
     currentQuestionSet.value = mergeQuestionSetForUI({
       ...currentQuestionSet.value,
