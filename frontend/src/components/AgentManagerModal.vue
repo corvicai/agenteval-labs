@@ -83,6 +83,10 @@
                 <div class="field">
                   <label>Model</label>
                   <input v-model="agent.config.model" placeholder="meta/llama-3.1-8b-instruct" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  <small class="field-hint">
+                    Find NVIDIA model IDs at
+                    <a href="https://build.nvidia.com/models" target="_blank" rel="noopener noreferrer">build.nvidia.com/models</a>.
+                  </small>
                 </div>
                 <div class="field full-width">
                   <label>Base URL (Optional)</label>
@@ -281,6 +285,10 @@
                   <div class="field">
                     <label>Model</label>
                     <input v-model="agent.config.nvidia_model" placeholder="meta/llama-3.1-8b-instruct" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                    <small class="field-hint">
+                      Find NVIDIA model IDs at
+                      <a href="https://build.nvidia.com/models" target="_blank" rel="noopener noreferrer">build.nvidia.com/models</a>.
+                    </small>
                   </div>
                   <div class="field full-width">
                     <label>Base URL (Optional)</label>
@@ -1596,6 +1604,11 @@ function startDrag(index) {
 .field-hint {
   font-size: 0.75rem;
   color: #64748b;
+}
+
+.field-hint a {
+  color: #2563eb;
+  text-decoration: underline;
 }
 
 .config-help {
