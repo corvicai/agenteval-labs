@@ -330,7 +330,7 @@ import { extractScoreOutOfTen, truncatePreviewText, extractQuestionIdsFromQuesti
 import { calculateStats, calculateAverageEvaluationScore, formatDuration } from '../utils/arena/stats.js'
 import { flattenQuestionSetQuestions, hasQuestionBeenRun as hasQuestionBeenRunUtil, getQuestionStatus as getQuestionStatusUtil, isQuestionLoading as isQuestionLoadingUtil, getQuestionStatusText as getQuestionStatusTextUtil, getQuestionStatusTooltip as getQuestionStatusTooltipUtil } from '../utils/arena/questions.js'
 import { getPrimaryResponseEntry as getPrimaryResponseEntryUtil, getQuestionResponse as getQuestionResponseUtil, getQuestionEvaluation as getQuestionEvaluationUtil } from '../utils/arena/responses.js'
-import { splitSelectedAgents as splitSelectedAgentsUtil, getEvaluatorIdsForRun as getEvaluatorIdsForRunUtil, hasEvaluatorResultsLoaded as hasEvaluatorResultsLoadedUtil, resolveRunAgentIds as resolveRunAgentIdsUtil } from '../utils/arena/runs.js'
+import { splitSelectedAgents as splitSelectedAgentsUtil, resolveRunAgentIds as resolveRunAgentIdsUtil } from '../utils/arena/runs.js'
 import { saveRunProgress as saveRunProgressUtil, loadRunProgress as loadRunProgressUtil, clearRunProgress as clearRunProgressUtil, hasLoadingResults as hasLoadingResultsUtil, waitForResultsToLoad as waitForResultsToLoadUtil } from '../utils/arena/progress.js'
 import { getAgentResults as getAgentResultsUtil } from '../utils/arena/results.js'
 import { registerArenaWsEvents } from '../utils/arena/wsBindings.js'
@@ -1090,14 +1090,6 @@ function splitSelectedAgents(payload = {}) {
   return splitSelectedAgentsUtil(payload, isEvaluatorAgentID)
 }
 
-function getEvaluatorIdsForRun(runLike) {
-  return getEvaluatorIdsForRunUtil(runLike, isEvaluatorAgentID)
-}
-
-function hasEvaluatorResultsLoaded() {
-  return hasEvaluatorResultsLoadedUtil(runResults.value, isEvaluatorAgentID)
-}
-
 const {
   startEvaluationNow,
   handleStartRun,
@@ -1217,8 +1209,6 @@ onMounted(async () => {
     popPendingEvaluators,
     resolveQuestionSetIdForRun,
     triggerEvaluatorRun,
-    getEvaluatorIdsForRun,
-    hasEvaluatorResultsLoaded,
     clearRunProgress,
     clearRetryTrackingForRun,
     clearAllLoadingStates,

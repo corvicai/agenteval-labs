@@ -180,17 +180,7 @@ export function useArenaRunExecution(options = {}) {
     }
 
     if (primaryAgentIds.length === 0 && evaluatorAgentIds.length > 0) {
-      try {
-        const baseRunID = await resolveLatestRunIDForQuestionSet(questionSetId)
-        if (!baseRunID) {
-          showAlert('No previous run found for this question set. Run at least one benchmark agent first.')
-          return
-        }
-        await triggerEvaluatorRun(baseRunID, questionSetId, evaluatorAgentIds)
-      } catch (e) {
-        console.error('[Arena] Evaluator-only run failed:', e)
-        setRunError(e?.message || 'Failed to run evaluators.')
-      }
+      showAlert('Evaluator-only run is not allowed in Run Setup. Select at least one primary agent.')
       return
     }
 

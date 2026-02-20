@@ -123,6 +123,10 @@ func (h *Hub) handleRunEvaluators(c *Connection, env models.Envelope) {
 			selectedEvaluatorIDs = append(selectedEvaluatorIDs, id)
 		}
 	}
+	if len(selectedEvaluatorIDs) == 0 {
+		c.SendError(env.CorrelationID, "failed to run evaluators: no evaluator agents selected")
+		return
+	}
 
 	if err := h.engine.RunEvaluators(runID, selectedEvaluatorIDs); err != nil {
 		c.SendError(env.CorrelationID, "failed to run evaluators: "+err.Error())

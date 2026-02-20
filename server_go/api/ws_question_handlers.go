@@ -2,7 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
+	"strings"
 
 	"benchmarking-platform/models"
 
@@ -10,6 +12,86 @@ import (
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
+
+func decodeAgentConfigForSelection(agent models.Agent) map[string]any {
+	cfg := make(map[string]any)
+	if len(agent.Config) == 0 {
+		return cfg
+	}
+	if err := json.Unmarshal(agent.Config, &cfg); err != nil || cfg == nil {
+		return map[string]any{}
+	}
+	return cfg
+}
+
+func isLegacyEvaluatorSelectionConfig(cfg map[string]any) bool {
+	if cfg == nil {
+		return false
+	}
+	if _, hasTarget := cfg["target_agent_id"]; hasTarget {
+		return true
+	}
+	if mode, ok := cfg["openai_mode"].(string); ok && strings.TrimSpace(mode) != "" {
+		return true
+	}
+	if prompt, ok := cfg["system_prompt"].(string); ok && strings.TrimSpace(prompt) != "" {
+		return true
+	}
+	if instructions, ok := cfg["instructions"].(string); ok && strings.TrimSpace(instructions) != "" {
+		return true
+	}
+	return false
+}
+
+func isEvaluatorSelectionAgent(agent models.Agent) bool {
+	switch strings.ToLower(strings.TrimSpace(agent.ProviderType)) {
+	case "evaluator":
+		return true
+	case "openai":
+		cfg := decodeAgentConfigForSelection(agent)
+		if isLegacyEvaluatorSelectionConfig(cfg) {
+			return true
+		}
+		name := strings.ToLower(strings.TrimSpace(agent.Name))
+		return strings.Contains(name, "evaluator")
+	default:
+		return false
+	}
+}
+
+func validateQuestionSetAgentSelection(agents []models.Agent) error {
+	total := len(agents)
+	if total == 0 {
+		return fmt.Errorf("question set must include at least one primary agent")
+	}
+	if total > 2 {
+		return fmt.Errorf("question set can include at most 2 agents")
+	}
+
+	primaryCount := 0
+	evaluatorCount := 0
+	for _, agent := range agents {
+		if isEvaluatorSelectionAgent(agent) {
+			evaluatorCount++
+		} else {
+			primaryCount++
+		}
+	}
+
+	if evaluatorCount > 1 {
+		return fmt.Errorf("question set can include at most 1 evaluator agent")
+	}
+	if primaryCount == 0 {
+		return fmt.Errorf("question set must include at least one primary agent (evaluator-only sets are not allowed)")
+	}
+	if primaryCount > 2 {
+		return fmt.Errorf("question set can include at most 2 primary agents")
+	}
+	if evaluatorCount == 1 && primaryCount != 1 {
+		return fmt.Errorf("question set with evaluator must include exactly 1 primary agent")
+	}
+	return nil
+}
 
 func (h *Hub) handleImportQuestionSet(c *Connection, env models.Envelope) {
 	if !c.IsAuthenticated {
@@ -245,6 +327,75 @@ func (h *Hub) handleUpdateQuestionSetAgents(c *Connection, env models.Envelope) 
 		return
 	}
 
+	type selectedAgentEntry struct {
+		AgentID  uuid.UUID
+		Config   map[string]any
+		Position int
+	}
+
+	selectedEntries := make([]selectedAgentEntry, 0, len(payload.Agents))
+	selectedIDs := make([]uuid.UUID, 0, len(payload.Agents))
+	seenSelected := make(map[uuid.UUID]struct{}, len(payload.Agents))
+	for _, entry := range payload.Agents {
+		if !entry.Enabled {
+			continue
+		}
+		agentID, parseErr := uuid.Parse(entry.AgentID)
+		if parseErr != nil {
+			c.SendError(env.CorrelationID, "invalid agent_id")
+			return
+		}
+		if _, seen := seenSelected[agentID]; seen {
+			continue
+		}
+		seenSelected[agentID] = struct{}{}
+		selectedIDs = append(selectedIDs, agentID)
+		selectedEntries = append(selectedEntries, selectedAgentEntry{
+			AgentID:  agentID,
+			Config:   entry.Config,
+			Position: entry.Position,
+		})
+	}
+
+	if len(selectedEntries) == 0 {
+		c.SendError(env.CorrelationID, "question set must include at least one primary agent")
+		return
+	}
+
+	var selectedAgentsDB []models.Agent
+	if err := h.db.Where("workspace_id = ? AND id IN ?", meta.WorkspaceID, selectedIDs).Find(&selectedAgentsDB).Error; err != nil {
+		c.SendErrorWithDetails(env.CorrelationID, "failed to load selected agents", err.Error())
+		return
+	}
+	if len(selectedAgentsDB) != len(selectedIDs) {
+		c.SendError(env.CorrelationID, "one or more selected agents are not available in this workspace")
+		return
+	}
+
+	agentByID := make(map[uuid.UUID]models.Agent, len(selectedAgentsDB))
+	for _, agent := range selectedAgentsDB {
+		agentByID[agent.ID] = agent
+	}
+
+	selectedAgentsForValidation := make([]models.Agent, 0, len(selectedEntries))
+	for _, entry := range selectedEntries {
+		agent, ok := agentByID[entry.AgentID]
+		if !ok {
+			c.SendError(env.CorrelationID, "one or more selected agents are not available in this workspace")
+			return
+		}
+		if entry.Config != nil {
+			cfgJSON, _ := json.Marshal(entry.Config)
+			agent.Config = models.EncryptedJSON(cfgJSON)
+		}
+		selectedAgentsForValidation = append(selectedAgentsForValidation, agent)
+	}
+
+	if err := validateQuestionSetAgentSelection(selectedAgentsForValidation); err != nil {
+		c.SendError(env.CorrelationID, err.Error())
+		return
+	}
+
 	if err := h.db.Transaction(func(tx *gorm.DB) error {
 		// Delete existing mappings
 		if err := tx.Where("question_set_id = ?", qsID).Delete(&models.QuestionSetAgent{}).Error; err != nil {
@@ -253,23 +404,15 @@ func (h *Hub) handleUpdateQuestionSetAgents(c *Connection, env models.Envelope) 
 
 		// Insert new mappings
 		var mappings []models.QuestionSetAgent
-		for _, a := range payload.Agents {
-			if !a.Enabled {
-				continue
-			}
-			agentID, err := uuid.Parse(a.AgentID)
-			if err != nil {
-				log.Printf("[QS_AGENTS] Skipping invalid agent_id: %s", a.AgentID)
-				continue
-			}
-			configJSON, _ := json.Marshal(a.Config)
+		for _, entry := range selectedEntries {
+			configJSON, _ := json.Marshal(entry.Config)
 
 			mappings = append(mappings, models.QuestionSetAgent{
 				QuestionSetID: qsID,
-				AgentID:       agentID,
+				AgentID:       entry.AgentID,
 				Config:        models.EncryptedJSON(configJSON),
 				Enabled:       true,
-				Position:      a.Position,
+				Position:      entry.Position,
 			})
 		}
 
@@ -375,11 +518,14 @@ func (h *Hub) handleGetQuestionSetAgentEnvelope(c *Connection, env models.Envelo
 
 	if len(selectedAgents) == 0 {
 		for _, candidate := range workspaceAgents {
-			if !candidate.Enabled || candidate.ProviderType == "evaluator" {
+			if !candidate.Enabled || isEvaluatorSelectionAgent(candidate) {
 				continue
 			}
 			selectedAgents = append(selectedAgents, candidate)
 			selectedIDs[candidate.ID] = struct{}{}
+			if len(selectedAgents) >= 2 {
+				break
+			}
 		}
 	}
 

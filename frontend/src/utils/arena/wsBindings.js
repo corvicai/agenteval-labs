@@ -19,8 +19,6 @@ export function registerArenaWsEvents(options = {}) {
     popPendingEvaluators,
     resolveQuestionSetIdForRun,
     triggerEvaluatorRun,
-    getEvaluatorIdsForRun,
-    hasEvaluatorResultsLoaded,
     clearRunProgress,
     clearRetryTrackingForRun,
     clearAllLoadingStates,
@@ -186,18 +184,6 @@ export function registerArenaWsEvents(options = {}) {
       }
 
       if (finishedRunId && currentRun.value?.id && finishedRunId !== String(currentRun.value.id)) {
-        return
-      }
-
-      const fallbackRunId = finishedRunId || String(currentRun.value?.id || '')
-      const fallbackEvaluatorIDs = getEvaluatorIdsForRun(currentRun.value)
-      if (fallbackRunId && fallbackEvaluatorIDs.length > 0 && !hasEvaluatorResultsLoaded()) {
-        const targetQuestionSetID = resolveQuestionSetIdForRun(fallbackRunId)
-        console.warn('[Arena] Run finished without evaluator results; triggering evaluator fallback', {
-          runId: fallbackRunId,
-          evaluatorCount: fallbackEvaluatorIDs.length
-        })
-        void triggerEvaluatorRun(fallbackRunId, targetQuestionSetID, fallbackEvaluatorIDs)
         return
       }
 
