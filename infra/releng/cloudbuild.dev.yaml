@@ -25,13 +25,6 @@ steps:
       #!/usr/bin/env bash
       set -eu -o pipefail
 
-      gcloud run deploy agenteval-api-dev --image ${_IMAGE_REPO_BASE}/agenteval-api:${COMMIT_SHA} --region ${_DEPLOY_REGION}
-
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    script: |
-      #!/usr/bin/env bash
-      set -eu -o pipefail
-
       gcloud run deploy agenteval-web-dev --image ${_IMAGE_REPO_BASE}/agenteval-web:${COMMIT_SHA} --region ${_DEPLOY_REGION} 
 options:
   automapSubstitutions: true
