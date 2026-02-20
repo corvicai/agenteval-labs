@@ -76,6 +76,36 @@ ensure_prod_basic_auth() {
     fi
 }
 
+has_cli_flag() {
+    local needle="$1"
+    shift || true
+    for arg in "$@"; do
+        if [[ "${arg}" == "${needle}" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+is_prod_proxy_running() {
+    docker ps --format '{{.Names}}' | grep -qx 'benchmarking-nginx-prod'
+}
+
+reload_prod_proxy_auth_if_needed() {
+    if ! has_cli_flag "--soft-reset" "$@"; then
+        return
+    fi
+
+    if ! is_prod_proxy_running; then
+        return
+    fi
+
+    ensure_prod_basic_auth
+    echo "🔐 --soft-reset detected and production proxy is running. Reloading auth-protected proxy..."
+    docker compose --env-file .env.prod -f docker-compose.proxy.prod.yml up -d nginx
+    docker compose --env-file .env.prod -f docker-compose.proxy.prod.yml restart nginx
+}
+
 ensure_encryption_key
 echo "ℹ️ Running reset with args: $*"
 
@@ -96,4 +126,8 @@ if [[ "${1:-}" == "--prod" ]]; then
 fi
 
 # Run reset with args
-./reset "$@" && docker compose -f docker-compose.proxy.yml down && docker compose -f docker-compose.proxy.yml up -d
+./reset "$@" && \
+ensure_prod_basic_auth && \
+docker compose -f docker-compose.proxy.yml down && \
+docker compose -f docker-compose.proxy.yml up -d && \
+reload_prod_proxy_auth_if_needed "$@"

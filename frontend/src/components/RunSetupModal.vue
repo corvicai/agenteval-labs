@@ -94,7 +94,7 @@
           {{ isSaving ? 'Saving...' : 'Save Selection' }}
         </button>
         <div class="footer-actions">
-          <button class="btn btn-ghost" @click="$emit('cancel')" :disabled="isSaving">Cancel</button>
+          <button class="btn btn-ghost" @click="$emit('cancel')" :disabled="isSaving">Close</button>
           <button
             class="btn btn-primary btn-lg"
             :disabled="selectedAgents.length === 0 || !!selectionRuleError || selectedEvaluatorsMissingTarget.length > 0 || isSaving || isLoadingEnvelope"

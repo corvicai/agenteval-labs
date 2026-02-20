@@ -63,9 +63,9 @@ Use the included `reset.sh` script for environment management:
 ./reset.sh --prod
 ```
 
-### Production Access Password (Basic Auth)
+### Proxy Access Password (Basic Auth)
 
-To protect the production domain behind an extra password gate:
+To protect dev/prod proxy access behind an extra password gate:
 
 ```bash
 # 1) Generate/update credentials + protected hosts (local only, not committed)
@@ -78,7 +78,7 @@ To protect the production domain behind an extra password gate:
 Notes:
 - Credentials are stored in `ops/nginx/.htpasswd` (gitignored).
 - Protected hosts are stored in `ops/nginx/.basic-auth-hosts.map` (gitignored).
-- The production proxy (`ops/nginx/nginx.prod.conf`) enforces HTTP Basic Auth only for hosts listed in that local map.
+- Both proxies (`ops/nginx/nginx.conf` and `ops/nginx/nginx.prod.conf`) enforce HTTP Basic Auth only for hosts listed in that local map.
 - Examples without real secrets/domains: `ops/nginx/.htpasswd.example` and `ops/nginx/.basic-auth-hosts.map.example`.
 - Rollback: remove the auth directives from `ops/nginx/nginx.prod.conf` and redeploy `./reset.sh --prod`.
 
