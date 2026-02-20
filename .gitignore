@@ -38,6 +38,8 @@ node_modules
 .agent
 /diff_tool/
 .env.prod
+ops/nginx/.htpasswd
+ops/nginx/.basic-auth-hosts.map
 *.sql
 *.sql.gz
 

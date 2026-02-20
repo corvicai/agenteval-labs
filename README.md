@@ -63,6 +63,25 @@ Use the included `reset.sh` script for environment management:
 ./reset.sh --prod
 ```
 
+### Production Access Password (Basic Auth)
+
+To protect the production domain behind an extra password gate:
+
+```bash
+# 1) Generate/update credentials + protected hosts (local only, not committed)
+./scripts/set-basic-auth.sh <username> <password> <domain[,domain2,...]>
+
+# 2) Deploy production
+./reset.sh --prod
+```
+
+Notes:
+- Credentials are stored in `ops/nginx/.htpasswd` (gitignored).
+- Protected hosts are stored in `ops/nginx/.basic-auth-hosts.map` (gitignored).
+- The production proxy (`ops/nginx/nginx.prod.conf`) enforces HTTP Basic Auth only for hosts listed in that local map.
+- Examples without real secrets/domains: `ops/nginx/.htpasswd.example` and `ops/nginx/.basic-auth-hosts.map.example`.
+- Rollback: remove the auth directives from `ops/nginx/nginx.prod.conf` and redeploy `./reset.sh --prod`.
+
 ## API Architecture
 
 This platform uses a **WebSocket-first architecture**. All real-time operations (agents, question sets, runs, evaluations, stats) are handled via WebSocket messages.
