@@ -216,6 +216,23 @@ type Connection struct {
 	Send            chan []byte
 	IsAuthenticated bool
 	RemoteIP        string
+	Done            chan struct{} // closed when connection is unregistered
+	closeOnce       sync.Once     // ensures Done is closed exactly once
+}
+
+// NewConnection creates a Connection with all channels properly initialised.
+func NewConnection(id, userID, orgID, workspaceID uuid.UUID, conn *websocket.Conn, sendBuf int, isAuthenticated bool, remoteIP string) *Connection {
+	return &Connection{
+		ID:              id,
+		UserID:          userID,
+		OrgID:           orgID,
+		WorkspaceID:     workspaceID,
+		Conn:            conn,
+		Send:            make(chan []byte, sendBuf),
+		IsAuthenticated: isAuthenticated,
+		RemoteIP:        remoteIP,
+		Done:            make(chan struct{}),
+	}
 }
 
 func NewHub(db *gorm.DB, engine *orchestrator.Engine, jwtSecret string, fb *firebase.Client) *Hub {
@@ -271,7 +288,10 @@ func (h *Hub) Run() {
 			h.mu.Lock()
 			if _, ok := h.connections[conn.ID]; ok {
 				delete(h.connections, conn.ID)
-				close(conn.Send)
+				conn.closeOnce.Do(func() {
+					close(conn.Done)
+					close(conn.Send)
+				})
 			}
 			h.mu.Unlock()
 			log.Printf("[HUB] Connection unregistered: %s", conn.ID)
@@ -394,7 +414,6 @@ func (h *Hub) broadcastOnlineStatusToAdmins() {
 		// ideally we check if user is admin, but for now we trust IsAuthenticated check done upstream
 		// optimization: we could cache or query IsAdmin flag on connection if available
 		// For now, let's just query the DB or rely on internal knowledge.
-		// Since we don't store IsAdmin on Connection, we might want to just broadcast to everyone for now?
 		// User requested this for "Admins", but knowing who is online might be useful for managers too.
 		// Let's prevent leaking this to Everyone if possible.
 		// Actually, let's send to valid authenticated users and let frontend filter or just live with it.
@@ -516,9 +535,20 @@ func (c *Connection) SendResponse(msgType string, correlationID string, payload 
 		return err
 	}
 
+	// Guard against sending on a closed channel (race between async handler goroutines
+	// and connection lifecycle: the hub may close conn.Send while a handler is still
+	// processing a slow DB query).
+	select {
+	case <-c.Done:
+		return errors.New("connection closed")
+	default:
+	}
+
 	select {
 	case c.Send <- msg:
 		return nil
+	case <-c.Done:
+		return errors.New("connection closed")
 	default:
 		return errors.New("buffer full")
 	}

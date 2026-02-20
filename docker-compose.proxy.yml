@@ -4,7 +4,9 @@ services:
     image: nginx:alpine
     container_name: benchmarking-nginx-dev
     volumes:
-      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./ops/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./ops/nginx/.htpasswd:/etc/nginx/.htpasswd:ro
+      - ./ops/nginx/.basic-auth-hosts.map:/etc/nginx/basic-auth-hosts.map:ro
       - ./maintenance:/usr/share/nginx/html/maintenance:ro
     ports:
       - "3010:3010"

@@ -347,16 +347,16 @@ func main() {
 			workspaceID, _ = uuid.Parse(workspaceIDStr)
 		}
 
-		conn := &api.Connection{
-			ID:              uuid.New(),
-			UserID:          userID,
-			OrgID:           orgID,
-			WorkspaceID:     workspaceID,
-			Conn:            ws,
-			Send:            make(chan []byte, 1024),
-			IsAuthenticated: isAuthenticated,
-			RemoteIP:        c.RealIP(),
-		}
+		conn := api.NewConnection(
+			uuid.New(),
+			userID,
+			orgID,
+			workspaceID,
+			ws,
+			1024,
+			isAuthenticated,
+			c.RealIP(),
+		)
 
 		hub.Register(conn)
 

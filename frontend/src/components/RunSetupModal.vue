@@ -20,7 +20,7 @@
 
         <div class="setup-section">
           <label class="section-label">Active Agents For This Question Set</label>
-          <p class="section-hint">Only these agents are stored as active for this question set.</p>
+          <p class="section-hint">Allowed combinations: 1 primary, 2 primary, or 1 primary + 1 evaluator (max 2 agents).</p>
 
           <div v-if="isLoadingEnvelope" class="empty-text">Loading agent selection...</div>
 
@@ -59,8 +59,8 @@
           <p v-if="!isLoadingEnvelope && selectedAgents.length === 0" class="error-text">
             ⚠️ Select at least one agent to run.
           </p>
-          <p v-else-if="selectedPrimaryAgentIds.length === 0 && selectedEvaluatorAgentIds.length > 0" class="warning-text">
-            ℹ️ Evaluator-only mode: this will evaluate answers from the latest run for this question set.
+          <p v-else-if="selectionRuleError" class="error-text">
+            ⚠️ {{ selectionRuleError }}
           </p>
           <p v-if="selectedEvaluatorsMissingTarget.length > 0" class="error-text">
             ⚠️ Select a target agent for evaluator(s): {{ selectedEvaluatorsMissingTarget.map(a => a.name).join(', ') }}.
@@ -81,7 +81,7 @@
                 <span class="agent-name">{{ agent.name }}</span>
                 <span class="agent-type">{{ agent.provider_type }}</span>
               </div>
-              <button class="btn btn-secondary btn-add" @click="addAgent(agent.id)">Add</button>
+              <button class="btn btn-secondary btn-add" @click="addAgent(agent.id)" :disabled="!canAddAgent(agent)">Add</button>
             </div>
           </div>
 
@@ -90,14 +90,14 @@
       </div>
 
       <div class="modal-footer">
-        <button class="btn btn-secondary" @click="saveSelection" :disabled="isSaving || isLoadingEnvelope">
+        <button class="btn btn-secondary" @click="saveSelection" :disabled="isSaving || isLoadingEnvelope || !!selectionRuleError || selectedEvaluatorsMissingTarget.length > 0">
           {{ isSaving ? 'Saving...' : 'Save Selection' }}
         </button>
         <div class="footer-actions">
-          <button class="btn btn-ghost" @click="$emit('cancel')" :disabled="isSaving">Cancel</button>
+          <button class="btn btn-ghost" @click="$emit('cancel')" :disabled="isSaving">Close</button>
           <button
             class="btn btn-primary btn-lg"
-            :disabled="selectedAgents.length === 0 || selectedEvaluatorsMissingTarget.length > 0 || isSaving || isLoadingEnvelope"
+            :disabled="selectedAgents.length === 0 || !!selectionRuleError || selectedEvaluatorsMissingTarget.length > 0 || isSaving || isLoadingEnvelope"
             @click="confirmRun"
           >
             {{ isSaving ? 'Saving...' : `Start Run (${selectedAgents.length})` }}
@@ -181,6 +181,49 @@ function isEvaluatorAgent(agent) {
   if (isLegacyEvaluatorConfig(agent.config || {})) return true
   const name = String(agent.name || '').toLowerCase()
   return name.includes('evaluator')
+}
+
+function getSelectionStats(list = []) {
+  const stats = {
+    total: Array.isArray(list) ? list.length : 0,
+    primary: 0,
+    evaluators: 0
+  }
+
+  for (const agent of list || []) {
+    if (isEvaluatorAgent(agent)) {
+      stats.evaluators++
+    } else {
+      stats.primary++
+    }
+  }
+
+  return stats
+}
+
+function getSelectionRuleError(list = []) {
+  const stats = getSelectionStats(list)
+
+  if (stats.total === 0) {
+    return 'Select at least one primary agent.'
+  }
+  if (stats.total > 2) {
+    return 'A question set can include at most 2 agents.'
+  }
+  if (stats.evaluators > 1) {
+    return 'A question set can include at most 1 evaluator.'
+  }
+  if (stats.primary === 0) {
+    return 'Evaluator-only sets are not allowed. Select at least one primary agent.'
+  }
+  if (stats.primary > 2) {
+    return 'A question set can include at most 2 primary agents.'
+  }
+  if (stats.evaluators === 1 && stats.primary !== 1) {
+    return 'When an evaluator is selected, keep exactly 1 primary agent.'
+  }
+
+  return ''
 }
 
 function normalizeSelectedPositions() {
@@ -274,6 +317,8 @@ const selectedEvaluatorAgents = computed(() =>
 
 const selectedEvaluatorAgentIds = computed(() => selectedEvaluatorAgents.value.map((agent) => agent.id))
 
+const selectionRuleError = computed(() => getSelectionRuleError(selectedAgents.value))
+
 const selectedEvaluatorsMissingTarget = computed(() => {
   return selectedEvaluatorAgents.value.filter((agent) => !isTargetConfigured(agent))
 })
@@ -298,6 +343,13 @@ function addAgent(agentID) {
   const index = availableAgents.value.findIndex((agent) => agent.id === id)
   if (index === -1) return
 
+  const candidate = availableAgents.value[index]
+  const nextError = getSelectionRuleError([...selectedAgents.value, candidate])
+  if (nextError) {
+    alert(nextError)
+    return
+  }
+
   const [agent] = availableAgents.value.splice(index, 1)
   selectedAgents.value.push({
     ...agent,
@@ -310,6 +362,12 @@ function addAgent(agentID) {
   if (isEvaluatorAgent(agent) && !isTargetConfigured(agent)) {
     alert(`Evaluator "${agent.name}" requires a target agent. Select one before running.`)
   }
+}
+
+function canAddAgent(agent) {
+  if (!agent) return false
+  const nextError = getSelectionRuleError([...selectedAgents.value, agent])
+  return !nextError
 }
 
 function removeAgent(agentID) {
@@ -370,6 +428,17 @@ function buildAgentsPayload() {
 async function saveToDatabase() {
   if (!props.questionSet?.id) return null
 
+  if (selectionRuleError.value) {
+    alert(selectionRuleError.value)
+    return null
+  }
+
+  if (selectedEvaluatorsMissingTarget.value.length > 0) {
+    const names = selectedEvaluatorsMissingTarget.value.map((agent) => agent.name).join(', ')
+    alert(`Set a target agent before saving for: ${names}.`)
+    return null
+  }
+
   try {
     isSaving.value = true
     const payload = buildAgentsPayload()
@@ -393,15 +462,15 @@ async function saveToDatabase() {
 async function confirmRun() {
   if (selectedAgents.value.length === 0) return
 
+  if (selectionRuleError.value) {
+    alert(selectionRuleError.value)
+    return
+  }
+
   if (selectedEvaluatorsMissingTarget.value.length > 0) {
     const names = selectedEvaluatorsMissingTarget.value.map((agent) => agent.name).join(', ')
     alert(`Set a target agent before running for: ${names}.`)
     return
-  }
-
-  if (selectedPrimaryAgentIds.value.length === 0 && selectedEvaluatorAgentIds.value.length > 0) {
-    const confirmed = confirm('Evaluator-only mode will use the latest run answers from this question set. Continue?')
-    if (!confirmed) return
   }
 
   const savedQuestionSet = await saveToDatabase()
@@ -424,6 +493,11 @@ async function confirmRun() {
 }
 
 async function saveSelection() {
+  if (selectionRuleError.value) {
+    alert(selectionRuleError.value)
+    return
+  }
+
   const savedQuestionSet = await saveToDatabase()
   if (!savedQuestionSet) return
 

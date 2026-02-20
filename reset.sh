@@ -44,6 +44,68 @@ ensure_encryption_key() {
     echo "✅ ENCRYPTION_KEY was missing and has been generated in ${env_file}."
 }
 
+ensure_prod_basic_auth() {
+    local htpasswd_file="ops/nginx/.htpasswd"
+    local hosts_map_file="ops/nginx/.basic-auth-hosts.map"
+    if [[ ! -f "${htpasswd_file}" ]]; then
+        echo "❌ Missing ${htpasswd_file}."
+        echo "Create it with:"
+        echo "   ./scripts/set-basic-auth.sh <username> <password> <domain[,domain2,...]>"
+        exit 1
+    fi
+
+    if ! grep -Eq '^[^:#[:space:]]+:[^[:space:]]+' "${htpasswd_file}"; then
+        echo "❌ ${htpasswd_file} does not contain a valid htpasswd entry."
+        echo "Recreate it with:"
+        echo "   ./scripts/set-basic-auth.sh <username> <password> <domain[,domain2,...]>"
+        exit 1
+    fi
+
+    if [[ ! -f "${hosts_map_file}" ]]; then
+        echo "❌ Missing ${hosts_map_file}."
+        echo "Create it with:"
+        echo "   ./scripts/set-basic-auth.sh <username> <password> <domain[,domain2,...]>"
+        exit 1
+    fi
+
+    if ! grep -Eq '^[[:space:]]*[^#[:space:]]+[[:space:]]+"Restricted Access";' "${hosts_map_file}"; then
+        echo "❌ ${hosts_map_file} does not contain valid host entries."
+        echo "Recreate it with:"
+        echo "   ./scripts/set-basic-auth.sh <username> <password> <domain[,domain2,...]>"
+        exit 1
+    fi
+}
+
+has_cli_flag() {
+    local needle="$1"
+    shift || true
+    for arg in "$@"; do
+        if [[ "${arg}" == "${needle}" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+is_prod_proxy_running() {
+    docker ps --format '{{.Names}}' | grep -qx 'benchmarking-nginx-prod'
+}
+
+reload_prod_proxy_auth_if_needed() {
+    if ! has_cli_flag "--soft-reset" "$@"; then
+        return
+    fi
+
+    if ! is_prod_proxy_running; then
+        return
+    fi
+
+    ensure_prod_basic_auth
+    echo "🔐 --soft-reset detected and production proxy is running. Reloading auth-protected proxy..."
+    docker compose --env-file .env.prod -f docker-compose.proxy.prod.yml up -d nginx
+    docker compose --env-file .env.prod -f docker-compose.proxy.prod.yml restart nginx
+}
+
 ensure_encryption_key
 echo "ℹ️ Running reset with args: $*"
 
@@ -54,6 +116,7 @@ echo "✅ Reset tool built."
 
 # Check for --prod flag
 if [[ "${1:-}" == "--prod" ]]; then
+    ensure_prod_basic_auth
     echo "🚀 Updating Production (App & Proxy)..."
     (cd frontend && npm run build) && \
     docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build go-api-prod && \
@@ -63,4 +126,8 @@ if [[ "${1:-}" == "--prod" ]]; then
 fi
 
 # Run reset with args
-./reset "$@" && docker compose -f docker-compose.proxy.yml down && docker compose -f docker-compose.proxy.yml up -d
+./reset "$@" && \
+ensure_prod_basic_auth && \
+docker compose -f docker-compose.proxy.yml down && \
+docker compose -f docker-compose.proxy.yml up -d && \
+reload_prod_proxy_auth_if_needed "$@"

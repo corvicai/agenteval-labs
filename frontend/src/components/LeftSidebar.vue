@@ -42,6 +42,9 @@
           <button class="btn btn-secondary btn-sm btn-full-width" @click="handleEditQuestions" :disabled="!currentQuestionSet">
             ✏️ Edit Questions
           </button>
+          <button class="btn btn-secondary btn-sm btn-full-width" @click="handleCloneQuestionSet" :disabled="!currentQuestionSet || !workspaceId">
+            📄 Clone Set
+          </button>
           <button class="btn btn-primary btn-sm btn-full-width" @click="handleCreateQuestionSet">
             <span class="icon">➕</span> Add Validation Set
           </button>
@@ -93,8 +96,9 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import QuestionEditorModal from './QuestionEditorModal.vue'
+import wsService from '../services/websocket.js'
 
 const props = defineProps({
   questionSets: {
@@ -143,6 +147,70 @@ function handleEditQuestions() {
   if (!props.currentQuestionSet) return
   previousQuestionSet.value = props.currentQuestionSet
   showQuestionEditor.value = true
+}
+
+function cloneQuestionSetData(questionSet) {
+  if (!questionSet?.data) return null
+  let data = questionSet.data
+  if (typeof data === 'string') {
+    try {
+      data = JSON.parse(data)
+    } catch (error) {
+      return null
+    }
+  }
+  try {
+    return JSON.parse(JSON.stringify(data))
+  } catch (error) {
+    return null
+  }
+}
+
+function getClonedQuestionSetName(sourceName) {
+  const baseName = String(sourceName || 'Validation Set').trim() || 'Validation Set'
+  const existingNames = new Set(
+    (props.questionSets || [])
+      .map((set) => String(set?.name || '').trim().toLowerCase())
+      .filter(Boolean)
+  )
+
+  const firstAttempt = `${baseName} (Copy)`
+  if (!existingNames.has(firstAttempt.toLowerCase())) {
+    return firstAttempt
+  }
+
+  let index = 2
+  while (existingNames.has(`${baseName} (Copy ${index})`.toLowerCase())) {
+    index++
+  }
+  return `${baseName} (Copy ${index})`
+}
+
+async function handleCloneQuestionSet() {
+  if (!props.currentQuestionSet || !props.workspaceId) return
+
+  const clonedData = cloneQuestionSetData(props.currentQuestionSet)
+  if (!clonedData) {
+    alert('Failed to clone set: invalid question set data.')
+    return
+  }
+
+  const clonedName = getClonedQuestionSetName(props.currentQuestionSet.name)
+
+  try {
+    const created = await wsService.createQuestionSet(props.workspaceId, {
+      name: clonedName,
+      version: props.currentQuestionSet.version || '1.0',
+      data: clonedData
+    })
+
+    // Clone includes only questions. Agent selection/config is intentionally not copied.
+    emit('question-set-updated', created)
+    emit('select-question-set', created)
+  } catch (error) {
+    console.error('Failed to clone question set:', error)
+    alert('Failed to clone set: ' + (error?.message || 'Unknown error'))
+  }
 }
 
 function onQuestionEditorClose() {
@@ -364,6 +432,9 @@ function onQuestionSetSaved(updated) {
   border-top: 1px solid #e0e0e0;
   flex-shrink: 0;
   background: #f8f9fa;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .manage-agents-row {

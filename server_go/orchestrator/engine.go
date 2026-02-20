@@ -407,10 +407,16 @@ func (e *Engine) executeTask(task *Task) {
 			strings.ToLower(strings.TrimSpace(task.ProviderType)) != "evaluator" &&
 			!strings.HasPrefix(strings.TrimSpace(task.QuestionID), "eval-")
 		if isPrimaryRetry && status == "success" && strings.TrimSpace(result.Answer) != "" {
-			if err := e.RunEvaluatorsForResults(task.RunID, nil, []models.RunResult{result}); err != nil {
-				// Keep retry flow resilient; evaluator automation must not fail the primary retry.
-				if !strings.Contains(strings.ToLower(err.Error()), "no evaluator agents available") {
-					log.Printf("[EVAL] Auto-run after retry failed for run %s, question %s: %v", task.RunID, task.QuestionID, err)
+			selectedEvaluatorIDs, selectErr := e.selectedEvaluatorIDsForRunID(task.RunID)
+			if selectErr != nil {
+				log.Printf("[EVAL] Failed to resolve selected evaluators for retry auto-run on run %s: %v", task.RunID, selectErr)
+			}
+			if len(selectedEvaluatorIDs) > 0 {
+				if err := e.RunEvaluatorsForResults(task.RunID, selectedEvaluatorIDs, []models.RunResult{result}); err != nil {
+					// Keep retry flow resilient; evaluator automation must not fail the primary retry.
+					if !strings.Contains(strings.ToLower(err.Error()), "no evaluator agents available") {
+						log.Printf("[EVAL] Auto-run after retry failed for run %s, question %s: %v", task.RunID, task.QuestionID, err)
+					}
 				}
 			}
 		}
@@ -490,19 +496,25 @@ func (e *Engine) checkRunCompletion(runID uuid.UUID) {
 			if err := e.db.Model(&models.RunResult{}).
 				Where("run_id = ? AND question_id LIKE ?", runID, "eval-%").
 				Count(&evalResultCount).Error; err == nil && evalResultCount == 0 {
-				previousTotalTasks := run.TotalTasks
-				if err := e.RunEvaluators(runID, nil); err != nil {
-					if !strings.Contains(strings.ToLower(err.Error()), "no evaluator agents available") {
-						log.Printf("[EVAL] Auto-run failed for run %s: %v", runID, err)
-					}
-				} else {
-					var refreshed models.Run
-					if refreshErr := e.db.First(&refreshed, "id = ?", runID).Error; refreshErr == nil {
-						if refreshed.TotalTasks > previousTotalTasks {
-							log.Printf("[EVAL] Auto-run queued for run %s (%d -> %d total tasks)", runID, previousTotalTasks, refreshed.TotalTasks)
-							return
+				selectedEvaluatorIDs, selectErr := e.selectedEvaluatorIDsForRun(run)
+				if selectErr != nil {
+					log.Printf("[EVAL] Failed to resolve selected evaluators for run %s: %v", runID, selectErr)
+				}
+				if len(selectedEvaluatorIDs) > 0 {
+					previousTotalTasks := run.TotalTasks
+					if err := e.RunEvaluators(runID, selectedEvaluatorIDs); err != nil {
+						if !strings.Contains(strings.ToLower(err.Error()), "no evaluator agents available") {
+							log.Printf("[EVAL] Auto-run failed for run %s: %v", runID, err)
 						}
-						run = refreshed
+					} else {
+						var refreshed models.Run
+						if refreshErr := e.db.First(&refreshed, "id = ?", runID).Error; refreshErr == nil {
+							if refreshed.TotalTasks > previousTotalTasks {
+								log.Printf("[EVAL] Auto-run queued for run %s (%d -> %d total tasks)", runID, previousTotalTasks, refreshed.TotalTasks)
+								return
+							}
+							run = refreshed
+						}
 					}
 				}
 			}
@@ -801,6 +813,105 @@ func parseQuestionSetMaps(data datatypes.JSON) (map[string]string, map[string]st
 	return originalQuestions, expectedAnswers
 }
 
+func validateAgentSetComposition(agents []models.Agent) error {
+	total := len(agents)
+	if total == 0 {
+		return fmt.Errorf("question set must include at least one primary agent")
+	}
+	if total > 2 {
+		return fmt.Errorf("question set can include at most 2 agents")
+	}
+
+	primaryCount := 0
+	evaluatorCount := 0
+	for _, agent := range agents {
+		if isEvaluatorAgent(agent) {
+			evaluatorCount++
+		} else {
+			primaryCount++
+		}
+	}
+
+	if evaluatorCount > 1 {
+		return fmt.Errorf("question set can include at most 1 evaluator agent")
+	}
+	if primaryCount == 0 {
+		return fmt.Errorf("question set must include at least one primary agent (evaluator-only sets are not allowed)")
+	}
+	if primaryCount > 2 {
+		return fmt.Errorf("question set can include at most 2 primary agents")
+	}
+	if evaluatorCount == 1 && primaryCount != 1 {
+		return fmt.Errorf("question set with evaluator must include exactly 1 primary agent")
+	}
+
+	return nil
+}
+
+func (e *Engine) loadEnabledQuestionSetAgents(questionSetID uuid.UUID) ([]models.Agent, error) {
+	if e.db == nil {
+		return nil, fmt.Errorf("database not configured")
+	}
+
+	var links []models.QuestionSetAgent
+	if err := e.db.Preload("Agent").
+		Where("question_set_id = ? AND enabled = true", questionSetID).
+		Order("position ASC").
+		Find(&links).Error; err != nil {
+		return nil, err
+	}
+
+	selected := make([]models.Agent, 0, len(links))
+	for _, link := range links {
+		if link.Agent.ID == uuid.Nil {
+			continue
+		}
+		agent := link.Agent
+		agent.Enabled = true
+		agent.Position = link.Position
+		if len(link.Config) > 0 {
+			agent.Config = link.Config
+		}
+		selected = append(selected, agent)
+	}
+
+	return selected, nil
+}
+
+func (e *Engine) selectedEvaluatorIDsForRun(run models.Run) ([]uuid.UUID, error) {
+	selectedAgents, err := e.loadEnabledQuestionSetAgents(run.QuestionSetID)
+	if err != nil {
+		return nil, err
+	}
+	if len(selectedAgents) == 0 {
+		return nil, nil
+	}
+	if err := validateAgentSetComposition(selectedAgents); err != nil {
+		return nil, err
+	}
+
+	ids := make([]uuid.UUID, 0, 1)
+	for _, agent := range selectedAgents {
+		if isEvaluatorAgent(agent) {
+			ids = append(ids, agent.ID)
+		}
+	}
+	return ids, nil
+}
+
+func (e *Engine) selectedEvaluatorIDsForRunID(runID uuid.UUID) ([]uuid.UUID, error) {
+	if e.db == nil {
+		return nil, fmt.Errorf("database not configured")
+	}
+
+	var run models.Run
+	if err := e.db.First(&run, "id = ?", runID).Error; err != nil {
+		return nil, err
+	}
+
+	return e.selectedEvaluatorIDsForRun(run)
+}
+
 func (e *Engine) queueEvaluatorTasksForResults(run models.Run, results []models.RunResult, selectedEvaluatorIDs []uuid.UUID) error {
 	if e.db == nil {
 		return fmt.Errorf("database not configured")
@@ -818,16 +929,17 @@ func (e *Engine) queueEvaluatorTasksForResults(run models.Run, results []models.
 			selectedSet[id] = struct{}{}
 		}
 	}
+	if len(selectedSet) == 0 {
+		return fmt.Errorf("no evaluator agents selected")
+	}
 
 	evaluators := make([]models.Agent, 0, len(evaluatorCandidates))
 	for _, candidate := range evaluatorCandidates {
 		if !isEvaluatorAgent(candidate) {
 			continue
 		}
-		if len(selectedSet) > 0 {
-			if _, ok := selectedSet[candidate.ID]; !ok {
-				continue
-			}
+		if _, ok := selectedSet[candidate.ID]; !ok {
+			continue
 		}
 		evaluators = append(evaluators, candidate)
 	}
@@ -1076,6 +1188,19 @@ func (e *Engine) StartRun(workspaceID uuid.UUID, questionSetID uuid.UUID, agentI
 
 	if len(agents) == 0 {
 		return nil, fmt.Errorf("no agents available")
+	}
+	if err := validateAgentSetComposition(agents); err != nil {
+		return nil, err
+	}
+
+	selectedSetAgents, err := e.loadEnabledQuestionSetAgents(questionSetID)
+	if err != nil {
+		return nil, err
+	}
+	if len(selectedSetAgents) > 0 {
+		if err := validateAgentSetComposition(selectedSetAgents); err != nil {
+			return nil, err
+		}
 	}
 
 	// Parse questions from question set
