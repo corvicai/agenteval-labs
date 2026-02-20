@@ -25,6 +25,7 @@ func TestHub_Registration(t *testing.T) {
 			ID:          uuid.New(),
 			WorkspaceID: uuid.New(),
 			Send:        make(chan []byte, 256),
+			Done:        make(chan struct{}),
 		}
 
 		hub.Register(conn)
@@ -52,9 +53,9 @@ func TestHub_BroadcastToWorkspace(t *testing.T) {
 	workspaceA := uuid.New()
 	workspaceB := uuid.New()
 
-	connA1 := &Connection{ID: uuid.New(), WorkspaceID: workspaceA, Send: make(chan []byte, 256)}
-	connA2 := &Connection{ID: uuid.New(), WorkspaceID: workspaceA, Send: make(chan []byte, 256)}
-	connB := &Connection{ID: uuid.New(), WorkspaceID: workspaceB, Send: make(chan []byte, 256)}
+	connA1 := &Connection{ID: uuid.New(), WorkspaceID: workspaceA, Send: make(chan []byte, 256), Done: make(chan struct{})}
+	connA2 := &Connection{ID: uuid.New(), WorkspaceID: workspaceA, Send: make(chan []byte, 256), Done: make(chan struct{})}
+	connB := &Connection{ID: uuid.New(), WorkspaceID: workspaceB, Send: make(chan []byte, 256), Done: make(chan struct{})}
 
 	hub.Register(connA1)
 	hub.Register(connA2)
@@ -95,7 +96,7 @@ func TestHub_SendEvent(t *testing.T) {
 	go hub.Run()
 
 	workspaceID := uuid.New()
-	conn := &Connection{ID: uuid.New(), WorkspaceID: workspaceID, Send: make(chan []byte, 256)}
+	conn := &Connection{ID: uuid.New(), WorkspaceID: workspaceID, Send: make(chan []byte, 256), Done: make(chan struct{})}
 	hub.Register(conn)
 	time.Sleep(50 * time.Millisecond)
 
@@ -153,6 +154,7 @@ func TestWebSocket_Integration(t *testing.T) {
 			WorkspaceID: workspaceID,
 			Conn:        ws,
 			Send:        make(chan []byte, 256),
+			Done:        make(chan struct{}),
 		}
 
 		hub.Register(conn)

@@ -115,6 +115,7 @@ func sendWSRequest(t *testing.T, token string, msgType string, payload any) *mod
 	conn := &Connection{
 		ID:   uuid.New(),
 		Send: make(chan []byte, 100),
+		Done: make(chan struct{}),
 	}
 
 	// Parse token to populate conn (simulating auth middleware/handshake)
