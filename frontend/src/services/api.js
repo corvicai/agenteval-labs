@@ -1,5 +1,8 @@
 const API_BASE = '/api'
 import { logoutFirebase } from './firebase.js'
+import { config } from '../config.js'
+
+const useLegacyAuthHeader = String(config.ENABLE_LEGACY_AUTH || '').toLowerCase() === 'true'
 
 // Helper for fetch with error handling
 export async function request(url, options = {}) {
@@ -9,7 +12,7 @@ export async function request(url, options = {}) {
         ...options.headers
     }
 
-    if (token) {
+    if (token && useLegacyAuthHeader) {
         headers['Authorization'] = `Bearer ${token}`
     }
 
@@ -91,17 +94,9 @@ export async function login(email, password, organizationId = null) {
 }
 
 export async function acceptTerms() {
-    const response = await fetch(`${API_BASE}/auth/accept-terms`, {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
+    return await request('/auth/accept-terms', {
+        method: 'POST'
     })
-    if (!response.ok) {
-        const err = await response.json()
-        throw new Error(err.error || 'Failed to accept terms')
-    }
-    return await response.json()
 }
 
 export async function joinOrganization(inviteCode) {

@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -15,6 +16,55 @@ import (
 
 	"benchmarking-platform/models"
 )
+
+type blockingRunner struct {
+	startedCh chan struct{}
+	releaseCh chan struct{}
+
+	mu      sync.Mutex
+	started int
+}
+
+func newBlockingRunner() *blockingRunner {
+	return &blockingRunner{
+		startedCh: make(chan struct{}, 8),
+		releaseCh: make(chan struct{}),
+	}
+}
+
+func (r *blockingRunner) Execute(ctx context.Context, req ExecutionRequest) (ExecutionResponse, error) {
+	r.mu.Lock()
+	r.started++
+	r.mu.Unlock()
+
+	select {
+	case r.startedCh <- struct{}{}:
+	default:
+	}
+
+	select {
+	case <-r.releaseCh:
+		return ExecutionResponse{
+			Success: true,
+			Answer:  "ok",
+		}, nil
+	case <-ctx.Done():
+		return ExecutionResponse{
+			Success: false,
+			Error:   ctx.Err().Error(),
+		}, ctx.Err()
+	}
+}
+
+func (r *blockingRunner) Health() error {
+	return nil
+}
+
+func (r *blockingRunner) StartedCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.started
+}
 
 func setupOrchestratorTestDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -191,6 +241,82 @@ func TestEngine_CancelRun(t *testing.T) {
 		db.First(&run, "id = ?", runID)
 		assert.Equal(t, "cancelled", run.Status)
 	})
+}
+
+func TestEngine_CancelRun_SkipsTasksAlreadyDequeuedButWaitingSemaphore(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID := createTestRun(db)
+
+	engine := NewEngine(db, 3)
+	mockRunner := newBlockingRunner()
+	engine.runner = mockRunner
+	engine.Start()
+
+	sharedAgentID := uuid.New()
+
+	for i := 0; i < 3; i++ {
+		task := &Task{
+			RunID:          runID,
+			WorkspaceID:    workspaceID,
+			AgentID:        sharedAgentID,
+			QuestionID:     fmt.Sprintf("q-block-%d", i),
+			QuestionText:   "Question",
+			ProviderType:   "openai",
+			AgentConfig:    mockOpenAIConfig(),
+			MaxConcurrency: 1, // Forces additional workers to block on semaphore.
+		}
+		engine.QueueTask(task)
+	}
+
+	select {
+	case <-mockRunner.startedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first task did not start in time")
+	}
+
+	engine.CancelRun(runID)
+	close(mockRunner.releaseCh)
+
+	assert.Eventually(t, func() bool {
+		return mockRunner.StartedCount() == 1
+	}, 2*time.Second, 50*time.Millisecond, "expected only the already-running task to execute")
+
+	var resultCount int64
+	require.NoError(t, db.Model(&models.RunResult{}).Where("run_id = ?", runID).Count(&resultCount).Error)
+	assert.LessOrEqual(t, resultCount, int64(1))
+}
+
+func TestEngine_CancelRun_EmitsRunFinishedCancelled(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID := createTestRun(db)
+
+	engine := NewEngine(db, 1)
+
+	eventCh := make(chan map[string]any, 1)
+	engine.SetEventCallback(func(wsID uuid.UUID, eventType string, corrID string, payload any) {
+		if eventType != "EVT_RUN_FINISHED" {
+			return
+		}
+		if wsID != workspaceID {
+			return
+		}
+		if data, ok := payload.(map[string]any); ok {
+			select {
+			case eventCh <- data:
+			default:
+			}
+		}
+	})
+
+	engine.CancelRun(runID)
+
+	select {
+	case payload := <-eventCh:
+		assert.Equal(t, runID.String(), payload["run_id"])
+		assert.Equal(t, "cancelled", payload["status"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected EVT_RUN_FINISHED event for cancelled run")
+	}
 }
 
 func TestEngine_EventCallback(t *testing.T) {

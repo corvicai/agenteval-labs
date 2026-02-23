@@ -1,11 +1,9 @@
 # Build stage
 FROM node:20-alpine AS builder
+ARG VITE_GIT_COMMIT=unknown
+ENV VITE_GIT_COMMIT=$VITE_GIT_COMMIT
 
 WORKDIR /app
-
-# Copy package files
-COPY package*.json ./
-RUN npm install
 
 # Copy package files
 COPY package*.json ./
@@ -19,6 +17,8 @@ RUN npm run build
 
 # Production stage
 FROM nginx:alpine
+ARG VITE_GIT_COMMIT=unknown
+ENV VITE_GIT_COMMIT=$VITE_GIT_COMMIT
 
 # Install envsubst (comes with gettext)
 RUN apk add --no-cache gettext

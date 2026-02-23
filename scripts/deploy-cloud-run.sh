@@ -53,6 +53,14 @@ echo "🛠️ Building images with Cloud Build..."
 # Common substitutions
 IMAGE_REPO_BASE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}"
 RELEASE_TAG="latest"
+FRONTEND_GIT_COMMIT="${GIT_COMMIT:-}"
+if [ -z "$FRONTEND_GIT_COMMIT" ]; then
+    FRONTEND_GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || true)
+fi
+if [ -z "$FRONTEND_GIT_COMMIT" ]; then
+    FRONTEND_GIT_COMMIT="unknown"
+fi
+echo "Frontend commit version: $FRONTEND_GIT_COMMIT"
 
 gcloud builds submit --config infra/agenteval-api/cloudbuild.yaml \
     --substitutions="_IMAGE_REPO_BASE=$IMAGE_REPO_BASE,_SERVICE_NAME=agenteval-api,_RELEASE_TAG=$RELEASE_TAG" . &
@@ -87,6 +95,7 @@ gcloud run deploy "$APP_NAME-frontend" \
   --region "$REGION" \
   --allow-unauthenticated \
   --set-env-vars="API_URL=$GO_API_URL,\
+VITE_GIT_COMMIT=$FRONTEND_GIT_COMMIT,\
 VITE_FIREBASE_API_KEY=$VITE_FIREBASE_API_KEY,\
 VITE_FIREBASE_AUTH_DOMAIN=$VITE_FIREBASE_AUTH_DOMAIN,\
 VITE_FIREBASE_PROJECT_ID=$VITE_FIREBASE_PROJECT_ID,\

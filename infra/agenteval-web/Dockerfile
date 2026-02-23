@@ -1,5 +1,7 @@
 # Build stage (frontend)
 FROM node:20-alpine AS web_builder
+ARG VITE_GIT_COMMIT=unknown
+ENV VITE_GIT_COMMIT=$VITE_GIT_COMMIT
 
 WORKDIR /app
 
@@ -15,6 +17,8 @@ RUN npm run build
 
 # Production stage
 FROM nginx:alpine
+ARG VITE_GIT_COMMIT=unknown
+ENV VITE_GIT_COMMIT=$VITE_GIT_COMMIT
 
 # Install envsubst (comes with gettext)
 RUN apk add --no-cache gettext ca-certificates
