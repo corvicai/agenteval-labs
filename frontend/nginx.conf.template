@@ -97,7 +97,7 @@ server {
     # firebaseapp.com domain so Firebase can handle them correctly.
     # VITE_FIREBASE_PROJECT_ID must be set as a runtime env var (Cloud Run service).
     location ~ ^/__/ {
-        set $firebase_host "${VITE_FIREBASE_PROJECT_ID}.firebaseapp.com";
+        set $firebase_host "${FIREBASE_AUTH_HOST}";
         proxy_pass https://$firebase_host$request_uri;
         proxy_ssl_server_name on;
         proxy_set_header Host $firebase_host;

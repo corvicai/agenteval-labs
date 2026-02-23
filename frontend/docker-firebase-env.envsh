@@ -1,0 +1,9 @@
+#!/bin/sh
+# Sourced by the nginx Docker entrypoint BEFORE 20-envsubst-on-templates.sh.
+# Derives FIREBASE_AUTH_HOST from VITE_FIREBASE_PROJECT_ID so the nginx template
+# can proxy /__/auth/ and /__/firebase/ to Firebase's servers (custom authDomain support).
+if [ -n "${VITE_FIREBASE_PROJECT_ID:-}" ]; then
+    FIREBASE_AUTH_HOST="${VITE_FIREBASE_PROJECT_ID}.firebaseapp.com"
+    export FIREBASE_AUTH_HOST
+    echo "19-firebase-env.envsh: FIREBASE_AUTH_HOST=${FIREBASE_AUTH_HOST}"
+fi

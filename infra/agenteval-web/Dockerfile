@@ -35,6 +35,13 @@ RUN chmod +x /docker-entrypoint.d/99-env-config.sh
 
 # Default environment variables
 ENV PORT=8080
+# Fallback Firebase auth host; overridden at runtime by 19-firebase-env.envsh
+# from VITE_FIREBASE_PROJECT_ID. Must be non-empty so envsubst always substitutes it.
+ENV FIREBASE_AUTH_HOST=placeholder.firebaseapp.com
+
+# Sourced before 20-envsubst-on-templates.sh to export FIREBASE_AUTH_HOST
+COPY frontend/docker-firebase-env.envsh /docker-entrypoint.d/19-firebase-env.envsh
+RUN chmod +x /docker-entrypoint.d/19-firebase-env.envsh
 
 EXPOSE 8080
 
