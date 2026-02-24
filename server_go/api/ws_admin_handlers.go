@@ -1174,10 +1174,7 @@ func (h *Hub) handleAdminForceLogout(c *Connection, env models.Envelope) {
 		defer h.mu.RUnlock()
 		for _, conn := range h.connections {
 			if conn.IsAuthenticated && conn.UserID != c.UserID {
-				select {
-				case conn.Send <- msg:
-				default:
-				}
+				_ = conn.safeSend(msg)
 			}
 		}
 	}

@@ -86,14 +86,14 @@ type AuthOrgResponse struct {
 }
 
 type UserResponse struct {
-	ID               string             `json:"id"`
-	Name             string             `json:"name"`
-	Email            string             `json:"email"`
-	IsAdmin          bool               `json:"is_admin"`
-	ImpersonatorID   string             `json:"impersonator_id,omitempty"`
-	OrganizationID   string             `json:"organization_id,omitempty"`
-	Workspaces       []models.Workspace `json:"workspaces,omitempty"`
-	CreatedAt        time.Time          `json:"created_at"`
+	ID             string             `json:"id"`
+	Name           string             `json:"name"`
+	Email          string             `json:"email"`
+	IsAdmin        bool               `json:"is_admin"`
+	ImpersonatorID string             `json:"impersonator_id,omitempty"`
+	OrganizationID string             `json:"organization_id,omitempty"`
+	Workspaces     []models.Workspace `json:"workspaces,omitempty"`
+	CreatedAt      time.Time          `json:"created_at"`
 }
 
 // Register creates a new user and their default workspace (no organizations)
@@ -306,9 +306,9 @@ func (h *AuthHandler) Login(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, AuthResponse{
 		Token:         token,
-		ExpiresAt:    time.Now().UTC().Add(24 * time.Hour),
-		User:         h.mapUserToResponse(user),
-		Workspace:    &workspace,
+		ExpiresAt:     time.Now().UTC().Add(24 * time.Hour),
+		User:          h.mapUserToResponse(user),
+		Workspace:     &workspace,
 		RequiresTerms: user.TermsAcceptedAt == nil,
 	})
 }

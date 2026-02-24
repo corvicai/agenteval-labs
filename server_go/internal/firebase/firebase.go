@@ -44,7 +44,7 @@ func InitFirebase() (*Client, error) {
 		var cfg *firebase.Config
 		firebaseProjectID := os.Getenv("FIREBASE_PROJECT_ID")
 		if firebaseProjectID != "" {
-			cfg = &firebase.Config {
+			cfg = &firebase.Config{
 				ProjectID: firebaseProjectID,
 			}
 		}

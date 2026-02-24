@@ -315,10 +315,8 @@ func (h *Hub) BroadcastToWorkspace(workspaceID uuid.UUID, msg []byte) {
 	defer h.mu.RUnlock()
 	for _, conn := range h.connections {
 		if conn.WorkspaceID == workspaceID {
-			select {
-			case conn.Send <- msg:
-			default:
-				log.Printf("[HUB] Failed to send to connection %s, buffer full", conn.ID)
+			if err := conn.safeSend(msg); err != nil {
+				log.Printf("[HUB] Failed to send to connection %s: %v", conn.ID, err)
 			}
 		}
 	}
@@ -329,10 +327,8 @@ func (h *Hub) BroadcastToUser(userID uuid.UUID, msg []byte) {
 	defer h.mu.RUnlock()
 	for _, conn := range h.connections {
 		if conn.UserID == userID {
-			select {
-			case conn.Send <- msg:
-			default:
-				log.Printf("[HUB] Failed to send to connection %s, buffer full", conn.ID)
+			if err := conn.safeSend(msg); err != nil {
+				log.Printf("[HUB] Failed to send to connection %s: %v", conn.ID, err)
 			}
 		}
 	}
@@ -342,10 +338,8 @@ func (h *Hub) BroadcastToAll(msg []byte) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for _, conn := range h.connections {
-		select {
-		case conn.Send <- msg:
-		default:
-			log.Printf("[HUB] Failed to send to connection %s, buffer full", conn.ID)
+		if err := conn.safeSend(msg); err != nil {
+			log.Printf("[HUB] Failed to send to connection %s: %v", conn.ID, err)
 		}
 	}
 }
@@ -423,10 +417,7 @@ func (h *Hub) broadcastOnlineStatusToAdmins() {
 		// Let's just broadcast to ALL authenticated users. It's not super sensitive data.
 
 		if conn.IsAuthenticated {
-			select {
-			case conn.Send <- msgBytes:
-			default:
-			}
+			_ = conn.safeSend(msgBytes)
 		}
 	}
 }
@@ -517,6 +508,31 @@ func (c *Connection) ReadPump(hub *Hub, handler func(*Connection, models.Envelop
 	}
 }
 
+// safeSend writes a message to the Send channel and recovers from any panic
+// caused by writing to a closed channel. This avoids races with Hub.Unregister.
+func (c *Connection) safeSend(msg []byte) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.New("connection closed (panic recovered)")
+		}
+	}()
+
+	select {
+	case <-c.Done:
+		return errors.New("connection closed")
+	default:
+	}
+
+	select {
+	case c.Send <- msg:
+		return nil
+	case <-c.Done:
+		return errors.New("connection closed")
+	default:
+		return errors.New("buffer full")
+	}
+}
+
 // SendResponse sends a DATA_* response matched by correlationID
 func (c *Connection) SendResponse(msgType string, correlationID string, payload any) error {
 	payloadBytes, err := json.Marshal(payload)
@@ -535,23 +551,7 @@ func (c *Connection) SendResponse(msgType string, correlationID string, payload 
 		return err
 	}
 
-	// Guard against sending on a closed channel (race between async handler goroutines
-	// and connection lifecycle: the hub may close conn.Send while a handler is still
-	// processing a slow DB query).
-	select {
-	case <-c.Done:
-		return errors.New("connection closed")
-	default:
-	}
-
-	select {
-	case c.Send <- msg:
-		return nil
-	case <-c.Done:
-		return errors.New("connection closed")
-	default:
-		return errors.New("buffer full")
-	}
+	return c.safeSend(msg)
 }
 
 func (c *Connection) SendError(correlationID string, errMsg string) {
