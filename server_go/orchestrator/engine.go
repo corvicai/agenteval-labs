@@ -123,13 +123,17 @@ func (e *Engine) Start() {
 	log.Printf("[ENGINE] Started %d workers", e.workerCount)
 }
 
+func (e *Engine) isRunCancelled(runID uuid.UUID) bool {
+	e.mu.RLock()
+	cancelled := e.cancelledRuns[runID]
+	e.mu.RUnlock()
+	return cancelled
+}
+
 func (e *Engine) worker(id int) {
 	for task := range e.taskQueue {
-		// Check if run was cancelled
-		e.mu.RLock()
-		cancelled := e.cancelledRuns[task.RunID]
-		e.mu.RUnlock()
-		if cancelled {
+		// Skip tasks from cancelled runs before any semaphore wait.
+		if e.isRunCancelled(task.RunID) {
 			log.Printf("[WORKER-%d] Skipping cancelled task for run %s", id, task.RunID)
 			continue
 		}
@@ -140,8 +144,21 @@ func (e *Engine) worker(id int) {
 		// Acquire semaphore (blocks if agent at max concurrency)
 		sem <- struct{}{}
 
+		// Run might have been cancelled while this worker was waiting on semaphore.
+		if e.isRunCancelled(task.RunID) {
+			log.Printf("[WORKER-%d] Skipping cancelled task after semaphore wait for run %s", id, task.RunID)
+			<-sem
+			continue
+		}
+
 		// Micro delay to avoid burst requests
 		time.Sleep(100 * time.Millisecond)
+
+		if e.isRunCancelled(task.RunID) {
+			log.Printf("[WORKER-%d] Skipping cancelled task before execution for run %s", id, task.RunID)
+			<-sem
+			continue
+		}
 
 		e.executeTask(task)
 
@@ -231,14 +248,36 @@ func (e *Engine) CancelRun(runID uuid.UUID) {
 	e.cancelRunContext(runID)
 	e.markRunRetriesCancelled(runID)
 
+	var run models.Run
+	var completedCount int64
+	emitRunFinished := false
+
 	// Update run status in DB
 	if e.db != nil {
+		if err := e.db.First(&run, "id = ?", runID).Error; err == nil {
+			emitRunFinished = run.WorkspaceID != uuid.Nil
+			_ = e.db.Model(&models.RunResult{}).Where("run_id = ?", runID).Count(&completedCount).Error
+		}
 		e.db.Model(&models.Run{}).Where("id = ?", runID).Update("status", "cancelled")
 	}
 	log.Printf("[ENGINE] Run %s cancelled", runID)
+
+	if emitRunFinished && e.eventCallback != nil {
+		e.eventCallback(run.WorkspaceID, "EVT_RUN_FINISHED", runID.String(), map[string]any{
+			"run_id":      runID.String(),
+			"total_tasks": run.TotalTasks,
+			"completed":   completedCount,
+			"status":      "cancelled",
+		})
+	}
 }
 
 func (e *Engine) executeTask(task *Task) {
+	if e.isRunCancelled(task.RunID) {
+		log.Printf("[ENGINE] Skipping execution for cancelled run %s (agent=%s question=%s)", task.RunID, task.AgentID, task.QuestionID)
+		return
+	}
+
 	log.Printf("[ENGINE] Executing task: Run %s, Agent %s, Question %s", task.RunID, task.AgentID, task.QuestionID)
 
 	// Get workspace ID for event broadcasting

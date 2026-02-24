@@ -3,14 +3,35 @@ import vue from '@vitejs/plugin-vue'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { execSync } from 'node:child_process'
 
 // Prefer repo root .env when present; fall back to frontend/.env in container builds.
 const configDir = fileURLToPath(new URL('.', import.meta.url))
 const parentDir = path.resolve(configDir, '..')
 const envDir = fs.existsSync(path.join(parentDir, '.env')) ? parentDir : configDir
 
+function resolveGitCommitHash() {
+    const explicitCommit =
+        process.env.VITE_GIT_COMMIT?.trim() || process.env.GIT_COMMIT?.trim()
+    if (explicitCommit) {
+        return explicitCommit
+    }
+
+    try {
+        return execSync('git rev-parse --short HEAD', {
+            cwd: parentDir,
+            stdio: ['ignore', 'pipe', 'ignore']
+        })
+            .toString()
+            .trim()
+    } catch {
+        return 'unknown'
+    }
+}
+
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, envDir, '')
+    env.VITE_GIT_COMMIT = env.VITE_GIT_COMMIT || resolveGitCommitHash()
 
     // Explicitly expose VITE_ variables to the client
     // This is a robust fallback if auto-detection fails
