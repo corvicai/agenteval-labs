@@ -1,13 +1,5 @@
 ---
-steps:
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    script: |
-      #!/usr/bin/env bash
-      set -eu -o pipefail
-      RELEASE_TAG=$(cat infra/releng/release-tag.txt)
-      
-      gcloud run deploy agenteval-web-prod --image ${_IMAGE_REPO_BASE}/agenteval-web:release-${RELEASE_TAG} --region ${_DEPLOY_REGION} 
-
+steps: []
 options:
   automapSubstitutions: true
   substitutionOption: ALLOW_LOOSE

@@ -1,31 +1,12 @@
 steps:
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     script: bash infra/releng/tag-release-images-gcp.sh $(cat infra/releng/release-tag.txt) agenteval-api agenteval-web
-  - name: gcr.io/cloud-builders/docker
-    script: |
-      # Wait for image to be built by infra/*/cloudbuild.yaml pipelines
-      while true; do
-        success=0
-        for service in agenteval-api agenteval-web; do
-          if docker pull ${_IMAGE_REPO_BASE}/${service}:${COMMIT_SHA}; then
-            success=$((success + 1))
-          fi
-        done
-
-        if [ "$success" -ge 2 ]; then
-          break
-        fi
-        echo "Waiting for images to be built (success: $success/2)..."
-        sleep 10
-      done
-    timeout: 300s
-
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     script: |
       #!/usr/bin/env bash
-      set -eu -o pipefail
-
-      gcloud run deploy agenteval-web-dev --image ${_IMAGE_REPO_BASE}/agenteval-web:${COMMIT_SHA} --region ${_DEPLOY_REGION} 
+      TOKEN=$(gcloud auth print-identity-token --audiences ${_TOKEN_AUDIENCE})
+      curl --fail-with-body --no-progress-meter -XPOST -H "Authorization: Bearer $TOKEN" $_TOKEN_AUDIENCE/update/${COMMIT_SHA}
+    env: [_TOKEN_AUDIENCE=https://update-agenteval-app-dev-main-n6lncvk3ma-uc.a.run.app]
 options:
   automapSubstitutions: true
   substitutionOption: ALLOW_LOOSE
