@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -20,6 +22,7 @@ import (
 	"benchmarking-platform/api/handlers"
 	"benchmarking-platform/internal/db"
 	"benchmarking-platform/internal/firebase"
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/middleware"
 	"benchmarking-platform/models"
 	"benchmarking-platform/orchestrator"
@@ -109,6 +112,8 @@ var upgrader = websocket.Upgrader{
 }
 
 func main() {
+	logger.Init()
+
 	e := echo.New()
 
 	// Middleware
@@ -225,6 +230,23 @@ func main() {
 	})
 	engine.Start()
 
+	// Periodic heartbeat — always visible in every environment so operators
+	// can confirm the service is alive.  Reports goroutine count and memory
+	// so basic health trends are observable in Cloud Run Logs.
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			var mem runtime.MemStats
+			runtime.ReadMemStats(&mem)
+			logger.Health("System OK — goroutines=%d heap_alloc=%dMB heap_sys=%dMB",
+				runtime.NumGoroutine(),
+				mem.HeapAlloc/1024/1024,
+				mem.HeapSys/1024/1024,
+			)
+		}
+	}()
+
 	// Initialize handlers with WebSocket Hub support
 
 	// Secret is now stable across restarts
@@ -290,8 +312,7 @@ func main() {
 		forwardedHost := req.Header.Get("X-Forwarded-Host")
 		forwardedProto := req.Header.Get("X-Forwarded-Proto")
 		subprotocolHeader := req.Header.Get("Sec-WebSocket-Protocol")
-		log.Printf(
-			"[WS] Upgrade attempt host=%q origin=%q x-forwarded-host=%q x-forwarded-proto=%q subprotocol-header=%q workspace_id=%q",
+		logger.Debug("[WS] Upgrade attempt host=%q origin=%q x-forwarded-host=%q x-forwarded-proto=%q subprotocol-header=%q workspace_id=%q",
 			req.Host,
 			origin,
 			forwardedHost,
@@ -331,8 +352,7 @@ func main() {
 
 		ws, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
 		if err != nil {
-			log.Printf(
-				"[WS] Upgrade failed host=%q origin=%q x-forwarded-host=%q err=%v",
+			logger.Error("[WS] Upgrade failed host=%q origin=%q x-forwarded-host=%q err=%v",
 				req.Host,
 				origin,
 				forwardedHost,
@@ -340,11 +360,7 @@ func main() {
 			)
 			return err
 		}
-		if ws.Subprotocol() != "" {
-			log.Printf("[WS] Subprotocol selected: %s", ws.Subprotocol())
-		} else {
-			log.Printf("[WS] Subprotocol selected: <none>")
-		}
+		logger.Debug("[WS] Subprotocol selected: %q", ws.Subprotocol())
 
 		workspaceIDStr := c.QueryParam("workspace_id")
 		if workspaceIDStr != "" {
@@ -380,10 +396,10 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	log.Printf("=======================================================")
-	log.Printf("BENCHMARKING PLATFORM - Go Server")
-	log.Printf("Starting on port %s", port)
-	log.Printf("Runner Mode: go (in-process)")
-	log.Printf("=======================================================")
+	logger.Info("=======================================================")
+	logger.Info("BENCHMARKING PLATFORM - Go Server")
+	logger.Info("Starting on port %s", port)
+	logger.Info("Runner Mode: go (in-process)")
+	logger.Info("=======================================================")
 	e.Logger.Fatal(e.Start(":" + port))
 }

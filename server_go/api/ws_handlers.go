@@ -1,14 +1,14 @@
 package api
 
 import (
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/models"
 	"encoding/json"
-	"log"
 )
 
 // HandleWSMessage routes incoming messages to handlers
 func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
-	log.Printf("[WS] Handling message: %s (CorrelationID: %s)", env.Type, env.CorrelationID)
+	logger.Debug("[WS] Handling message: %s (CorrelationID: %s)", env.Type, env.CorrelationID)
 
 	switch env.Type {
 	case ReqGetManagerStats:
@@ -189,13 +189,13 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 			case ReqAuth, ReqCheckAdminExists, ReqWsBootstrapAdmin, ReqWsLogin, ReqWsRegister:
 				// Allow these
 			default:
-				log.Printf("[WS] Rejected unauthenticated message: %s", env.Type)
+				logger.Warn("[WS] Rejected unauthenticated message: %s", env.Type)
 				c.SendError(env.CorrelationID, "authentication required")
 				return
 			}
 		}
 
-		log.Printf("[WS] Unknown message type: %s", env.Type)
+		logger.Warn("[WS] Unknown message type: %s", env.Type)
 		c.SendError(env.CorrelationID, "unknown message type")
 	}
 }

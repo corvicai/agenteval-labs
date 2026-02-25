@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"errors"
-	"log"
 	"math/rand"
 	"os"
 	"strconv"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"benchmarking-platform/internal/firebase"
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/service"
 	"benchmarking-platform/models"
 	"benchmarking-platform/orchestrator"
@@ -279,7 +279,7 @@ func (h *Hub) Run() {
 			h.mu.Lock()
 			h.connections[conn.ID] = conn
 			h.mu.Unlock()
-			log.Printf("[HUB] Connection registered: %s (workspace: %s)", conn.ID, conn.WorkspaceID)
+			logger.Debug("[HUB] Connection registered: %s (workspace: %s)", conn.ID, conn.WorkspaceID)
 
 			// Broadcast online status update (async to not block)
 			go h.broadcastOnlineStatusToAdmins()
@@ -294,7 +294,7 @@ func (h *Hub) Run() {
 				})
 			}
 			h.mu.Unlock()
-			log.Printf("[HUB] Connection unregistered: %s", conn.ID)
+			logger.Debug("[HUB] Connection unregistered: %s", conn.ID)
 
 			// Broadcast online status update
 			go h.broadcastOnlineStatusToAdmins()
@@ -316,7 +316,7 @@ func (h *Hub) BroadcastToWorkspace(workspaceID uuid.UUID, msg []byte) {
 	for _, conn := range h.connections {
 		if conn.WorkspaceID == workspaceID {
 			if err := conn.safeSend(msg); err != nil {
-				log.Printf("[HUB] Failed to send to connection %s: %v", conn.ID, err)
+				logger.Warn("[HUB] Failed to send to connection %s: %v", conn.ID, err)
 			}
 		}
 	}
@@ -328,7 +328,7 @@ func (h *Hub) BroadcastToUser(userID uuid.UUID, msg []byte) {
 	for _, conn := range h.connections {
 		if conn.UserID == userID {
 			if err := conn.safeSend(msg); err != nil {
-				log.Printf("[HUB] Failed to send to connection %s: %v", conn.ID, err)
+				logger.Warn("[HUB] Failed to send to connection %s: %v", conn.ID, err)
 			}
 		}
 	}
@@ -339,7 +339,7 @@ func (h *Hub) BroadcastToAll(msg []byte) {
 	defer h.mu.RUnlock()
 	for _, conn := range h.connections {
 		if err := conn.safeSend(msg); err != nil {
-			log.Printf("[HUB] Failed to send to connection %s: %v", conn.ID, err)
+			logger.Warn("[HUB] Failed to send to connection %s: %v", conn.ID, err)
 		}
 	}
 }
@@ -476,7 +476,7 @@ func (c *Connection) WritePump() {
 func (c *Connection) ReadPump(hub *Hub, handler func(*Connection, models.Envelope)) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[WS] Panic in ReadPump for %s: %v", c.ID, r)
+			logger.Error("[WS] Panic in ReadPump for %s: %v", c.ID, r)
 		}
 		hub.Unregister(c)
 		c.Conn.Close()
@@ -490,14 +490,14 @@ func (c *Connection) ReadPump(hub *Hub, handler func(*Connection, models.Envelop
 		_, message, err := c.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("[WS] Read error for %s: %v", c.ID, err)
+				logger.Warn("[WS] Read error for %s: %v", c.ID, err)
 			}
 			break
 		}
 
 		var env models.Envelope
 		if err := json.Unmarshal(message, &env); err != nil {
-			log.Printf("[WS] Invalid message format from %s: %v", c.ID, err)
+			logger.Warn("[WS] Invalid message format from %s: %v", c.ID, err)
 			continue
 		}
 
@@ -581,8 +581,7 @@ func (c *Connection) SendErrorWithDetails(correlationID string, errMsg string, d
 
 	// Always emit server-side context so Cloud Run logs show root causes even when
 	// payload details are suppressed for clients.
-	log.Printf(
-		"[WS][ERROR] correlation_id=%s conn_id=%s user_id=%s workspace_id=%s message=%q details=%v",
+	logger.Error("[WS][ERROR] correlation_id=%s conn_id=%s user_id=%s workspace_id=%s message=%q details=%v",
 		correlationID,
 		c.ID,
 		c.UserID,
