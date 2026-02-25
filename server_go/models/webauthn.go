@@ -1,7 +1,7 @@
 package models
 
 import (
-	"log"
+	"benchmarking-platform/internal/logger"
 
 	"github.com/go-webauthn/webauthn/webauthn"
 )
@@ -31,7 +31,7 @@ func (u User) WebAuthnCredentials() []webauthn.Credential {
 	creds := make([]webauthn.Credential, len(u.Passkeys))
 	for i, pk := range u.Passkeys {
 		creds[i] = pk.ToWebAuthnCredential()
-		log.Printf("[WebAuthn] Loading stored key %s: BE=%v, BS=%v, SignCount=%d",
+		logger.Debug("[WebAuthn] Loading stored key %s: BE=%v, BS=%v, SignCount=%d",
 			pk.ID, pk.BackupEligible, pk.BackupState, pk.SignCount)
 	}
 	return creds

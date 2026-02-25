@@ -3,9 +3,9 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"time"
 
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/middleware"
 	"benchmarking-platform/models"
 
@@ -107,7 +107,7 @@ func (h *Hub) handleWsLogin(c *Connection, env models.Envelope) {
 			CreatedAt:      time.Now().UTC(),
 		}
 		if err := h.db.Create(&logEntry).Error; err != nil {
-			log.Printf("[LOGIN_LOG] ERROR: Failed to create log entry: %v", err)
+			logger.Error("[LOGIN_LOG] Failed to create log entry: %v", err)
 		}
 	}
 

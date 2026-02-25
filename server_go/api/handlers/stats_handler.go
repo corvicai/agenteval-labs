@@ -2,9 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"time"
+
+	"benchmarking-platform/internal/logger"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -178,7 +179,7 @@ func (h *StatsHandler) getCachedStats(c echo.Context, scope string, scopeID *uui
 func (h *StatsHandler) computeStats(scope string, scopeID *uuid.UUID, c echo.Context) (*AggregatedStats, error) {
 	var stats AggregatedStats
 
-	log.Printf("[Stats] Computing fresh stats for scope: %s, ID: %v", scope, scopeID)
+	logger.Info("[Stats] Computing fresh stats for scope: %s, ID: %v", scope, scopeID)
 
 	// Define base query for results based on scope
 	baseResultQuery := h.db.Model(&models.RunResult{})
@@ -304,13 +305,13 @@ func (h *StatsHandler) computeStats(scope string, scopeID *uuid.UUID, c echo.Con
 		Group("run_results.agent_id").
 		Scan(&agentRows)
 
-	log.Printf("[Stats] Found %d agent rows for scope %s", len(agentRows), scope)
+	logger.Debug("[Stats] Found %d agent rows for scope %s", len(agentRows), scope)
 
 	for _, row := range agentRows {
 		var agent models.Agent
 		// Use First instead of FirstOrCreate to ensure we only get existing agents
 		if err := h.db.First(&agent, "id = ?", row.AgentID).Error; err != nil {
-			log.Printf("[Stats] Warning: Agent %v not found in DB", row.AgentID)
+			logger.Warn("[Stats] Agent %v not found in DB", row.AgentID)
 			continue
 		}
 
@@ -352,7 +353,7 @@ func (h *StatsHandler) computeStats(scope string, scopeID *uuid.UUID, c echo.Con
 		stats.Agents = append(stats.Agents, ap)
 	}
 
-	log.Printf("[Stats] Computation complete: Runs=%d, Results=%d, Agents=%d", stats.TotalRuns, stats.TotalResults, len(stats.Agents))
+	logger.Info("[Stats] Computation complete: Runs=%d, Results=%d, Agents=%d", stats.TotalRuns, stats.TotalResults, len(stats.Agents))
 	return &stats, nil
 }
 

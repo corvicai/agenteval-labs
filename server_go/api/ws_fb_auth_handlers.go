@@ -3,9 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"time"
 
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/middleware"
 	"benchmarking-platform/models"
 
@@ -40,7 +40,7 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 	// Verify Firebase Token
 	fbToken, err := h.Firebase.VerifyIDToken(context.Background(), req.Token)
 	if err != nil {
-		log.Printf("[FIREBASE] Token verification failed: %v", err)
+		logger.Error("[FIREBASE] Token verification failed: %v", err)
 		c.SendError(env.CorrelationID, "invalid or expired firebase token")
 		return
 	}
@@ -69,7 +69,7 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 		}
 
 		if err := h.db.Create(&user).Error; err != nil {
-			log.Printf("[FIREBASE] Error creating user: %v", err)
+			logger.Error("[FIREBASE] Error creating user: %v", err)
 			c.SendError(env.CorrelationID, "failed to create user record")
 			return
 		}
@@ -93,7 +93,7 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 	if err != nil {
 		// User has no workspace -> Needs Onboarding
 		requiresOnboarding = true
-		log.Printf("[FIREBASE] User %s has no workspace, requiring onboarding.", user.Email)
+		logger.Info("[FIREBASE] User %s has no workspace, requiring onboarding.", user.Email)
 	}
 
 	// ALWAYS update connection with authenticated info if we have a user
@@ -134,10 +134,10 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 		CreatedAt:      time.Now().UTC(),
 	}
 	if err := h.db.Create(&logEntry).Error; err != nil {
-		log.Printf("[LOGIN_LOG] ERROR: Failed to create log entry (OAuth): %v", err)
+		logger.Error("[LOGIN_LOG] Failed to create log entry (OAuth): %v", err)
 	}
 
-	log.Printf("[FIREBASE] User authenticated: %s (%s) - Onboarding: %v", user.Email, user.ID, requiresOnboarding)
+	logger.Info("[FIREBASE] User authenticated: %s (%s) - Onboarding: %v", user.Email, user.ID, requiresOnboarding)
 
 	response := map[string]any{
 		"success":             true,

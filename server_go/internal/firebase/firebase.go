@@ -3,8 +3,9 @@ package firebase
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
+
+	"benchmarking-platform/internal/logger"
 
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/auth"
@@ -31,7 +32,7 @@ func InitFirebase() (*Client, error) {
 	// prioritize service account file if path is provided and file exists
 	if serviceAccountPath != "" {
 		if data, readErr := os.ReadFile(serviceAccountPath); readErr == nil {
-			log.Printf("[FIREBASE] Initializing with service account from: %s", serviceAccountPath)
+			logger.Info("[FIREBASE] Initializing with service account from: %s", serviceAccountPath)
 			opt := option.WithAuthCredentialsJSON(option.ServiceAccount, data)
 			app, err = firebase.NewApp(ctx, nil, opt)
 		}
@@ -39,7 +40,7 @@ func InitFirebase() (*Client, error) {
 
 	// Fallback to Application Default Credentials (ADC)
 	if app == nil {
-		log.Printf("[FIREBASE] Initializing with Application Default Credentials (ADC)")
+		logger.Info("[FIREBASE] Initializing with Application Default Credentials (ADC)")
 
 		var cfg *firebase.Config
 		firebaseProjectID := os.Getenv("FIREBASE_PROJECT_ID")

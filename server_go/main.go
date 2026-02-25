@@ -80,7 +80,7 @@ var upgrader = websocket.Upgrader{
 
 		originHostName := originHost(origin)
 		if originHostName == "" {
-			log.Printf("[WS] CheckOrigin rejected malformed origin=%q", origin)
+			logger.Warn("[WS] CheckOrigin rejected malformed origin=%q", origin)
 			return false
 		}
 
@@ -106,7 +106,7 @@ var upgrader = websocket.Upgrader{
 				return true
 			}
 		}
-		log.Printf("[WS] CheckOrigin rejected origin=%q host=%q x-forwarded-host=%q allowed=%q", origin, r.Host, r.Header.Get("X-Forwarded-Host"), allowedStr)
+		logger.Warn("[WS] CheckOrigin rejected origin=%q host=%q x-forwarded-host=%q allowed=%q", origin, r.Host, r.Header.Get("X-Forwarded-Host"), allowedStr)
 		return false
 	},
 }
@@ -135,14 +135,14 @@ func main() {
 	}
 
 	if os.Getenv("APP_ENV") != "production" {
-		log.Println("[SECURITY] Running in Development Mode - CORS: Allow All")
+		logger.Info("[SECURITY] Running in Development Mode - CORS: Allow All")
 		corsConfig.AllowOrigins = []string{"*"}
 	} else {
 		allowedStr := os.Getenv("ALLOWED_ORIGINS")
 		if allowedStr == "" {
 			log.Fatal("[SECURITY] FATAL: ALLOWED_ORIGINS environment variable must be set in production")
 		}
-		log.Printf("[SECURITY] Running in Production Mode - CORS Restricted to: %s", allowedStr)
+		logger.Info("[SECURITY] Running in Production Mode - CORS Restricted to: %s", allowedStr)
 		origins := strings.Split(allowedStr, ",")
 		for i := range origins {
 			origins[i] = strings.TrimSpace(origins[i])
@@ -154,11 +154,11 @@ func main() {
 	// Connect to database
 	database, err := db.Connect()
 	if err != nil {
-		log.Printf("[WARN] Database connection failed: %v. Running without persistence.", err)
+		logger.Warn("[DB] Database connection failed: %v. Running without persistence.", err)
 	} else {
-		log.Println("[DB] Connected successfully")
+		logger.Info("[DB] Connected successfully")
 		if err := db.AutoMigrate(database); err != nil {
-			log.Printf("[WARN] AutoMigrate failed: %v", err)
+			logger.Warn("[DB] AutoMigrate failed: %v", err)
 		}
 	}
 	// Initialize orchestration engine (Go runner only)
@@ -175,7 +175,7 @@ func main() {
 		if os.Getenv("APP_ENV") == "production" {
 			log.Fatal("[SECURITY] FATAL: JWT_SECRET environment variable must be set in production")
 		}
-		log.Println("[SECURITY] WARN: JWT_SECRET not set, using insecure default for development")
+		logger.Warn("[SECURITY] JWT_SECRET not set, using insecure default for development")
 		jwtSecret = "dev-secret-change-in-production"
 	}
 
@@ -190,14 +190,14 @@ func main() {
 		if err := os.Setenv("ENCRYPTION_KEY", encryptionKey); err != nil {
 			log.Fatalf("[SECURITY] FATAL: Failed to set fallback ENCRYPTION_KEY: %v", err)
 		}
-		log.Println("[SECURITY] WARN: ENCRYPTION_KEY not set, using development fallback key")
+		logger.Warn("[SECURITY] ENCRYPTION_KEY not set, using development fallback key")
 	} else {
 		keyLen := len(encryptionKey)
 		if keyLen != 16 && keyLen != 24 && keyLen != 32 {
 			if os.Getenv("APP_ENV") == "production" {
 				log.Fatalf("[SECURITY] FATAL: invalid ENCRYPTION_KEY length: %d bytes (must be 16, 24, or 32)", keyLen)
 			}
-			log.Printf("[SECURITY] WARN: invalid ENCRYPTION_KEY length (%d), using development fallback key", keyLen)
+			logger.Warn("[SECURITY] Invalid ENCRYPTION_KEY length (%d), using development fallback key", keyLen)
 			encryptionKey = "dev-temp-encryption-key-00000001"
 			if err := os.Setenv("ENCRYPTION_KEY", encryptionKey); err != nil {
 				log.Fatalf("[SECURITY] FATAL: Failed to set fallback ENCRYPTION_KEY: %v", err)
@@ -209,16 +209,16 @@ func main() {
 	if database != nil {
 		res := database.Model(&models.Run{}).Where("status = ?", "running").Update("status", "cancelled")
 		if res.Error != nil {
-			log.Printf("[RUN] Failed to cancel stale runs on startup: %v", res.Error)
+			logger.Error("[RUN] Failed to cancel stale runs on startup: %v", res.Error)
 		} else if res.RowsAffected > 0 {
-			log.Printf("[RUN] Marked %d stale running run(s) as cancelled on startup", res.RowsAffected)
+			logger.Info("[RUN] Marked %d stale running run(s) as cancelled on startup", res.RowsAffected)
 		}
 	}
 
 	// Initialize Firebase Admin SDK
 	fbClient, err := firebase.InitFirebase()
 	if err != nil {
-		log.Printf("[FIREBASE] ERROR: Failed to initialize Firebase: %v", err)
+		logger.Error("[FIREBASE] Failed to initialize Firebase: %v", err)
 	}
 
 	// Initialize WebSocket hub
@@ -250,7 +250,7 @@ func main() {
 	// Initialize handlers with WebSocket Hub support
 
 	// Secret is now stable across restarts
-	log.Printf("[AUTH] System session secret initialized (all previous sessions invalidated)")
+	logger.Info("[AUTH] System session secret initialized (all previous sessions invalidated)")
 	authHandler := handlers.NewAuthHandler(database, jwtSecret)
 
 	// ========== REST API Routes ==========

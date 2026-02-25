@@ -2,13 +2,14 @@ package db
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"time"
 
+	"benchmarking-platform/internal/logger"
+
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 func Connect() (*gorm.DB, error) {
@@ -30,15 +31,15 @@ func Connect() (*gorm.DB, error) {
 				// string parser
 				password = "''"
 			}
-			log.Println("[DB] Constructing DSN from granular environment variables")
+			logger.Info("[DB] Constructing DSN from granular environment variables")
 			dsn = fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=UTC",
 				host, user, password, dbname, port)
 		} else {
-			log.Println("[DB] DATABASE_URL and granular DB vars not set, using default local DSN")
+			logger.Info("[DB] DATABASE_URL and granular DB vars not set, using default local DSN")
 			dsn = "host=localhost user=postgres password=postgres dbname=benchmarking port=5432 sslmode=disable TimeZone=UTC"
 		}
 	} else {
-		log.Println("[DB] Connecting using DATABASE_URL from environment")
+		logger.Info("[DB] Connecting using DATABASE_URL from environment")
 	}
 
 	// Retry connection up to 30 times (30 seconds total)
@@ -48,7 +49,7 @@ func Connect() (*gorm.DB, error) {
 
 	for i := 0; i < maxRetries; i++ {
 		db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{
-			Logger: logger.Default.LogMode(logger.Warn), // Default to Warn in prod unless debug needed
+			Logger: gormlogger.Default.LogMode(gormlogger.Warn),
 		})
 		if err == nil {
 			// Configure connection pool
@@ -57,14 +58,14 @@ func Connect() (*gorm.DB, error) {
 				sqlDB.SetMaxOpenConns(100)
 				sqlDB.SetMaxIdleConns(10)
 				sqlDB.SetConnMaxLifetime(time.Hour)
-				log.Println("[DB] Connection pool configured: MaxOpen=100, MaxIdle=10, Lifetime=1h")
+				logger.Info("[DB] Connection pool configured: MaxOpen=100, MaxIdle=10, Lifetime=1h")
 			}
 			return db, nil
 		}
 
 		if i < maxRetries-1 {
 			if i%5 == 0 {
-				log.Printf("[DB] Still waiting for database... (%d/%d)", i, maxRetries)
+				logger.Warn("[DB] Still waiting for database... (%d/%d)", i, maxRetries)
 			}
 			time.Sleep(time.Second)
 		}
@@ -74,7 +75,7 @@ func Connect() (*gorm.DB, error) {
 }
 
 func AutoMigrate(db *gorm.DB) error {
-	log.Println("[DB] Starting database migrations...")
+	logger.Info("[DB] Starting database migrations...")
 
 	// 1. Ensure migrations table exists
 	if err := db.Exec(`
@@ -111,7 +112,7 @@ func AutoMigrate(db *gorm.DB) error {
 			continue
 		}
 
-		log.Printf("[DB] Applying migration: %s", filename)
+		logger.Info("[DB] Applying migration: %s", filename)
 		content, err := os.ReadFile(fmt.Sprintf("%s/%s", migrationDir, filename))
 		if err != nil {
 			return fmt.Errorf("read migration file %s: %w", filename, err)
@@ -127,6 +128,6 @@ func AutoMigrate(db *gorm.DB) error {
 		}
 	}
 
-	log.Println("[DB] Migrations completed successfully")
+	logger.Info("[DB] Migrations completed successfully")
 	return nil
 }

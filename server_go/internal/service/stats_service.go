@@ -1,9 +1,9 @@
 package service
 
 import (
-	"log"
 	"time"
 
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
@@ -20,7 +20,7 @@ func NewStatsService(db *gorm.DB) *StatsService {
 
 func (s *StatsService) ComputeStats(scope string, scopeID *uuid.UUID) (*models.AggregatedStats, error) {
 	var stats models.AggregatedStats
-	log.Printf("[Stats] Computing fresh stats for scope: %s, ID: %v", scope, scopeID)
+	logger.Info("[Stats] Computing fresh stats for scope: %s, ID: %v", scope, scopeID)
 
 	baseResultQuery := s.db.Model(&models.RunResult{})
 	baseRunQuery := s.db.Model(&models.Run{})

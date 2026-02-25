@@ -5,9 +5,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
+
+	"benchmarking-platform/internal/logger"
 
 	"benchmarking-platform/models"
 	"benchmarking-platform/orchestrator"
@@ -207,13 +208,13 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 	}
 
 	const runnerPingTimeout = 5 * time.Minute
-	log.Printf("[RUNNER] Ping: are you there? (timeout=%s)", runnerPingTimeout)
+	logger.Debug("[RUNNER] Ping: are you there? (timeout=%s)", runnerPingTimeout)
 	if err := h.engine.PingRunner(); err != nil {
-		log.Printf("[RUNNER] Ping failed: %v", err)
+		logger.Error("[RUNNER] Ping failed: %v", err)
 		c.SendError(env.CorrelationID, "Runner sounds offline. Please try again in a moment.")
 		return
 	}
-	log.Printf("[RUNNER] Ping OK: I'm here")
+	logger.Debug("[RUNNER] Ping OK: I'm here")
 
 	// For legacy support, we use the connection's workspace
 	run, err := h.engine.StartRun(c.WorkspaceID, qsID, agentIDs)
@@ -271,11 +272,11 @@ func (h *Hub) handleCancelRun(c *Connection, env models.Envelope) {
 func (h *Hub) handleSyncState(c *Connection, env models.Envelope) {
 	var payload models.SyncStatePayload
 
-	log.Printf("[WS] SyncState requested for workspace: %s", c.WorkspaceID)
+	logger.Debug("[WS] SyncState requested for workspace: %s", c.WorkspaceID)
 
 	// 1. Get Agents
 	if err := h.db.Where("workspace_id = ?", c.WorkspaceID).Order("created_at desc").Find(&payload.Agents).Error; err != nil {
-		log.Printf("[WS] SyncState error loading agents: %v", err)
+		logger.Error("[WS] SyncState error loading agents: %v", err)
 		c.SendError(env.CorrelationID, "failed to load agents: "+err.Error())
 		return
 	}
@@ -288,7 +289,7 @@ func (h *Hub) handleSyncState(c *Connection, env models.Envelope) {
 		Preload("Agents").
 		Order("question_sets.created_at desc").
 		Find(&payload.QuestionSets).Error; err != nil {
-		log.Printf("[WS] SyncState error loading question sets: %v", err)
+		logger.Error("[WS] SyncState error loading question sets: %v", err)
 		c.SendError(env.CorrelationID, "failed to load question sets: "+err.Error())
 		return
 	}
@@ -302,12 +303,12 @@ func (h *Hub) handleSyncState(c *Connection, env models.Envelope) {
 		ORDER BY r.created_at desc
 		LIMIT 10
 	`, c.WorkspaceID).Scan(&payload.RecentRuns).Error; err != nil {
-		log.Printf("[WS] SyncState error loading recent runs: %v", err)
+		logger.Error("[WS] SyncState error loading recent runs: %v", err)
 		c.SendError(env.CorrelationID, "failed to load recent runs: "+err.Error())
 		return
 	}
 
-	log.Printf("[WS] SyncState completed for workspace: %s (Agents: %d, Sets: %d, Runs: %d)",
+	logger.Debug("[WS] SyncState completed for workspace: %s (Agents: %d, Sets: %d, Runs: %d)",
 		c.WorkspaceID, len(payload.Agents), len(payload.QuestionSets), len(payload.RecentRuns))
 
 	c.SendResponse(DataState, env.CorrelationID, payload)

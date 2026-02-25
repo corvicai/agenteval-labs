@@ -2,10 +2,10 @@ package api
 
 import (
 	"encoding/json"
-	"log"
 	"os"
 	"time"
 
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/middleware"
 	"benchmarking-platform/models"
 
@@ -100,7 +100,7 @@ func (h *Hub) handleDevLogin(c *Connection, env models.Envelope) {
 // Dev/Maintenance only.
 func (h *Hub) handleSeedHistoricalRun(c *Connection, env models.Envelope) {
 	if os.Getenv("APP_ENV") == "production" {
-		log.Printf("[WS][SECURITY] Attempted SeedHistoricalRun in production by user %s", c.UserID)
+		logger.Warn("[WS][SECURITY] Attempted SeedHistoricalRun in production by user %s", c.UserID)
 		c.SendError(env.CorrelationID, "CMD_SEED_HISTORICAL_RUN is disabled in production")
 		return
 	}
@@ -239,7 +239,7 @@ func (h *Hub) handleSeedHistoricalRun(c *Connection, env models.Envelope) {
 
 	if len(results) > 0 {
 		if err := h.db.CreateInBatches(results, 100).Error; err != nil {
-			log.Printf("[WS] Seed failed to batch insert results: %v", err)
+			logger.Error("[WS] Seed failed to batch insert results: %v", err)
 			c.SendError(env.CorrelationID, "failed to insert results")
 			return
 		}
@@ -247,7 +247,7 @@ func (h *Hub) handleSeedHistoricalRun(c *Connection, env models.Envelope) {
 
 	if len(evaluations) > 0 {
 		if err := h.db.CreateInBatches(evaluations, 100).Error; err != nil {
-			log.Printf("[WS] Seed failed to batch insert evaluations: %v", err)
+			logger.Error("[WS] Seed failed to batch insert evaluations: %v", err)
 		}
 	}
 
@@ -259,7 +259,7 @@ func (h *Hub) handleSeedHistoricalRun(c *Connection, env models.Envelope) {
 func (h *Hub) handleAdminRecalculateStats(c *Connection, env models.Envelope) {
 	// 1. STRICT Safeguard: Production check
 	if os.Getenv("APP_ENV") == "production" {
-		log.Printf("[WS][SECURITY] Attempted AdminRecalculateStats in production by user %s", c.UserID)
+		logger.Warn("[WS][SECURITY] Attempted AdminRecalculateStats in production by user %s", c.UserID)
 		c.SendError(env.CorrelationID, "CMD_ADMIN_RECALCULATE_STATS is disabled in production")
 		return
 	}
@@ -270,7 +270,7 @@ func (h *Hub) handleAdminRecalculateStats(c *Connection, env models.Envelope) {
 		return
 	}
 
-	log.Printf("[WS] Triggering global stats recalculation (Admin: %s)", c.UserID)
+	logger.Info("[WS] Triggering global stats recalculation (Admin: %s)", c.UserID)
 
 	if err := h.db.Exec("TRUNCATE TABLE stats_cache").Error; err != nil {
 		c.SendError(env.CorrelationID, "failed to clear cache: "+err.Error())

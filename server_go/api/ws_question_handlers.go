@@ -3,9 +3,9 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
@@ -290,9 +290,9 @@ func (h *Hub) handleUpdateQuestionSetAgents(c *Connection, env models.Envelope) 
 		return
 	}
 
-	log.Printf("[QS_AGENTS] Updating agents for QS %s, received %d agents", payload.QuestionSetID, len(payload.Agents))
+	logger.Debug("[QS_AGENTS] Updating agents for QS %s, received %d agents", payload.QuestionSetID, len(payload.Agents))
 	for i, a := range payload.Agents {
-		log.Printf("[QS_AGENTS]   Agent %d: %s enabled=%v pos=%d", i, a.AgentID, a.Enabled, a.Position)
+		logger.Debug("[QS_AGENTS]   Agent %d: %s enabled=%v pos=%d", i, a.AgentID, a.Enabled, a.Position)
 	}
 
 	qsID, err := uuid.Parse(payload.QuestionSetID)

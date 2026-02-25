@@ -3,9 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"time"
 
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
@@ -672,7 +672,7 @@ func (h *Hub) handleAdminDeleteUser(c *Connection, env models.Envelope) {
 	// Handle deletion based on mode
 	err = h.db.Transaction(func(tx *gorm.DB) error {
 		if req.Mode == "ghost" {
-			log.Printf("[ADMIN] Ghost-deleting user: %s (%s)", targetUser.Email, targetUser.ID)
+			logger.Info("[ADMIN] Ghost-deleting user: %s (%s)", targetUser.Email, targetUser.ID)
 
 			// 1. Wipe all answer content across all workspaces of this user
 			// Subquery to find all workspace IDs for this user
@@ -701,7 +701,7 @@ func (h *Hub) handleAdminDeleteUser(c *Connection, env models.Envelope) {
 		}
 
 		// Mode "hard" (Default) - Complete wipe
-		log.Printf("[ADMIN] Hard-deleting user and all data: %s (%s)", targetUser.Email, targetUser.ID)
+		logger.Info("[ADMIN] Hard-deleting user and all data: %s (%s)", targetUser.Email, targetUser.ID)
 
 		// 0. Nullify references in other tables to avoid FK constraints
 		// Organizations
@@ -824,7 +824,7 @@ func (h *Hub) handleAdminDeleteUser(c *Connection, env models.Envelope) {
 	})
 
 	if err != nil {
-		log.Printf("[ADMIN] Transaction failed during user deletion: %v", err)
+		logger.Error("[ADMIN] Transaction failed during user deletion: %v", err)
 		c.SendError(env.CorrelationID, "failed to delete user: "+err.Error())
 		return
 	}
@@ -837,10 +837,10 @@ func (h *Hub) handleAdminDeleteUser(c *Connection, env models.Envelope) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := h.Firebase.DeleteUser(ctx, firebaseUID); err != nil {
-			log.Printf("[FIREBASE] WARN: Failed to delete user from firebase: %v", err)
+			logger.Warn("[FIREBASE] Failed to delete user from firebase: %v", err)
 			// We don't fail the whole request because the local data IS gone
 		} else {
-			log.Printf("[FIREBASE] User %s deleted from firebase", firebaseUID)
+			logger.Info("[FIREBASE] User %s deleted from firebase", firebaseUID)
 		}
 	}
 

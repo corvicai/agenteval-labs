@@ -8,13 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math/rand"
 	"net/http"
 	"os"
 	"runtime/debug"
 	"strings"
 	"time"
+
+	"benchmarking-platform/internal/logger"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -117,7 +118,7 @@ func (r *goRunner) executeMCP(ctx context.Context, req ExecutionRequest) Executi
 
 		if isRateLimitError(err) && retry < maxRetries {
 			waitTime := time.Duration(1<<uint(retry+1)) * time.Second
-			log.Printf("[GO RUNNER] MCP rate limited. Retry %d/%d in %s", retry+1, maxRetries, waitTime)
+			logger.Warn("[GO RUNNER] MCP rate limited. Retry %d/%d in %s", retry+1, maxRetries, waitTime)
 			select {
 			case <-ctx.Done():
 				return ExecutionResponse{Success: false, Error: ctx.Err().Error(), Metadata: errorMeta(start, ctx.Err(), nil)}
@@ -163,7 +164,7 @@ func (r *goRunner) callMCP(ctx context.Context, endpoint, token, question string
 	}
 	defer session.Close()
 
-	log.Printf("[GO RUNNER] MCP query: %s", truncate(question, 200))
+	logger.Debug("[GO RUNNER] MCP query: %s", truncate(question, 200))
 	logTimeouts(ctx, httpClient.Timeout)
 
 	callStart := time.Now()
@@ -178,7 +179,7 @@ func (r *goRunner) callMCP(ctx context.Context, endpoint, token, question string
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				log.Printf("[GO RUNNER] Still processing MCP... %ds", int(time.Since(callStart).Seconds()))
+				logger.Debug("[GO RUNNER] Still processing MCP... %ds", int(time.Since(callStart).Seconds()))
 			}
 		}
 	}()
@@ -892,7 +893,7 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(body))
 		if readErr == nil && len(body) > 0 {
-			log.Printf("[GO RUNNER] MCP HTTP %d from %s %s: %s",
+			logger.Warn("[GO RUNNER] MCP HTTP %d from %s %s: %s",
 				resp.StatusCode, req.Method, req.URL.String(), string(body))
 		}
 	}
@@ -1382,15 +1383,15 @@ func addTimeoutMeta(meta map[string]any, ctx context.Context, httpTimeout time.D
 
 func logTimeouts(ctx context.Context, httpTimeout time.Duration) {
 	if ctx == nil {
-		log.Printf("[GO RUNNER] MCP timeouts: ctx_deadline=<none> http_timeout=%s", httpTimeout)
+		logger.Debug("[GO RUNNER] MCP timeouts: ctx_deadline=<none> http_timeout=%s", httpTimeout)
 		return
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline).Truncate(time.Second)
-		log.Printf("[GO RUNNER] MCP timeouts: ctx_deadline=%s remaining=%s http_timeout=%s", deadline.UTC().Format(time.RFC3339), remaining, httpTimeout)
+		logger.Debug("[GO RUNNER] MCP timeouts: ctx_deadline=%s remaining=%s http_timeout=%s", deadline.UTC().Format(time.RFC3339), remaining, httpTimeout)
 		return
 	}
-	log.Printf("[GO RUNNER] MCP timeouts: ctx_deadline=<none> http_timeout=%s", httpTimeout)
+	logger.Debug("[GO RUNNER] MCP timeouts: ctx_deadline=<none> http_timeout=%s", httpTimeout)
 }
 
 func fallbackString(value, fallback string) string {

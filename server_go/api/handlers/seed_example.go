@@ -2,13 +2,13 @@ package handlers
 
 import (
 	"encoding/json"
-	"log"
+
+	"benchmarking-platform/internal/logger"
+	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
-
-	"benchmarking-platform/models"
 )
 
 func seedExampleSetupIfFirstWorkspace(db *gorm.DB, userID uuid.UUID, workspace models.Workspace, client models.Client) {
@@ -18,7 +18,7 @@ func seedExampleSetupIfFirstWorkspace(db *gorm.DB, userID uuid.UUID, workspace m
 
 	var workspaceCount int64
 	if err := db.Model(&models.Workspace{}).Where("user_id = ?", userID).Count(&workspaceCount).Error; err != nil {
-		log.Printf("[seed] Failed to count workspaces for user %s: %v", userID, err)
+		logger.Error("[seed] Failed to count workspaces for user %s: %v", userID, err)
 		return
 	}
 	if workspaceCount != 1 {
@@ -27,12 +27,12 @@ func seedExampleSetupIfFirstWorkspace(db *gorm.DB, userID uuid.UUID, workspace m
 
 	var agentCount int64
 	if err := db.Model(&models.Agent{}).Where("workspace_id = ?", workspace.ID).Count(&agentCount).Error; err != nil {
-		log.Printf("[seed] Failed to count agents for workspace %s: %v", workspace.ID, err)
+		logger.Error("[seed] Failed to count agents for workspace %s: %v", workspace.ID, err)
 		return
 	}
 	var questionSetCount int64
 	if err := db.Model(&models.QuestionSet{}).Where("client_id = ?", client.ID).Count(&questionSetCount).Error; err != nil {
-		log.Printf("[seed] Failed to count question sets for client %s: %v", client.ID, err)
+		logger.Error("[seed] Failed to count question sets for client %s: %v", client.ID, err)
 		return
 	}
 	if agentCount > 0 || questionSetCount > 0 {
@@ -46,7 +46,7 @@ func seedExampleSetupIfFirstWorkspace(db *gorm.DB, userID uuid.UUID, workspace m
 	}
 	agentConfigBytes, err := json.Marshal(agentConfig)
 	if err != nil {
-		log.Printf("[seed] Failed to marshal example agent config: %v", err)
+		logger.Error("[seed] Failed to marshal example agent config: %v", err)
 		return
 	}
 
@@ -60,14 +60,14 @@ func seedExampleSetupIfFirstWorkspace(db *gorm.DB, userID uuid.UUID, workspace m
 		Position:     0,
 	}
 	if err := db.Create(&agent).Error; err != nil {
-		log.Printf("[seed] Failed to create example agent: %v", err)
+		logger.Error("[seed] Failed to create example agent: %v", err)
 		return
 	}
 
 	questionData := exampleQuestionSetData()
 	questionDataBytes, err := json.Marshal(questionData)
 	if err != nil {
-		log.Printf("[seed] Failed to marshal example question set: %v", err)
+		logger.Error("[seed] Failed to marshal example question set: %v", err)
 		return
 	}
 
@@ -79,7 +79,7 @@ func seedExampleSetupIfFirstWorkspace(db *gorm.DB, userID uuid.UUID, workspace m
 		Data:     datatypes.JSON(questionDataBytes),
 	}
 	if err := db.Create(&questionSet).Error; err != nil {
-		log.Printf("[seed] Failed to create example question set: %v", err)
+		logger.Error("[seed] Failed to create example question set: %v", err)
 	}
 }
 

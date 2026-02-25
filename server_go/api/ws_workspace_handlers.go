@@ -3,9 +3,9 @@ package api
 import (
 	"encoding/json"
 	"errors"
-	"log"
 	"os"
 
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/middleware"
 	"benchmarking-platform/models"
 
@@ -230,7 +230,7 @@ func (h *Hub) handleCreateAgent(c *Connection, env models.Envelope) {
 	}
 
 	if err := h.db.Create(&agent).Error; err != nil {
-		log.Printf(
+		logger.Error(
 			"[WS][CREATE_AGENT] db create failed user_id=%s workspace_id=%s agent_name=%q provider_type=%q err=%v",
 			c.UserID,
 			wsID,
