@@ -190,7 +190,7 @@
       style="position: fixed; left: 12px; bottom: 12px; z-index: 12000; width: min(420px, calc(100vw - 24px)); background: rgba(2, 6, 23, 0.92); color: #e2e8f0; border: 1px solid rgba(148, 163, 184, 0.35); border-radius: 10px; padding: 10px 12px; font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; box-shadow: 0 12px 24px rgba(2, 6, 23, 0.45);"
     >
       <div style="font-weight: 700; color: #93c5fd; margin-bottom: 6px;">AFK DEBUG</div>
-      <div>timeout={{ Math.round(afkTimeoutMs / 1000) }}s | remaining={{ afkDebugRemainingLabel }}</div>
+      <div>timeout={{ Math.round(effectiveAfkTimeoutMs / 1000) }}s{{ wsState.runningQuestionSetId ? ' (2x run)' : '' }} | remaining={{ afkDebugRemainingLabel }}</div>
       <div>last={{ afkDebug.lastActivitySource }} | {{ afkDebugLastActivityLabel }}</div>
       <div>canTrack={{ afkDebug.canTrack }} ws={{ wsState.isConnected }} vis={{ afkDebug.visibility }} focus={{ afkDebug.hasFocus }}</div>
       <div>overlay={{ afkOverlayVisible }} ({{ reconnectOverlayMode }}) reconnecting={{ isReconnectingFromAfk }}</div>
@@ -323,6 +323,12 @@ const parsedAfkTimeout = parseAfkTimeoutMs(config.AFK_TIMEOUT_MS)
 const afkTimeoutMs = Number.isFinite(parsedAfkTimeout) && parsedAfkTimeout >= MIN_AFK_TIMEOUT_MS
   ? parsedAfkTimeout
   : DEFAULT_AFK_TIMEOUT_MS
+
+// During an active benchmark run, double the AFK timeout so long runs don't
+// unexpectedly disconnect the user who may be watching progress.
+const effectiveAfkTimeoutMs = computed(() =>
+  wsState.runningQuestionSetId ? afkTimeoutMs * 3 : afkTimeoutMs
+)
 if (parsedAfkTimeout != null && parsedAfkTimeout < MIN_AFK_TIMEOUT_MS) {
   console.warn('[AFK] Ignoring too-low AFK timeout configuration', {
     configured: config.AFK_TIMEOUT_MS,
@@ -443,11 +449,9 @@ watch(() => wsState.questionSets, (newSets) => {
   }
 }, { immediate: true, deep: true })
 
-watch(() => wsState.runningQuestionSetId, (runId) => {
-  if (runId) {
-    clearAfkTimer()
-    return
-  }
+watch(() => wsState.runningQuestionSetId, () => {
+  // Reschedule the AFK timer whenever run state changes so it picks up the
+  // correct effective timeout (3x during a run, 1x when idle).
   scheduleAfkTimer()
 })
 
@@ -1028,7 +1032,7 @@ function clearAfkDebugTicker() {
 function refreshAfkDebugState(extra = {}) {
   if (!afkDebug.value.enabled) return
   const remainingMs = canTrackAfk() && lastAfkResetAt
-    ? Math.max(0, afkTimeoutMs - (Date.now() - lastAfkResetAt))
+    ? Math.max(0, effectiveAfkTimeoutMs.value - (Date.now() - lastAfkResetAt))
     : null
   afkDebug.value = {
     ...afkDebug.value,
@@ -1074,7 +1078,7 @@ function setAfkDebugEnabled(enabled) {
   }
 
   afkDebugLog('enabled', {
-    timeoutMs: afkTimeoutMs,
+    timeoutMs: effectiveAfkTimeoutMs.value,
     configuredTimeout: config.AFK_TIMEOUT_MS || null
   })
 }
@@ -1161,17 +1165,18 @@ function markUserActivity(force = false, source = 'activity') {
 }
 
 function canTrackAfk() {
-  return isAuthenticated.value && appReady.value && wsState.isConnected && !wsState.isMaintenance && !wsState.runningQuestionSetId
+  return isAuthenticated.value && appReady.value && wsState.isConnected && !wsState.isMaintenance
 }
 
 async function activateAfkMode() {
   if (!canTrackAfk() || afkOverlayVisible.value) return
+  const timeoutMs = effectiveAfkTimeoutMs.value
   console.log('[AFK] Idle timeout reached; pausing session', {
-    timeoutMs: afkTimeoutMs,
+    timeoutMs,
     workspaceId: currentWorkspace.value?.id || null
   })
   afkDebugLog('activate-afk', {
-    timeoutMs: afkTimeoutMs,
+    timeoutMs,
     workspaceId: currentWorkspace.value?.id || null
   })
   afkDebug.value = {
@@ -1191,15 +1196,16 @@ function scheduleAfkTimer() {
   if (!lastAfkResetAt) {
     lastAfkResetAt = Date.now()
   }
+  const timeoutMs = effectiveAfkTimeoutMs.value
   const elapsed = Date.now() - lastAfkResetAt
-  const remaining = afkTimeoutMs - elapsed
+  const remaining = timeoutMs - elapsed
   if (remaining <= 0) {
-    afkDebugLog('schedule-expired', { elapsed, remaining, timeoutMs: afkTimeoutMs })
+    afkDebugLog('schedule-expired', { elapsed, remaining, timeoutMs })
     activateAfkMode()
     return
   }
   afkTimer = setTimeout(() => activateAfkMode(), remaining)
-  afkDebugLog('schedule', { remainingMs: remaining, elapsedMs: elapsed, timeoutMs: afkTimeoutMs })
+  afkDebugLog('schedule', { remainingMs: remaining, elapsedMs: elapsed, timeoutMs })
   refreshAfkDebugState()
 }
 

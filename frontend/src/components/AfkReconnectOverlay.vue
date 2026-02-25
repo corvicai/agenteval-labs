@@ -1,6 +1,6 @@
 <template>
   <Transition name="afk-fade">
-    <div v-if="active" class="afk-overlay">
+    <div v-if="active" class="afk-overlay" @click.self="$emit('reconnect')">
       <div class="afk-card">
         <h2>{{ titleText }}</h2>
         <p>{{ descriptionText }}</p>

@@ -1,22 +1,31 @@
 # Benchmarking Platform
 
-A production-grade, multi-tenant benchmarking platform for AI agents.
+A production-grade, multi-tenant benchmarking platform for evaluating AI agents across multiple providers (OpenAI, Anthropic, OpenRouter, NVIDIA, MCP, and OpenAI-compatible APIs).
 
 ## Quick Start
 
 ### Using Docker Compose (Recommended)
 
 ```bash
-# Build and start all services (Development)
+# Development: Build and start all services
 docker-compose up --build
 
-# Or run in detached mode
-docker-compose up -d --build
+# With frontend hot-reload (Vite dev server)
+docker-compose --profile dev up --build
+
+# Production: Database + Go API only (frontend typically deployed separately)
+docker-compose -f docker-compose.prod.yml up -d
 ```
 
-This will start:
-- **PostgreSQL** on port `5432`
+**Development** (`docker-compose.yml`) starts:
+- **PostgreSQL** (internal, no exposed port)
 - **Go API** on port `8080`
+- **Frontend** on port `3010` (production build) or `frontend-dev` with hot-reload when using `--profile dev`
+
+**Production** (`docker-compose.prod.yml`) starts:
+- **PostgreSQL** (internal)
+- **Go API** (behind reverse proxy)
+
 
 ### Verify Services
 
@@ -107,58 +116,35 @@ Only essential auth endpoints use REST:
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /ws?token=<jwt>` | Main WebSocket connection |
+| `GET /ws?token=<jwt>&workspace_id=<uuid>` | Main WebSocket connection |
 
-WebSocket message map (current implementation):
+All messages use a standard envelope: `{ "type": "REQ_*", "correlation_id": "...", "payload": {...} }`. For a complete reference of every message type (REQ_*, CMD_*, DATA_*, EVT_*), payloads, and responses, see **[docs/websocket-messages.md](docs/websocket-messages.md)**.
 
-All messages use the same envelope format:
+### Supported Agent Providers
 
-```json
-{
-  "type": "REQ_SYNC_STATE",
-  "correlation_id": "uuid-or-client-id",
-  "payload": {}
-}
-```
-
-Current routed inbound message types (`server_go/api/ws_handlers.go`):
-
-- **Commands**: `CMD_START_RUN`, `CMD_CANCEL_RUN`, `CMD_RUN_EVALUATORS`, `CMD_RERUN_TASK`, `CMD_SEED_HISTORICAL_RUN`, `CMD_ADMIN_RECALCULATE_STATS`, `CMD_ADMIN_FORCE_LOGOUT`, `CMD_ADMIN_START_MAINTENANCE`
-- **Core / Stats / Runs**: `REQ_SYNC_STATE`, `REQ_GET_RUN_DETAILS`, `REQ_CREATE_EVALUATION`, `REQ_GET_SPY_PAYLOAD`, `REQ_GET_WORKSPACE_STATS`, `REQ_GET_ORG_STATS`, `REQ_GET_GLOBAL_STATS`, `REQ_GET_MANAGER_STATS`, `REQ_GET_MANAGER_USERS`, `REQ_GET_RUN_LITE`, `REQ_GET_LATEST_RUN_BY_QS`, `REQ_GET_RESULT_DETAILS`, `REQ_GET_RETRY_STATUS`, `REQ_GET_WORKSPACE_RUNS`, `REQ_GET_WORKSPACE_CLIENTS`, `REQ_DELETE_RUN`, `REQ_DELETE_ALL_RUNS`, `REQ_CHECK_DB_PERF`
-- **Workspace / Organization**: `REQ_GET_WORKSPACES`, `REQ_CREATE_WORKSPACE`, `REQ_SWITCH_WORKSPACE`, `REQ_CLONE_WORKSPACE`, `REQ_CREATE_ORGANIZATION`, `REQ_JOIN_ORGANIZATION`
-- **Agents / Question Sets**: `REQ_CREATE_AGENT`, `REQ_UPDATE_AGENT`, `REQ_DELETE_AGENT`, `REQ_CREATE_QUESTION_SET`, `REQ_UPDATE_QUESTION_SET`, `REQ_UPDATE_QUESTION_SET_AGENTS`, `REQ_IMPORT_QUESTION_SET`, `REQ_EXPORT_QUESTION_SET`
-- **Auth / Identity**: `AUTH`, `REQ_WS_LOGIN`, `REQ_WS_REGISTER`, `REQ_WS_BOOTSTRAP_ADMIN`, `REQ_CHECK_ADMIN_EXISTS`, `REQ_CHECK_MANAGER_STATUS`, `REQ_GET_ME`, `REQ_ACCEPT_TERMS`, `REQ_WEBAUTHN_REGISTER_BEGIN`, `REQ_WEBAUTHN_REGISTER_FINISH`, `REQ_WEBAUTHN_LOGIN_BEGIN`, `REQ_WEBAUTHN_LOGIN_FINISH`, `REQ_WEBAUTHN_DELETE_KEY`, `REQ_DEV_GET_MANAGERS`, `REQ_DEV_LOGIN`
-- **Admin**: `REQ_ADMIN_GET_USERS`, `REQ_ADMIN_GET_ORGANIZATIONS`, `REQ_ADMIN_GET_USER_PROFILE`, `REQ_ADMIN_GET_ORG_PROFILE`, `REQ_ADMIN_CREATE_USER`, `REQ_ADMIN_CREATE_ORG`, `REQ_ADMIN_UPDATE_USER`, `REQ_ADMIN_DELETE_USER`, `REQ_ADMIN_UPDATE_ORG`, `REQ_ADMIN_DELETE_ORG`, `REQ_ADMIN_GENERATE_INVITE`, `REQ_ADMIN_REMOVE_USER_FROM_ORG`, `REQ_ADMIN_GET_LOGIN_LOGS`
-- **Manager**: `REQ_MANAGER_GET_WORKSPACES`, `REQ_MANAGER_GET_AGENTS`, `REQ_MANAGER_GET_RUNS`, `REQ_MANAGER_GET_USERS`, `REQ_MANAGER_CREATE_USER`, `REQ_MANAGER_UPDATE_USER`, `REQ_MANAGER_TOGGLE_USER_SUSPENSION`, `REQ_MANAGER_IMPERSONATE_USER`, `REQ_MANAGER_GET_STATS`, `REQ_MANAGER_GENERATE_INVITE`
-
-Current outbound data responses (`DATA_*`):
-
-- `DATA_RESPONSE`, `DATA_STATE`, `DATA_RUN_DETAILS`, `DATA_RUN_LITE`, `DATA_RESULT_DETAILS`, `DATA_RETRY_STATUS`, `DATA_EVALUATION`, `DATA_SPY_PAYLOAD`, `DATA_WORKSPACE_STATS`, `DATA_WORKSPACE_RUNS`
-- `DATA_WORKSPACES`, `DATA_MANAGER_STATUS`, `DATA_ME`, `DATA_CHECK_ADMIN_EXISTS`, `DATA_WS_LOGIN_RESULT`
-- `DATA_MANAGER_STATS`, `DATA_MANAGER_USERS`, `DATA_MANAGER_WORKSPACES`, `DATA_MANAGER_AGENTS`, `DATA_MANAGER_RUNS`
-- `DATA_ORG_STATS`, `DATA_GLOBAL_STATS`
-- `DATA_ADMIN_USERS`, `DATA_ADMIN_ORGANIZATIONS`, `DATA_ADMIN_USER_PROFILE`, `DATA_ADMIN_ORG_PROFILE`, `DATA_ADMIN_LOGIN_LOGS`
-- `DATA_DEV_MANAGERS`, `DATA_DEV_LOGIN_RESULT`
-- `DATA_WEBAUTHN_REGISTER_OPTIONS`, `DATA_WEBAUTHN_LOGIN_OPTIONS`
-
-Current outbound events (`EVT_*`):
-
-- `EVT_RUN_INIT`, `EVT_RUN_STARTED`, `EVT_RUN_COMPLETED`, `EVT_RUN_CANCELLED`, `EVT_RUN_FINISHED`
-- `EVT_TASK_QUEUED`, `EVT_TASK_STARTED`, `EVT_TASK_PROGRESS`, `EVT_TASK_COMPLETED`
-- `EVT_DATA_CHANGED`, `EVT_MAINTENANCE_STARTED`, `EVT_FORCE_LOGOUT`, `EVT_ONLINE_STATUS`, `EVT_ERROR`
-
-Compatibility note:
-
-- Constants kept for legacy compatibility but not routed by the main dispatcher include `REQ_CHANGE_PASSWORD`, `CMD_ADMIN_PROFILE`, `CMD_ADMIN_GET_USERS`, `CMD_CHECK_ADMIN_EXISTS`, `CMD_SEED_HISTORY`, and `CMD_SYNC_STATE`.
+| Provider | Required Config Keys | Notes |
+|----------|----------------------|-------|
+| `mcp` | `endpoint`, `token` | Model Context Protocol (HTTP) |
+| `openai` | `api_key` | Managed (prompt_id) or standard (model) |
+| `openai_compatible` | `api_key`, `base_url` | Any OpenAI-compatible API |
+| `openrouter` | `api_key` | Optional: model, base_url, system_prompt |
+| `nvidia` | `api_key` | NVIDIA NIM; optional model, base_url |
+| `anthropic` | `api_key` | Claude; optional model, base_url |
+| `evaluator` | Resolves to one of above | Auto-extracts scores from responses |
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | `host=localhost...` | Postgres connection |
-| `JWT_SECRET` | `dev-secret...` | JWT signing secret |
+| `DATABASE_URL` | — | PostgreSQL connection string |
+| `JWT_SECRET` | — | JWT signing secret (min 32 chars) |
+| `ENCRYPTION_KEY` | — | AES-256 key (32 chars) for encrypted agent configs |
 | `PORT` | `8080` | API port |
-| `FIREBASE_CREDENTIALS` | Path to JSON | Firebase Service Account file |
+| `APP_ENV` | `development` | `development` or `production` (disables dev features) |
+| `FIREBASE_SERVICE_ACCOUNT` | — | Path to Firebase Service Account JSON |
+| `ALLOWED_ORIGINS` | — | Comma-separated CORS origins (production) |
+| `VITE_AFK_TIMEOUT_MS` | `180000` | Frontend idle timeout (ms) before WebSocket disconnect |
+| `VITE_HMR_HOST`, `VITE_HMR_CLIENT_PORT`, `VITE_HMR_PROTOCOL` | — | Optional HMR config for dev behind proxy |
 
 ## Development
 
@@ -183,22 +169,64 @@ docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=benchmar
 # Terminal 2: Start Go API
 cd server_go
 export DATABASE_URL="host=localhost user=postgres password=postgres dbname=benchmarking port=5432 sslmode=disable"
+export FIREBASE_SERVICE_ACCOUNT="./firebase-service-account.json"
 go run .
 ```
 
+Place `firebase-service-account.json` in `server_go/` before running. Without it, Firebase-based login will fail.
+
 ## Architecture
 
+```mermaid
+flowchart TB
+    subgraph Client [Client]
+        Browser[Browser / Vue]
+    end
+
+    subgraph Proxy [Reverse Proxy]
+        Nginx[Nginx]
+    end
+
+    subgraph Backend [Backend]
+        GoAPI[Go API + WebSocket]
+    end
+
+    subgraph Data [Data]
+        Postgres[(PostgreSQL)]
+    end
+
+    subgraph Auth [Auth]
+        Firebase[Firebase Auth]
+        WebAuthn[WebAuthn / Passkeys]
+    end
+
+    subgraph Agents [Agent Providers]
+        MCP[MCP Servers]
+        OpenAI[OpenAI API]
+        Anthropic[Anthropic]
+        OpenRouter[OpenRouter]
+        Nvidia[NVIDIA NIM]
+    end
+
+    Browser --> Nginx
+    Nginx --> GoAPI
+    GoAPI --> Postgres
+    GoAPI --> Firebase
+    GoAPI --> WebAuthn
+    GoAPI --> MCP
+    GoAPI --> OpenAI
+    GoAPI --> Anthropic
+    GoAPI --> OpenRouter
+    GoAPI --> Nvidia
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Frontend  │────▶│   Go API    │────▶│  PostgreSQL │
-└─────────────┘     └──────┬──────┘     └─────────────┘
-                           │
-              ┌────────────┴────────────┐
-              ▼                         ▼
-       ┌─────────────┐           ┌─────────────┐
-       │ MCP Servers │           │  OpenAI API │
-       └─────────────┘           └─────────────┘
-```
+
+High-level flow: Browser connects via Nginx (proxy). Go API handles REST + WebSocket, persists to PostgreSQL, authenticates via Firebase/WebAuthn, and executes benchmark tasks by calling external agent providers (MCP, OpenAI, Anthropic, etc.).
+
+## Documentation
+
+- **[docs/websocket-messages.md](docs/websocket-messages.md)** — Complete reference of all WebSocket envelope messages (REQ_*, CMD_*, DATA_*, EVT_*)
+- **[docs/websocket-api.md](docs/websocket-api.md)** — WebSocket API guide (connection, handshake, examples)
+- **[docs/db_schema.md](docs/db_schema.md)** — Database schema diagram
 
 ## License
 
