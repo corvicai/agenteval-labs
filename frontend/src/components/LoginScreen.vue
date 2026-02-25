@@ -197,7 +197,7 @@ import { config } from '../config'
 
 const emit = defineEmits(['login'])
 
-const showLegacyAuth = ref(config.ENABLE_LEGACY_AUTH === 'true')
+const showLegacyAuth = ref(false)
 
 // Dev mode detection
 const isDev = config.DEV && !config.PROD
@@ -348,7 +348,7 @@ async function handleSubmit() {
 async function handleAcceptTermsAction() {
   loading.value = true
   try {
-    const result = await api.acceptTerms()
+    const result = await wsService.acceptTerms()
     
     // Update local user record if backend returned an updated one (with TermsAcceptedAt)
     if (result && (result.user || result.ID)) {
@@ -360,7 +360,7 @@ async function handleAcceptTermsAction() {
     showTermsModal.value = false
     acceptTerms.value = true
     
-    // Force WebSocket disconnect so onLogin in App.vue creates a fresh, authenticated connection
+    // We don't necessarily need to disconnect, but we do it to match previous behavior
     wsService.disconnect()
     
     emit('login')
