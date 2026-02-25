@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
@@ -885,7 +886,17 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.token != "" {
 		req.Header.Set("Authorization", t.token)
 	}
-	return t.base.RoundTrip(req)
+	resp, err := t.base.RoundTrip(req)
+	if err == nil && resp != nil && resp.StatusCode >= 400 {
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		if readErr == nil && len(body) > 0 {
+			log.Printf("[GO RUNNER] MCP HTTP %d from %s %s: %s",
+				resp.StatusCode, req.Method, req.URL.String(), string(body))
+		}
+	}
+	return resp, err
 }
 
 func resolveQuestionText(payload map[string]any) string {

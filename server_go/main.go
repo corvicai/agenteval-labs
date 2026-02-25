@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -312,8 +313,11 @@ func main() {
 		isAuthenticated := false
 
 		if tokenString != "" {
-			// Parse token
+			// Parse token — enforce HMAC signing to prevent algorithm-confusion attacks.
 			token, err := jwt.ParseWithClaims(tokenString, &middleware.Claims{}, func(token *jwt.Token) (any, error) {
+				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+					return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+				}
 				return []byte(jwtSecret), nil
 			})
 

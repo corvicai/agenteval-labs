@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -85,8 +86,12 @@ func JWTMiddleware(config JWTConfig) echo.MiddlewareFunc {
 				})
 			}
 
-			// Parse and validate token
+			// Parse and validate token — explicitly enforce HMAC signing to prevent
+			// algorithm-confusion attacks (e.g. alg:none or RS256 key-confusion).
 			token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (any, error) {
+				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+					return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+				}
 				return []byte(config.SecretKey), nil
 			})
 
