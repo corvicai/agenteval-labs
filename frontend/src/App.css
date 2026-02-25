@@ -198,6 +198,20 @@
   box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3) !important;
 }
 
+.nav-btn-admin {
+  margin-left: auto;
+  opacity: 0.75;
+}
+.nav-btn-admin:hover,
+.nav-btn-admin.active {
+  opacity: 1;
+}
+.nav-btn-admin.active {
+  background: rgba(239, 68, 68, 0.18) !important;
+  color: #fca5a5 !important;
+  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.2) !important;
+}
+
 /* Main Content Area - LIGHT MODE */
 .main-content {
   flex: 1;

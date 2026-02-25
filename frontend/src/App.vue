@@ -92,6 +92,12 @@
             :class="{ active: viewMode === 'docs' }"
             @click="viewMode = 'docs'"
           >📂 Docs</button>
+          <button
+            v-if="isAdmin"
+            class="nav-btn nav-btn-admin"
+            :class="{ active: viewMode === 'admin-debug' }"
+            @click="viewMode = 'admin-debug'"
+          >🔧 Debug</button>
         </nav>
 
         <!-- Stats View -->
@@ -113,6 +119,11 @@
     <!-- Docs View -->
     <main v-if="viewMode === 'docs'" class="main-content">
       <DocsView />
+    </main>
+
+    <!-- Super Admin Debug Panel -->
+    <main v-if="viewMode === 'admin-debug' && isAdmin" class="main-content">
+      <AdminDebugPanel />
     </main>
 
         <!-- Main Benchmarking Content -->
@@ -229,6 +240,7 @@ import MaintenanceOverlay from './components/MaintenanceOverlay.vue'
 import AfkReconnectOverlay from './components/AfkReconnectOverlay.vue'
 import AgentManagerModal from './components/AgentManagerModal.vue'
 import DocsView from './components/DocsView.vue'
+import AdminDebugPanel from './components/AdminDebugPanel.vue'
 import PrintReport from './components/PrintReport.vue'
 import * as api from './services/api.js'
 import wsService from './services/websocket.js'
@@ -248,8 +260,9 @@ const viewMode = ref(localStorage.getItem('viewMode') || 'benchmarks'); // 'benc
 const benchmarkMode = ref(localStorage.getItem('benchmarkMode') || 'runner') // 'history', 'runner'
 const isLoggingIn = ref(false) // Flag to prevent concurrent initialization during login
 
-// Manager state
+// Manager / Admin state
 const isManager = ref(false)
+const isAdmin = computed(() => !!currentUser.value?.is_admin)
 const appReady = ref(false)
 
 

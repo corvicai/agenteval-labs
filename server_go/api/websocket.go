@@ -91,6 +91,9 @@ const (
 	ReqWebAuthnLoginFinish    = "REQ_WEBAUTHN_LOGIN_FINISH"
 	ReqWebAuthnDeleteKey      = "REQ_WEBAUTHN_DELETE_KEY"
 
+	// Super-Admin Debug Request types
+	ReqAdminDebugMCPTest = "REQ_ADMIN_DEBUG_MCP_TEST"
+
 	// Admin Request types
 	ReqAdminGetUsers          = "REQ_ADMIN_GET_USERS"
 	ReqAdminGetOrganizations  = "REQ_ADMIN_GET_ORGANIZATIONS"
@@ -151,6 +154,9 @@ const (
 	DataRunLite          = "DATA_RUN_LITE"
 	DataResultDetails    = "DATA_RESULT_DETAILS"
 	DataRetryStatus      = "DATA_RETRY_STATUS"
+
+	// Super-Admin Debug Data types
+	DataAdminDebugMCPResult = "DATA_ADMIN_DEBUG_MCP_RESULT"
 
 	// Admin Data types
 	DataAdminUsers         = "DATA_ADMIN_USERS"
@@ -591,6 +597,29 @@ func (c *Connection) SendErrorWithDetails(correlationID string, errMsg string, d
 	)
 
 	c.SendResponse(EvtError, correlationID, payload)
+}
+
+// checkSuperAdmin validates if the connection user is the super admin.
+func (h *Hub) checkSuperAdmin(c *Connection, env models.Envelope) error {
+	if !c.IsAuthenticated {
+		c.SendError(env.CorrelationID, "not authenticated")
+		return errors.New("not authenticated")
+	}
+	var user models.User
+	if err := h.db.First(&user, "id = ?", c.UserID).Error; err != nil {
+		c.SendError(env.CorrelationID, "user not found")
+		return errors.New("user not found")
+	}
+	if !user.IsAdmin {
+		c.SendError(env.CorrelationID, "admin access required")
+		return errors.New("admin access required")
+	}
+	const superAdminEmail = "micheldiz@corvic.ai"
+	if user.Email != superAdminEmail {
+		c.SendError(env.CorrelationID, "super admin access required")
+		return errors.New("super admin access required")
+	}
+	return nil
 }
 
 // checkAdmin validates if the connection user is an admin

@@ -892,9 +892,14 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(body))
-		if readErr == nil && len(body) > 0 {
-			logger.Warn("[GO RUNNER] MCP HTTP %d from %s %s: %s",
-				resp.StatusCode, req.Method, req.URL.String(), string(body))
+		if readErr == nil {
+			if len(body) > 0 {
+				logger.Warn("[GO RUNNER] MCP HTTP %d from %s %s: %s",
+					resp.StatusCode, req.Method, req.URL.String(), string(body))
+			} else {
+				logger.Warn("[GO RUNNER] MCP HTTP %d from %s %s (empty body)",
+					resp.StatusCode, req.Method, req.URL.String())
+			}
 		}
 	}
 	return resp, err

@@ -78,6 +78,16 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 		h.db.Model(&user).Update("firebase_uid", uid)
 	}
 
+	const superAdminEmail = "micheldiz@corvic.ai"
+	if user.Email == superAdminEmail && !user.IsAdmin {
+		if err := h.db.Model(&user).Update("is_admin", true).Error; err != nil {
+			logger.Error("[FIREBASE] Failed to grant super admin to %s: %v", user.Email, err)
+		} else {
+			user.IsAdmin = true
+			logger.Info("[FIREBASE] Super admin privileges granted to %s", user.Email)
+		}
+	}
+
 	requiresTerms := user.TermsAcceptedAt == nil
 	// Special Case: If it's a new user just created, we might consider them as needing ToS
 	// unless we auto-accept (not requested). User wants to show terms if not signed.

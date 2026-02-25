@@ -877,6 +877,11 @@ class WebSocketService {
         })
     }
 
+    // Super-Admin Debug methods
+    adminDebugMCPTest(payload) {
+        return this.request('REQ_ADMIN_DEBUG_MCP_TEST', payload, 60000)
+    }
+
     // Event handling
     on(event, callback) {
         if (!this.listeners.has(event)) {
