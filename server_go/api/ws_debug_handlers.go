@@ -128,11 +128,13 @@ func testName(testType string) string {
 }
 
 // runMCPGoSDKTest exercises the exact same code path used in production.
+// NOTE: This makes a full round-trip including the tool call (AI inference),
+// which can take minutes. We use the same timeout as the production runner.
 func runMCPGoSDKTest(endpoint, token, question string) DebugMCPTestResult {
 	result := DebugMCPTestResult{Name: "Go SDK (production path)"}
 	start := time.Now()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), orchestrator.RunnerTaskTimeout)
 	defer cancel()
 
 	runner := orchestrator.NewGoRunner()

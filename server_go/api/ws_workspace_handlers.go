@@ -191,6 +191,15 @@ func (h *Hub) handleUpdateAgent(c *Connection, env models.Envelope) {
 		return
 	}
 
+	// Propagate config changes to all QuestionSetAgent links for this agent.
+	// Links store a snapshot of the config at assignment time; if stale, runs
+	// would use the old credentials instead of the updated ones.
+	if err := h.db.Model(&models.QuestionSetAgent{}).
+		Where("agent_id = ?", agentID).
+		Update("config", models.EncryptedJSON(configJSON)).Error; err != nil {
+		logger.Warn("[WS][UPDATE_AGENT] failed to propagate config to question set agents: agent_id=%s err=%v", agentID, err)
+	}
+
 	h.BroadcastEvent(agent.WorkspaceID, "agents", "updated", agent)
 	c.SendResponse(DataResponse, env.CorrelationID, agent)
 }

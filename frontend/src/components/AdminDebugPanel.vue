@@ -79,7 +79,7 @@
           >
             <span v-if="isRunning" class="spinner-inline"></span>
             <span v-else>▶</span>
-            {{ isRunning ? 'Running tests…' : 'Run Selected Tests' }}
+            {{ isRunning ? `Running… ${elapsedSeconds}s` : 'Run Selected Tests' }}
           </button>
           <button
             v-if="results.length"
@@ -189,25 +189,27 @@ const isRunning = ref(false)
 const runError = ref('')
 const results = ref([])
 const lastEndpoint = ref('')
+const elapsedSeconds = ref(0)
+let elapsedTimer = null
 
 const availableTests = [
   {
     key: 'go_sdk',
     name: 'Go SDK (production path)',
     icon: '🏭',
-    desc: 'Exercises the exact same code used in production runs.',
+    desc: 'Full round-trip: initialize + CallTool("query") with AI inference. Same code as production runs. May take 30s–several minutes.',
   },
   {
     key: 'raw_2025_06_18',
     name: 'Raw HTTP – MCP 2025-06-18',
     icon: '🔬',
-    desc: 'Direct HTTP POST bypassing the Go MCP SDK. Uses latest protocol version.',
+    desc: 'Direct HTTP POST bypassing the Go MCP SDK — only tests the initialize handshake, not the tool call. Fast (~100ms).',
   },
   {
     key: 'raw_2024_11_05',
     name: 'Raw HTTP – MCP 2024-11-05',
     icon: '🔬',
-    desc: 'Direct HTTP POST bypassing the Go MCP SDK. Uses older protocol version.',
+    desc: 'Same as above with the older protocol version. Fast (~100ms).',
   },
 ]
 
@@ -219,6 +221,8 @@ async function runTests() {
   runError.value = ''
   results.value = []
   lastEndpoint.value = form.endpoint
+  elapsedSeconds.value = 0
+  elapsedTimer = setInterval(() => { elapsedSeconds.value++ }, 1000)
 
   try {
     const resp = await wsService.adminDebugMCPTest({
@@ -237,6 +241,8 @@ async function runTests() {
     runError.value = err?.message || String(err)
   } finally {
     isRunning.value = false
+    clearInterval(elapsedTimer)
+    elapsedTimer = null
   }
 }
 

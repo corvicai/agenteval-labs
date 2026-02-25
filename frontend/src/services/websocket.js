@@ -879,7 +879,9 @@ class WebSocketService {
 
     // Super-Admin Debug methods
     adminDebugMCPTest(payload) {
-        return this.request('REQ_ADMIN_DEBUG_MCP_TEST', payload, 60000)
+        // Go SDK test can take as long as a real MCP run (up to 20 min).
+        // Raw HTTP tests finish in <1s. Use a generous timeout for the full suite.
+        return this.request('REQ_ADMIN_DEBUG_MCP_TEST', payload, 25 * 60 * 1000)
     }
 
     // Event handling
