@@ -67,8 +67,10 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 1024,
 	Subprotocols:    []string{"iap-bearer-token"},
 	CheckOrigin: func(r *http.Request) bool {
-		// Dev mode: Allow all
-		if os.Getenv("APP_ENV") != "production" {
+		allowedStr := os.Getenv("ALLOWED_ORIGINS")
+
+		// No explicit allowlist and not production: allow all (local dev).
+		if allowedStr == "" && os.Getenv("APP_ENV") != "production" {
 			return true
 		}
 
@@ -91,10 +93,9 @@ var upgrader = websocket.Upgrader{
 			return true
 		}
 
-		// Fallback to explicit allowlist for cross-origin cases.
-		allowedStr := os.Getenv("ALLOWED_ORIGINS")
+		// Explicit allowlist (set in Cloud Run dev and prod).
 		if allowedStr == "" {
-			return false // Secure by default
+			return false
 		}
 		allowedOrigins := strings.Split(allowedStr, ",")
 		for _, allowed := range allowedOrigins {
@@ -134,20 +135,21 @@ func main() {
 		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch},
 	}
 
-	if os.Getenv("APP_ENV") != "production" {
-		logger.Info("[SECURITY] Running in Development Mode - CORS: Allow All")
-		corsConfig.AllowOrigins = []string{"*"}
-	} else {
-		allowedStr := os.Getenv("ALLOWED_ORIGINS")
-		if allowedStr == "" {
-			log.Fatal("[SECURITY] FATAL: ALLOWED_ORIGINS environment variable must be set in production")
-		}
-		logger.Info("[SECURITY] Running in Production Mode - CORS Restricted to: %s", allowedStr)
+	allowedStr := os.Getenv("ALLOWED_ORIGINS")
+	if allowedStr != "" {
+		// Explicit allowlist: restrict CORS regardless of APP_ENV.
+		// Set this in Cloud Run (both dev and prod) via Pulumi config.
 		origins := strings.Split(allowedStr, ",")
 		for i := range origins {
 			origins[i] = strings.TrimSpace(origins[i])
 		}
 		corsConfig.AllowOrigins = origins
+		logger.Info("[SECURITY] CORS restricted to: %s", allowedStr)
+	} else if os.Getenv("APP_ENV") == "production" {
+		log.Fatal("[SECURITY] FATAL: ALLOWED_ORIGINS environment variable must be set in production")
+	} else {
+		corsConfig.AllowOrigins = []string{"*"}
+		logger.Info("[SECURITY] Running in local dev mode - CORS: Allow All")
 	}
 	e.Use(echoMiddleware.CORSWithConfig(corsConfig))
 
