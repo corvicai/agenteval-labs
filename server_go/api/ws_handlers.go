@@ -112,6 +112,10 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 	case ReqWebAuthnDeleteKey:
 		h.handleWebAuthnDeleteKey(c, env)
 
+	// Super-Admin Debug handlers
+	case ReqAdminDebugMCPTest:
+		h.handleAdminDebugMCPTest(c, env)
+
 	// Admin handlers
 	case ReqAdminGetUsers:
 		h.handleAdminGetUsers(c, env)
