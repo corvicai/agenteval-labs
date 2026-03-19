@@ -1,8 +1,6 @@
 module benchmarking-platform
 
-go 1.24.0
-
-toolchain go1.24.12
+go 1.25.0
 
 require (
 	firebase.google.com/go/v4 v4.19.0
@@ -12,6 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.1
 	github.com/labstack/echo/v4 v4.15.0
+	github.com/modelcontextprotocol/go-sdk v1.4.1
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.47.0
 	google.golang.org/api v0.262.0
@@ -68,10 +67,11 @@ require (
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-sqlite3 v1.14.17 // indirect
-	github.com/modelcontextprotocol/go-sdk v1.3.0 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	github.com/segmentio/asm v1.1.3 // indirect
+	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
