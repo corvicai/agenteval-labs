@@ -121,6 +121,8 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 		h.handleAdminGetUserProfile(c, env)
 	case ReqAdminGetOrgProfile:
 		h.handleAdminGetOrgProfile(c, env)
+	case ReqAdminGetRuns:
+		h.handleAdminGetRuns(c, env)
 	case ReqAdminCreateUser:
 		h.handleAdminCreateUser(c, env)
 	case ReqAdminCreateOrg:

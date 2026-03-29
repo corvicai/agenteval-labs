@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -67,6 +68,9 @@ func (r *blockingRunner) StartedCount() int {
 }
 
 func setupOrchestratorTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	require.NoError(t, os.Setenv("ENCRYPTION_KEY", "1234567890abcdef"))
+
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 
@@ -284,6 +288,358 @@ func TestEngine_CancelRun_SkipsTasksAlreadyDequeuedButWaitingSemaphore(t *testin
 	var resultCount int64
 	require.NoError(t, db.Model(&models.RunResult{}).Where("run_id = ?", runID).Count(&resultCount).Error)
 	assert.LessOrEqual(t, resultCount, int64(1))
+}
+
+func TestEngine_RerunTaskMarksRunRunningAndIncrementsTotalTasks(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, _ := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+	agent := createTestAgent(t, db, workspaceID, "Primary", "openai", mockOpenAIConfig())
+
+	require.NoError(t, db.Model(&models.Run{}).Where("id = ?", runID).Updates(map[string]any{
+		"status":      "completed",
+		"total_tasks": 1,
+	}).Error)
+
+	engine := NewEngine(db, 0)
+
+	err := engine.RerunTask(runID, agent.ID, "q-1", nil)
+	require.NoError(t, err)
+
+	var run models.Run
+	require.NoError(t, db.First(&run, "id = ?", runID).Error)
+	assert.Equal(t, "running", run.Status)
+	assert.Equal(t, 2, run.TotalTasks)
+	assert.Equal(t, 1, len(engine.taskQueue))
+}
+
+func TestEngine_RerunTaskForEvaluatorKeepsCanonicalEvalQuestionID(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, _ := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	primary := createTestAgent(t, db, workspaceID, "Primary", "openai", mockOpenAIConfig())
+	evaluator := createTestAgent(t, db, workspaceID, "Judge", "evaluator", map[string]any{
+		"llm_provider":    "openai",
+		"openai_mode":     "standard",
+		"openai_api_key":  "MOCK",
+		"target_agent_id": primary.ID.String(),
+	})
+
+	targetResult := models.RunResult{
+		ID:         uuid.New(),
+		RunID:      runID,
+		AgentID:    primary.ID,
+		QuestionID: "q-1",
+		Status:     "success",
+		Answer:     "latest answer",
+	}
+	require.NoError(t, db.Create(&targetResult).Error)
+
+	engine := NewEngine(db, 0)
+
+	err := engine.RerunTask(runID, evaluator.ID, "q-1", &RerunTaskOptions{
+		ResultID:         targetResult.ID.String(),
+		OriginalQuestion: "What is 2+2?",
+		ExpectedAnswer:   "4",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, len(engine.taskQueue))
+
+	task := <-engine.taskQueue
+	assert.Equal(t, fmt.Sprintf("eval-%s-%s", primary.ID, "q-1"), task.QuestionID)
+	assert.Equal(t, targetResult.ID, task.TargetRunResultID)
+	assert.Equal(t, "latest answer", task.AgentAnswer)
+}
+
+func TestEngine_RerunTaskForEvaluatorUsesFrontendExpectedOverrideWithoutOriginalQuestion(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, _ := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "stale expected")
+
+	primary := createTestAgent(t, db, workspaceID, "Primary", "openai", mockOpenAIConfig())
+	evaluator := createTestAgent(t, db, workspaceID, "Judge", "evaluator", map[string]any{
+		"llm_provider":    "openai",
+		"openai_mode":     "standard",
+		"openai_api_key":  "MOCK",
+		"target_agent_id": primary.ID.String(),
+	})
+
+	targetResult := models.RunResult{
+		ID:         uuid.New(),
+		RunID:      runID,
+		AgentID:    primary.ID,
+		QuestionID: "q-1",
+		Status:     "success",
+		Answer:     "latest answer",
+	}
+	require.NoError(t, db.Create(&targetResult).Error)
+
+	engine := NewEngine(db, 0)
+
+	err := engine.RerunTask(runID, evaluator.ID, "q-1", &RerunTaskOptions{
+		ResultID:       targetResult.ID.String(),
+		ExpectedAnswer: "fresh expected",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, len(engine.taskQueue))
+
+	task := <-engine.taskQueue
+	assert.Equal(t, fmt.Sprintf("eval-%s-%s", primary.ID, "q-1"), task.QuestionID)
+	assert.Equal(t, "What is 2+2?", task.OriginalQuestion)
+	assert.Equal(t, "fresh expected", task.ExpectedAnswer)
+}
+
+func TestEngine_RerunTaskForEvaluatorUsesTargetAgentFromPrimaryResultID(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, _ := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	primary := createTestAgent(t, db, workspaceID, "Primary", "openai", mockOpenAIConfig())
+	evaluator := createTestAgent(t, db, workspaceID, "Judge", "evaluator", map[string]any{
+		"llm_provider":   "openai",
+		"openai_mode":    "standard",
+		"openai_api_key": "MOCK",
+	})
+
+	targetResult := models.RunResult{
+		ID:         uuid.New(),
+		RunID:      runID,
+		AgentID:    primary.ID,
+		QuestionID: "q-1",
+		Status:     "success",
+		Answer:     "latest answer",
+	}
+	require.NoError(t, db.Create(&targetResult).Error)
+
+	engine := NewEngine(db, 0)
+
+	err := engine.RerunTask(runID, evaluator.ID, "q-1", &RerunTaskOptions{
+		ResultID:         targetResult.ID.String(),
+		OriginalQuestion: "What is 2+2?",
+		ExpectedAnswer:   "4",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, len(engine.taskQueue))
+
+	task := <-engine.taskQueue
+	assert.Equal(t, fmt.Sprintf("eval-%s-%s", primary.ID, "q-1"), task.QuestionID)
+	assert.Equal(t, targetResult.ID, task.TargetRunResultID)
+	assert.Equal(t, "latest answer", task.AgentAnswer)
+}
+
+func TestEngine_RunEvaluatorsQueuesOnlyLatestLogicalResult(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, _ := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	primary := createTestAgent(t, db, workspaceID, "Primary", "openai", mockOpenAIConfig())
+	evaluator := createTestAgent(t, db, workspaceID, "Judge", "evaluator", map[string]any{
+		"llm_provider":    "openai",
+		"openai_mode":     "standard",
+		"openai_api_key":  "MOCK",
+		"target_agent_id": primary.ID.String(),
+	})
+
+	now := time.Now().UTC()
+	require.NoError(t, db.Create(&models.RunResult{
+		ID:         uuid.New(),
+		RunID:      runID,
+		AgentID:    primary.ID,
+		QuestionID: "q-1",
+		Status:     "success",
+		Answer:     "older answer",
+		CreatedAt:  now.Add(-time.Minute),
+	}).Error)
+	require.NoError(t, db.Create(&models.RunResult{
+		ID:         uuid.New(),
+		RunID:      runID,
+		AgentID:    primary.ID,
+		QuestionID: "q-1",
+		Status:     "success",
+		Answer:     "latest answer",
+		CreatedAt:  now,
+	}).Error)
+
+	engine := NewEngine(db, 0)
+
+	err := engine.RunEvaluators(runID, []uuid.UUID{evaluator.ID})
+	require.NoError(t, err)
+
+	var run models.Run
+	require.NoError(t, db.First(&run, "id = ?", runID).Error)
+	assert.Equal(t, 2, run.TotalTasks)
+	require.Equal(t, 1, len(engine.taskQueue))
+
+	task := <-engine.taskQueue
+	assert.Equal(t, "eval-"+primary.ID.String()+"-q-1", task.QuestionID)
+	assert.Equal(t, "latest answer", task.AgentAnswer)
+	assert.Equal(t, evaluator.ID, task.AgentID)
+}
+
+func TestEngine_StartRun_QueuesQuestionsInAscendingOrder(t *testing.T) {
+	t.Setenv("ENCRYPTION_KEY", "12345678901234567890123456789012")
+
+	db := setupOrchestratorTestDB(t)
+
+	user := models.User{ID: uuid.New(), Name: "Test", Email: "ordered@test.com"}
+	require.NoError(t, db.Create(&user).Error)
+
+	workspace := models.Workspace{ID: uuid.New(), UserID: user.ID, Name: "WS"}
+	require.NoError(t, db.Create(&workspace).Error)
+
+	client := models.Client{ID: uuid.New(), WorkspaceID: workspace.ID, Name: "C"}
+	require.NoError(t, db.Create(&client).Error)
+
+	qsData := map[string]any{
+		"categories": []map[string]any{
+			{
+				"name": "General",
+				"questions": []map[string]any{
+					{"id": "q-1", "question": "Question 1"},
+					{"id": "q-2", "question": "Question 2"},
+				},
+			},
+			{
+				"name": "More",
+				"questions": []map[string]any{
+					{"id": "q-3", "question": "Question 3"},
+				},
+			},
+		},
+	}
+	qsBytes, err := json.Marshal(qsData)
+	require.NoError(t, err)
+
+	qs := models.QuestionSet{
+		ID:       uuid.New(),
+		ClientID: client.ID,
+		Name:     "QS",
+		Data:     qsBytes,
+	}
+	require.NoError(t, db.Create(&qs).Error)
+
+	agentA := createTestAgent(t, db, workspace.ID, "Agent A", "openai", mockOpenAIConfig())
+	agentB := createTestAgent(t, db, workspace.ID, "Agent B", "openai", mockOpenAIConfig())
+
+	require.NoError(t, db.Model(&models.Agent{}).Where("id = ?", agentA.ID).Update("max_concurrency", 5).Error)
+	require.NoError(t, db.Model(&models.Agent{}).Where("id = ?", agentB.ID).Update("max_concurrency", 7).Error)
+
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qs.ID,
+		AgentID:       agentB.ID,
+		Enabled:       true,
+		Position:      0,
+	}).Error)
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qs.ID,
+		AgentID:       agentA.ID,
+		Enabled:       true,
+		Position:      1,
+	}).Error)
+
+	engine := NewEngine(db, 0)
+
+	run, err := engine.StartRun(workspace.ID, qs.ID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, run)
+	assert.Equal(t, 6, run.TotalTasks)
+	require.Equal(t, 6, len(engine.taskQueue))
+
+	expected := []struct {
+		agentID    uuid.UUID
+		questionID string
+	}{
+		{agentID: agentB.ID, questionID: "q-1"},
+		{agentID: agentA.ID, questionID: "q-1"},
+		{agentID: agentB.ID, questionID: "q-2"},
+		{agentID: agentA.ID, questionID: "q-2"},
+		{agentID: agentB.ID, questionID: "q-3"},
+		{agentID: agentA.ID, questionID: "q-3"},
+	}
+
+	for _, item := range expected {
+		task := <-engine.taskQueue
+		assert.Equal(t, item.agentID, task.AgentID)
+		assert.Equal(t, item.questionID, task.QuestionID)
+		assert.Equal(t, 1, task.MaxConcurrency)
+	}
+}
+
+func TestEngine_StartRun_PreservesExplicitAgentOrder(t *testing.T) {
+	t.Setenv("ENCRYPTION_KEY", "12345678901234567890123456789012")
+
+	db := setupOrchestratorTestDB(t)
+
+	user := models.User{ID: uuid.New(), Name: "Test", Email: "explicit-order@test.com"}
+	require.NoError(t, db.Create(&user).Error)
+
+	workspace := models.Workspace{ID: uuid.New(), UserID: user.ID, Name: "WS"}
+	require.NoError(t, db.Create(&workspace).Error)
+
+	client := models.Client{ID: uuid.New(), WorkspaceID: workspace.ID, Name: "C"}
+	require.NoError(t, db.Create(&client).Error)
+
+	qs := models.QuestionSet{
+		ID:       uuid.New(),
+		ClientID: client.ID,
+		Name:     "QS",
+		Data:     []byte(`{"categories":[{"questions":[{"id":"q-1","question":"Question 1"}]}]}`),
+	}
+	require.NoError(t, db.Create(&qs).Error)
+
+	agentA := createTestAgent(t, db, workspace.ID, "Agent A", "openai", mockOpenAIConfig())
+	agentB := createTestAgent(t, db, workspace.ID, "Agent B", "openai", mockOpenAIConfig())
+
+	require.NoError(t, db.Model(&models.Agent{}).Where("id = ?", agentA.ID).Update("position", 10).Error)
+	require.NoError(t, db.Model(&models.Agent{}).Where("id = ?", agentB.ID).Update("position", 0).Error)
+
+	engine := NewEngine(db, 0)
+
+	run, err := engine.StartRun(workspace.ID, qs.ID, []uuid.UUID{agentA.ID, agentB.ID})
+	require.NoError(t, err)
+	require.NotNil(t, run)
+	require.Equal(t, 2, len(engine.taskQueue))
+
+	first := <-engine.taskQueue
+	second := <-engine.taskQueue
+	assert.Equal(t, agentA.ID, first.AgentID)
+	assert.Equal(t, agentB.ID, second.AgentID)
+	assert.Equal(t, "q-1", first.QuestionID)
+	assert.Equal(t, "q-1", second.QuestionID)
+}
+
+func TestEngine_StartRunForUser_PersistsStarter(t *testing.T) {
+	t.Setenv("ENCRYPTION_KEY", "12345678901234567890123456789012")
+
+	db := setupOrchestratorTestDB(t)
+
+	user := models.User{ID: uuid.New(), Name: "Starter", Email: "starter-persists@test.com"}
+	require.NoError(t, db.Create(&user).Error)
+
+	workspace := models.Workspace{ID: uuid.New(), UserID: user.ID, Name: "WS"}
+	require.NoError(t, db.Create(&workspace).Error)
+
+	client := models.Client{ID: uuid.New(), WorkspaceID: workspace.ID, Name: "C"}
+	require.NoError(t, db.Create(&client).Error)
+
+	qs := models.QuestionSet{
+		ID:       uuid.New(),
+		ClientID: client.ID,
+		Name:     "QS",
+		Data:     []byte(`{"categories":[{"questions":[{"id":"q-1","question":"Question 1"}]}]}`),
+	}
+	require.NoError(t, db.Create(&qs).Error)
+
+	agent := createTestAgent(t, db, workspace.ID, "Agent A", "openai", mockOpenAIConfig())
+
+	engine := NewEngine(db, 0)
+
+	run, err := engine.StartRunForUser(workspace.ID, qs.ID, []uuid.UUID{agent.ID}, user.ID)
+	require.NoError(t, err)
+	require.NotNil(t, run)
+	require.NotNil(t, run.CreatedByUserID)
+	assert.Equal(t, user.ID, *run.CreatedByUserID)
+
+	var storedRun models.Run
+	require.NoError(t, db.First(&storedRun, "id = ?", run.ID).Error)
+	require.NotNil(t, storedRun.CreatedByUserID)
+	assert.Equal(t, user.ID, *storedRun.CreatedByUserID)
 }
 
 func TestEngine_CancelRun_EmitsRunFinishedCancelled(t *testing.T) {

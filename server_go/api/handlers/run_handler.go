@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	"benchmarking-platform/api"
+	"benchmarking-platform/internal/middleware"
 	"benchmarking-platform/models"
 	"benchmarking-platform/orchestrator"
 )
@@ -112,12 +113,19 @@ func (h *RunHandler) StartRun(c echo.Context) error {
 	totalTasks = totalTasks * len(agents)
 
 	// Create run record
+	var createdByUserID *uuid.UUID
+	if rawUserID, ok := c.Get(string(middleware.UserIDKey)).(string); ok {
+		if parsedUserID, err := uuid.Parse(rawUserID); err == nil {
+			createdByUserID = &parsedUserID
+		}
+	}
 	run := models.Run{
-		ID:            uuid.New(),
-		WorkspaceID:   wsID,
-		QuestionSetID: qsID,
-		Status:        "running",
-		TotalTasks:    totalTasks,
+		ID:              uuid.New(),
+		WorkspaceID:     wsID,
+		QuestionSetID:   qsID,
+		CreatedByUserID: createdByUserID,
+		Status:          "running",
+		TotalTasks:      totalTasks,
 	}
 	if err := h.DB.Create(&run).Error; err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})

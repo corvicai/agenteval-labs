@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"benchmarking-platform/internal/logger"
@@ -1208,6 +1210,208 @@ func (h *Hub) handleAdminGetLoginLogs(c *Connection, env models.Envelope) {
 	}
 
 	c.SendResponse(DataAdminLoginLogs, env.CorrelationID, logs)
+}
+
+func (h *Hub) handleAdminGetRuns(c *Connection, env models.Envelope) {
+	if err := h.checkAdmin(c, env); err != nil {
+		return
+	}
+
+	limit := 100
+	var payload models.AdminRunsPayload
+	if err := json.Unmarshal([]byte(env.Payload), &payload); err == nil && payload.Limit > 0 {
+		limit = payload.Limit
+		if limit > 500 {
+			limit = 500
+		}
+	}
+
+	hasCreatedByColumn := h.db.Migrator().HasColumn(&models.Run{}, "created_by_user_id")
+	starterJoin := ""
+	startedByExpr := "COALESCE(owner.name, 'Unknown')"
+	activeUsersExpr := "COUNT(DISTINCT w.user_id)"
+	if hasCreatedByColumn {
+		starterJoin = "LEFT JOIN users starter ON starter.id = r.created_by_user_id"
+		startedByExpr = "COALESCE(starter.name, owner.name, 'Unknown')"
+		activeUsersExpr = "COUNT(DISTINCT COALESCE(r.created_by_user_id, w.user_id))"
+	}
+
+	type runRow struct {
+		ID              uuid.UUID `json:"id"`
+		Status          string    `json:"status"`
+		WorkspaceID     uuid.UUID `json:"workspace_id"`
+		WorkspaceName   string    `json:"workspace_name"`
+		QuestionSetName string    `json:"question_set_name"`
+		StartedByName   string    `json:"started_by_name"`
+		TotalTasks      int       `json:"total_tasks"`
+		ResultCount     int64     `json:"result_count"`
+		SuccessCount    int64     `json:"success_count"`
+		ErrorCount      int64     `json:"error_count"`
+		CreatedAt       time.Time `json:"created_at"`
+		LastActivityAt  string    `json:"last_activity_at"`
+	}
+
+	var runRows []runRow
+	runsQuery := fmt.Sprintf(`
+		WITH recent_runs AS (
+			SELECT
+				r.id,
+				r.status,
+				r.workspace_id,
+				r.total_tasks,
+				r.created_at,
+				w.name AS workspace_name,
+				COALESCE(qs.name, '(deleted question set)') AS question_set_name,
+				%s AS started_by_name
+			FROM runs r
+			JOIN workspaces w ON w.id = r.workspace_id
+			%s
+			LEFT JOIN users owner ON owner.id = w.user_id
+			LEFT JOIN question_sets qs ON qs.id = r.question_set_id
+			ORDER BY CASE WHEN r.status = 'running' THEN 0 ELSE 1 END, r.created_at DESC
+			LIMIT ?
+		)
+		SELECT
+			recent_runs.id,
+			recent_runs.status,
+			recent_runs.workspace_id,
+			recent_runs.workspace_name,
+			recent_runs.question_set_name,
+			recent_runs.started_by_name,
+			recent_runs.total_tasks,
+			COUNT(rr.id) AS result_count,
+			COALESCE(SUM(CASE WHEN rr.status = 'success' THEN 1 ELSE 0 END), 0) AS success_count,
+			COALESCE(SUM(CASE WHEN rr.status = 'error' THEN 1 ELSE 0 END), 0) AS error_count,
+			recent_runs.created_at,
+			MAX(rr.created_at) AS last_activity_at
+		FROM recent_runs
+		LEFT JOIN run_results rr ON rr.run_id = recent_runs.id
+		GROUP BY
+			recent_runs.id,
+			recent_runs.status,
+			recent_runs.workspace_id,
+			recent_runs.workspace_name,
+			recent_runs.question_set_name,
+			recent_runs.started_by_name,
+			recent_runs.total_tasks,
+			recent_runs.created_at
+		ORDER BY CASE WHEN recent_runs.status = 'running' THEN 0 ELSE 1 END, recent_runs.created_at DESC
+	`, startedByExpr, starterJoin)
+	if err := h.db.Raw(runsQuery, limit).Scan(&runRows).Error; err != nil {
+		logger.Error("[ADMIN] failed to fetch admin runs: %v", err)
+		c.SendError(env.CorrelationID, "failed to fetch runs: "+err.Error())
+		return
+	}
+
+	var summary models.AdminRunsSummary
+	summaryQuery := fmt.Sprintf(`
+		SELECT
+			COUNT(*) AS active_runs,
+			COUNT(DISTINCT r.workspace_id) AS active_workspaces,
+			%s AS active_users
+		FROM runs r
+		JOIN workspaces w ON w.id = r.workspace_id
+		WHERE r.status = 'running'
+	`, activeUsersExpr)
+	if err := h.db.Raw(summaryQuery).Scan(&summary).Error; err != nil {
+		logger.Error("[ADMIN] failed to fetch admin run summary: %v", err)
+		c.SendError(env.CorrelationID, "failed to fetch run summary: "+err.Error())
+		return
+	}
+
+	type pendingRow struct {
+		TotalTasks  int   `json:"total_tasks"`
+		ResultCount int64 `json:"result_count"`
+	}
+	var pendingRows []pendingRow
+	if err := h.db.Raw(`
+		SELECT
+			r.total_tasks,
+			COUNT(rr.id) AS result_count
+		FROM runs r
+		LEFT JOIN run_results rr ON rr.run_id = r.id
+		WHERE r.status = 'running'
+		GROUP BY r.id, r.total_tasks
+	`).Scan(&pendingRows).Error; err != nil {
+		logger.Error("[ADMIN] failed to calculate admin pending tasks: %v", err)
+		c.SendError(env.CorrelationID, "failed to calculate pending tasks: "+err.Error())
+		return
+	}
+
+	var runs []models.AdminRunRecord
+	runs = make([]models.AdminRunRecord, 0, len(runRows))
+	var totalPendingTasks int64
+	for _, row := range runRows {
+		pendingCount := int64(row.TotalTasks) - row.ResultCount
+		if pendingCount < 0 {
+			pendingCount = 0
+		}
+
+		progressPercent := 0.0
+		if row.TotalTasks > 0 {
+			progressPercent = (float64(row.ResultCount) / float64(row.TotalTasks)) * 100
+			if progressPercent > 100 {
+				progressPercent = 100
+			}
+		}
+
+		lastActivityAt := parseAdminRunTimestamp(row.LastActivityAt, row.CreatedAt)
+
+		runs = append(runs, models.AdminRunRecord{
+			ID:              row.ID,
+			Status:          row.Status,
+			WorkspaceID:     row.WorkspaceID,
+			WorkspaceName:   row.WorkspaceName,
+			QuestionSetName: row.QuestionSetName,
+			StartedByName:   row.StartedByName,
+			TotalTasks:      row.TotalTasks,
+			ResultCount:     row.ResultCount,
+			SuccessCount:    row.SuccessCount,
+			ErrorCount:      row.ErrorCount,
+			PendingCount:    pendingCount,
+			ProgressPercent: progressPercent,
+			CreatedAt:       row.CreatedAt,
+			LastActivityAt:  lastActivityAt,
+		})
+	}
+
+	for _, row := range pendingRows {
+		pendingCount := int64(row.TotalTasks) - row.ResultCount
+		if pendingCount > 0 {
+			totalPendingTasks += pendingCount
+		}
+	}
+
+	summary.PendingTasks = totalPendingTasks
+	summary.RecentRuns = int64(len(runs))
+
+	c.SendResponse(DataAdminRuns, env.CorrelationID, models.AdminRunsResponse{
+		Summary:     summary,
+		Runs:        runs,
+		GeneratedAt: time.Now().UTC(),
+	})
+}
+
+func parseAdminRunTimestamp(raw string, fallback time.Time) time.Time {
+	candidate := strings.TrimSpace(raw)
+	if candidate == "" {
+		return fallback
+	}
+
+	layouts := []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999Z07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, candidate); err == nil {
+			return parsed
+		}
+	}
+
+	return fallback
 }
 
 // handleAdminStartMaintenance notifies all users that maintenance is starting.

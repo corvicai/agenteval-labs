@@ -18,6 +18,10 @@
           @click="currentTab = 'organizations'"
         >🏢 Organizations</button>
         <button 
+          :class="{ active: currentTab === 'runs' }" 
+          @click="currentTab = 'runs'"
+        >🏃 Runs</button>
+        <button 
           :class="{ active: currentTab === 'logs' }" 
           @click="currentTab = 'logs'"
         >📜 Login Logs</button>
@@ -275,6 +279,147 @@
         </div>
       </div>
 
+      <div v-else-if="currentTab === 'runs'" class="tab-view">
+        <div class="tab-actions">
+          <div>
+            <h3>Run Observatory</h3>
+            <p class="tab-caption">Global view of active runs and recent execution history across the platform.</p>
+          </div>
+          <div class="action-group">
+            <span v-if="adminRunsGeneratedAt" class="date-badge">Updated {{ formatDateTime(adminRunsGeneratedAt) }}</span>
+            <button class="btn btn-secondary" @click="loadRuns()" :disabled="isRefreshingRuns">
+              <span v-if="isRefreshingRuns" class="spinner-inline"></span>
+              <span v-else>🔄</span> Refresh
+            </button>
+          </div>
+        </div>
+
+        <div class="runs-summary-grid">
+          <div class="summary-card summary-card--active">
+            <span class="summary-label">Running Now</span>
+            <strong class="summary-value">{{ adminRunsSummary.active_runs || 0 }}</strong>
+            <span class="summary-note">Concurrent runs across all workspaces</span>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">Active Workspaces</span>
+            <strong class="summary-value">{{ adminRunsSummary.active_workspaces || 0 }}</strong>
+            <span class="summary-note">Workspaces with at least one running benchmark</span>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">Users Running</span>
+            <strong class="summary-value">{{ adminRunsSummary.active_users || 0 }}</strong>
+            <span class="summary-note">Distinct starters currently executing runs</span>
+          </div>
+          <div class="summary-card summary-card--pending">
+            <span class="summary-label">Tasks Pending</span>
+            <strong class="summary-value">{{ adminRunsSummary.pending_tasks || 0 }}</strong>
+            <span class="summary-note">Remaining tasks inside active runs</span>
+          </div>
+        </div>
+
+        <div class="filter-bar">
+          <div class="search-box">
+            <span class="search-icon">🔍</span>
+            <input 
+              v-model="runSearch" 
+              type="text" 
+              placeholder="Search by question set, workspace, starter or run ID..." 
+              class="search-input"
+            />
+            <button v-if="runSearch" class="clear-btn" @click="runSearch = ''">&times;</button>
+          </div>
+          <div class="filter-group">
+            <select v-model="runStatusFilter" class="filter-select">
+              <option value="">All Status</option>
+              <option value="running">Running</option>
+              <option value="completed">Completed</option>
+              <option value="completed_with_errors">Completed With Errors</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </div>
+          <span class="filter-count">
+            Showing {{ filteredRuns.length }} of {{ adminRuns.length }}
+          </span>
+        </div>
+
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Run</th>
+                <th>Status</th>
+                <th>Started By</th>
+                <th>Workspace</th>
+                <th>Progress</th>
+                <th>Started</th>
+                <th>Last Activity</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="run in filteredRuns" :key="run.id" :class="{ 'is-active-row': run.status === 'running' }">
+                <td>
+                  <div class="user-info">
+                    <span class="user-name">{{ run.question_set_name }}</span>
+                    <span class="user-email">Run {{ shortId(run.id) }}</span>
+                  </div>
+                </td>
+                <td>
+                  <span :class="['role-badge', 'run-status-badge', runStatusClass(run.status)]">
+                    {{ formatRunStatus(run.status) }}
+                  </span>
+                </td>
+                <td>
+                  <div class="user-info">
+                    <span class="user-name">{{ run.started_by_name || 'Unknown' }}</span>
+                    <span class="user-email">{{ run.status === 'running' ? 'Active starter' : 'Recorded owner/starter' }}</span>
+                  </div>
+                </td>
+                <td>
+                  <div class="user-info">
+                    <span class="user-name">{{ run.workspace_name }}</span>
+                    <span class="user-email">{{ shortId(run.workspace_id) }}</span>
+                  </div>
+                </td>
+                <td>
+                  <div class="run-progress-cell">
+                    <div class="run-progress-meta">
+                      <span>{{ run.result_count }}/{{ run.total_tasks || 0 }} finished</span>
+                      <span>{{ Math.round(run.progress_percent || 0) }}%</span>
+                    </div>
+                    <div class="run-progress-track">
+                      <div
+                        :class="['run-progress-fill', runProgressClass(run.status, run.error_count)]"
+                        :style="{ width: `${run.progress_percent || 0}%` }"
+                      ></div>
+                    </div>
+                    <div class="run-progress-breakdown">
+                      <span>{{ run.success_count }} ok</span>
+                      <span>{{ run.error_count }} errors</span>
+                      <span>{{ run.pending_count }} pending</span>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <div class="user-info">
+                    <span class="date-badge">{{ formatDateTime(run.created_at) }}</span>
+                    <span class="user-email">{{ formatRelativeTime(run.created_at) }}</span>
+                  </div>
+                </td>
+                <td>
+                  <div class="user-info">
+                    <span class="date-badge">{{ formatDateTime(run.last_activity_at) }}</span>
+                    <span class="user-email">{{ formatRelativeTime(run.last_activity_at) }}</span>
+                  </div>
+                </td>
+              </tr>
+              <tr v-if="filteredRuns.length === 0">
+                <td colspan="7" class="empty-cell">No runs found</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <!-- Login Logs Tab -->
       <div v-else-if="currentTab === 'logs'" class="tab-view">
         <div class="tab-actions">
@@ -489,7 +634,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { wsService } from '../services/websocket.js'
 import { useWSStore } from '../stores/wsStore.js'
 import ConfirmDialog from './ConfirmDialog.vue'
@@ -507,10 +652,14 @@ const currentTab = ref(props.initialTab);
 const users = ref([]);
 const organizations = ref([]);
 const loginLogs = ref([]);
+const adminRuns = ref([]);
+const adminRunsSummary = ref({ active_runs: 0, active_workspaces: 0, active_users: 0, pending_tasks: 0, recent_runs: 0 });
+const adminRunsGeneratedAt = ref(null);
 const loading = ref(true); // Changed to true initially
 const error = ref('')
 const isRefreshing = ref(false)
 const isRefreshingLogs = ref(false)
+const isRefreshingRuns = ref(false)
 
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
@@ -535,6 +684,11 @@ const orgStatusFilter = ref('')
 const orgTimeFilter = ref('') // New
 const managerSearch = ref('') // New
 const managerTimeFilter = ref('') // New
+const runSearch = ref('')
+const runStatusFilter = ref('')
+
+const RUNS_REFRESH_INTERVAL_MS = 15000
+let runsRefreshTimer = null
 
 // Computed: Filtered Users
 const filteredUsers = computed(() => {
@@ -600,6 +754,21 @@ const filteredManagers = computed(() => {
   })
 })
 
+const filteredRuns = computed(() => {
+  return adminRuns.value.filter(run => {
+    const searchLower = runSearch.value.trim().toLowerCase()
+    const matchesSearch = !searchLower ||
+      run.question_set_name?.toLowerCase().includes(searchLower) ||
+      run.workspace_name?.toLowerCase().includes(searchLower) ||
+      run.started_by_name?.toLowerCase().includes(searchLower) ||
+      run.id?.toLowerCase().includes(searchLower)
+
+    const matchesStatus = !runStatusFilter.value || run.status === runStatusFilter.value
+
+    return matchesSearch && matchesStatus
+  })
+})
+
 // Confirmation Dialog State
 const showConfirmDialog = ref(false)
 const confirmDialogConfig = ref({
@@ -639,6 +808,51 @@ function formatUserAgent(ua) {
   return ua
 }
 
+function formatRelativeTime(dateStr) {
+  if (!dateStr) return '-'
+
+  const diffMs = Date.now() - new Date(dateStr).getTime()
+  if (Number.isNaN(diffMs)) return '-'
+
+  const diffSeconds = Math.max(Math.floor(diffMs / 1000), 0)
+  if (diffSeconds < 60) return `${diffSeconds}s ago`
+
+  const diffMinutes = Math.floor(diffSeconds / 60)
+  if (diffMinutes < 60) return `${diffMinutes}m ago`
+
+  const diffHours = Math.floor(diffMinutes / 60)
+  if (diffHours < 24) return `${diffHours}h ago`
+
+  const diffDays = Math.floor(diffHours / 24)
+  return `${diffDays}d ago`
+}
+
+function shortId(value) {
+  if (!value) return '-'
+  return String(value).slice(0, 8)
+}
+
+function formatRunStatus(status) {
+  if (status === 'completed_with_errors') return 'Completed With Errors'
+  if (!status) return 'Unknown'
+  return status.replace(/_/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase())
+}
+
+function runStatusClass(status) {
+  if (status === 'running') return 'run-status-running'
+  if (status === 'completed_with_errors') return 'run-status-warning'
+  if (status === 'completed') return 'run-status-success'
+  if (status === 'cancelled') return 'run-status-muted'
+  return ''
+}
+
+function runProgressClass(status, errorCount) {
+  if (status === 'cancelled') return 'run-progress-fill--muted'
+  if (errorCount > 0 || status === 'completed_with_errors') return 'run-progress-fill--warning'
+  if (status === 'completed') return 'run-progress-fill--success'
+  return 'run-progress-fill--active'
+}
+
 function viewUserProfile(userId) {
   emit('view-user-profile', userId)
 }
@@ -666,12 +880,27 @@ async function loadData() {
     if (currentTab.value === 'logs') {
       await loadLoginLogs()
     }
+    if (currentTab.value === 'runs') {
+      await loadRuns()
+    }
   } catch (e) {
     error.value = 'Failed to load administrative data: ' + e.message
   } finally {
     loading.value = false
     isRefreshing.value = false
   }
+}
+
+async function reloadData() {
+  if (currentTab.value === 'logs') {
+    await loadLoginLogs()
+    return
+  }
+  if (currentTab.value === 'runs') {
+    await loadRuns()
+    return
+  }
+  await loadData()
 }
 
 async function loadLoginLogs() {
@@ -685,6 +914,52 @@ async function loadLoginLogs() {
   } finally {
     isRefreshingLogs.value = false
   }
+}
+
+async function loadRuns(options = {}) {
+  if (isRefreshingRuns.value) return
+
+  const { silent = false } = options
+  const shouldShowBlockingState = !silent && currentTab.value === 'runs' && adminRuns.value.length === 0
+
+  isRefreshingRuns.value = true
+  if (shouldShowBlockingState) {
+    loading.value = true
+    error.value = ''
+  }
+
+  try {
+    const data = await wsService.adminGetRuns(100)
+    adminRuns.value = data?.runs || []
+    adminRunsSummary.value = data?.summary || { active_runs: 0, active_workspaces: 0, active_users: 0, pending_tasks: 0, recent_runs: 0 }
+    adminRunsGeneratedAt.value = data?.generated_at || null
+  } catch (e) {
+    if (currentTab.value === 'runs' && adminRuns.value.length === 0) {
+      error.value = 'Failed to load run observability data: ' + e.message
+    } else {
+      console.error('Failed to load admin runs:', e)
+    }
+  } finally {
+    if (shouldShowBlockingState) {
+      loading.value = false
+    }
+    isRefreshingRuns.value = false
+  }
+}
+
+function stopRunsAutoRefresh() {
+  if (!runsRefreshTimer) return
+  clearInterval(runsRefreshTimer)
+  runsRefreshTimer = null
+}
+
+function startRunsAutoRefresh() {
+  stopRunsAutoRefresh()
+  runsRefreshTimer = window.setInterval(() => {
+    if (currentTab.value === 'runs') {
+      loadRuns({ silent: true })
+    }
+  }, RUNS_REFRESH_INTERVAL_MS)
 }
 
 function editUser(user) {
@@ -863,26 +1138,42 @@ async function executeConfirmedAction() {
   }
 }
 
-onMounted(() => {
-  loadData();
+function handleAdminDataChanged(payload) {
+  if ((payload.resource === 'USER' || payload.resource === 'ORGANIZATION') &&
+      (payload.action === 'DELETE' || payload.action === 'UPDATE' || payload.action === 'CREATE')) {
+    console.log(`[AdminPanel] ${payload.resource} data changed remotely, refreshing...`, payload)
+    loadData()
+  }
+}
 
-  // Listen for real-time updates to users and organizations
-  wsService.on('EVT_DATA_CHANGED', (payload) => {
-    if ((payload.resource === 'USER' || payload.resource === 'ORGANIZATION') && 
-        (payload.action === 'DELETE' || payload.action === 'UPDATE' || payload.action === 'CREATE')) {
-      console.log(`[AdminPanel] ${payload.resource} data changed remotely, refreshing...`, payload)
-      loadData()
-    }
-  })
+onMounted(() => {
+  loadData()
+  if (currentTab.value === 'runs') {
+    startRunsAutoRefresh()
+  }
+
+  wsService.on('EVT_DATA_CHANGED', handleAdminDataChanged)
+})
+
+onUnmounted(() => {
+  stopRunsAutoRefresh()
+  wsService.off('EVT_DATA_CHANGED', handleAdminDataChanged)
 })
 
 // Watch tab change to load data
-import { watch } from 'vue'
 watch(currentTab, (newTab) => {
   emit('tab-change', newTab)
   if (newTab === 'logs' && loginLogs.value.length === 0) {
     loadLoginLogs()
   }
+  if (newTab === 'runs') {
+    if (adminRuns.value.length === 0) {
+      loadRuns()
+    }
+    startRunsAutoRefresh()
+    return
+  }
+  stopRunsAutoRefresh()
 })
 
 watch(userTimeFilter, () => {
@@ -1008,10 +1299,61 @@ watch(orgTimeFilter, () => {
   color: var(--text-primary);
 }
 
+.tab-caption {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
 .action-group {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.runs-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 18px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+}
+
+.summary-card--active {
+  border-color: #bfdbfe;
+  background: linear-gradient(180deg, #f8fbff 0%, #eef6ff 100%);
+}
+
+.summary-card--pending {
+  border-color: #fde68a;
+  background: linear-gradient(180deg, #fffdf5 0%, #fff8df 100%);
+}
+
+.summary-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+}
+
+.summary-value {
+  font-size: 1.8rem;
+  line-height: 1;
+  color: #0f172a;
+}
+
+.summary-note {
+  font-size: 0.8rem;
+  color: #64748b;
 }
 
 /* Filter Bar Styles */
@@ -1158,6 +1500,16 @@ td {
   color: #1e293b;
 }
 
+.is-active-row {
+  background: #fcfdff;
+}
+
+.empty-cell {
+  text-align: center;
+  color: #64748b;
+  padding: 20px 16px;
+}
+
 .user-info {
   display: flex;
   flex-direction: column;
@@ -1236,6 +1588,26 @@ td {
   color: #059669;
 }
 
+.run-status-badge.run-status-running {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.run-status-badge.run-status-warning {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.run-status-badge.run-status-success {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.run-status-badge.run-status-muted {
+  background: #e5e7eb;
+  color: #4b5563;
+}
+
 .org-badge {
   background: #e0e7ff;
   color: #4338ca;
@@ -1247,6 +1619,53 @@ td {
 
 .actions-cell {
   vertical-align: middle;
+}
+
+.run-progress-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 220px;
+}
+
+.run-progress-meta,
+.run-progress-breakdown {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.78rem;
+  color: #64748b;
+}
+
+.run-progress-track {
+  position: relative;
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.run-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.25s ease;
+}
+
+.run-progress-fill--active {
+  background: linear-gradient(90deg, #60a5fa 0%, #2563eb 100%);
+}
+
+.run-progress-fill--success {
+  background: linear-gradient(90deg, #4ade80 0%, #16a34a 100%);
+}
+
+.run-progress-fill--warning {
+  background: linear-gradient(90deg, #fbbf24 0%, #f97316 100%);
+}
+
+.run-progress-fill--muted {
+  background: linear-gradient(90deg, #cbd5e1 0%, #94a3b8 100%);
 }
 
 .actions-wrapper {
@@ -1516,6 +1935,29 @@ td {
 
 .form-select-small {
   flex: 1;
+}
+
+@media (max-width: 1200px) {
+  .runs-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .admin-header,
+  .tab-actions {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .admin-tabs {
+    flex-wrap: wrap;
+  }
+
+  .runs-summary-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .text-danger {

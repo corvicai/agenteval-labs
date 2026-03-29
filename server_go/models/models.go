@@ -110,6 +110,8 @@ type Run struct {
 	WorkspaceID     uuid.UUID    `gorm:"type:uuid;not null" json:"workspace_id"`
 	QuestionSetID   uuid.UUID    `gorm:"type:uuid;not null" json:"question_set_id"`
 	QuestionSet     *QuestionSet `gorm:"foreignKey:QuestionSetID" json:"question_set,omitempty"`
+	CreatedByUserID *uuid.UUID   `gorm:"type:uuid" json:"created_by_user_id,omitempty"`
+	CreatedBy       *User        `gorm:"foreignKey:CreatedByUserID;constraint:false" json:"created_by,omitempty"`
 	QuestionSetName string       `gorm:"->;type:text" json:"question_set_name"` // Virtual field for history list
 	Status          string       `gorm:"not null;default:'running'" json:"status"`
 	TotalTasks      int          `gorm:"default:0" json:"total_tasks"`

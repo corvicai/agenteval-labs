@@ -217,7 +217,7 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 	logger.Debug("[RUNNER] Ping OK: I'm here")
 
 	// For legacy support, we use the connection's workspace
-	run, err := h.engine.StartRun(c.WorkspaceID, qsID, agentIDs)
+	run, err := h.engine.StartRunForUser(c.WorkspaceID, qsID, agentIDs, c.UserID)
 	if err != nil {
 		c.SendError(env.CorrelationID, err.Error())
 		return
@@ -342,10 +342,15 @@ func (h *Hub) handleGetRunDetails(c *Connection, env models.Envelope) {
 	}
 
 	// 3. Get Results (including evaluations)
-	if err := h.db.Preload("Evaluations").Where("run_id = ?", runID).Find(&response.Results).Error; err != nil {
+	if err := h.db.Preload("Evaluations").
+		Where("run_id = ?", runID).
+		Order("created_at ASC").
+		Order("id ASC").
+		Find(&response.Results).Error; err != nil {
 		c.SendError(env.CorrelationID, "failed to load results: "+err.Error())
 		return
 	}
+	response.Results = orchestrator.CollapseRunResultsToLatest(response.Results)
 	normalizeResultsEvaluationsForDisplay(response.Results)
 
 	// 4. Collect Agent info
@@ -437,6 +442,8 @@ func (h *Hub) handleGetRunLite(c *Connection, env models.Envelope) {
 	err = h.db.Model(&models.RunResult{}).
 		Select("id, run_id, agent_id, question_id, status, duration_ms, created_at, answer").
 		Where("run_id = ?", runID).
+		Order("created_at ASC").
+		Order("id ASC").
 		Scan(&scanned).Error
 
 	if err != nil {
@@ -465,6 +472,7 @@ func (h *Hub) handleGetRunLite(c *Connection, env models.Envelope) {
 			CreatedAt:   s.CreatedAt,
 		}
 	}
+	results = orchestrator.CollapseRunResultLitesToLatest(results)
 
 	// Fetch Evaluations existence (to set HasEvaluations flag)
 	// Optimize: Get all result IDs that have evaluations
@@ -533,19 +541,21 @@ func (h *Hub) handleGetLatestRunByQuestionSet(c *Connection, env models.Envelope
 	}
 
 	var run models.Run
-	if err := h.db.Where("workspace_id = ? AND question_set_id = ? AND status != ?", c.WorkspaceID, qsID, "running").
+	runQuery := h.db.Where("workspace_id = ? AND question_set_id = ? AND status != ?", c.WorkspaceID, qsID, "running").
 		Order("created_at desc").
-		First(&run).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			c.SendResponse(DataRunLite, env.CorrelationID, map[string]any{
-				"run":          nil,
-				"question_set": nil,
-				"results":      []models.RunResultLite{},
-				"agents":       map[string]models.Agent{},
-			})
-			return
-		}
+		Limit(1).
+		Find(&run)
+	if err := runQuery.Error; err != nil {
 		c.SendError(env.CorrelationID, "failed to fetch run")
+		return
+	}
+	if runQuery.RowsAffected == 0 {
+		c.SendResponse(DataRunLite, env.CorrelationID, map[string]any{
+			"run":          nil,
+			"question_set": nil,
+			"results":      []models.RunResultLite{},
+			"agents":       map[string]models.Agent{},
+		})
 		return
 	}
 
@@ -568,6 +578,8 @@ func (h *Hub) handleGetLatestRunByQuestionSet(c *Connection, env models.Envelope
 	err = h.db.Model(&models.RunResult{}).
 		Select("id, run_id, agent_id, question_id, status, duration_ms, created_at, answer, error").
 		Where("run_id = ?", run.ID).
+		Order("created_at ASC").
+		Order("id ASC").
 		Scan(&scanned).Error
 
 	if err != nil {
@@ -596,6 +608,7 @@ func (h *Hub) handleGetLatestRunByQuestionSet(c *Connection, env models.Envelope
 			CreatedAt:   s.CreatedAt,
 		}
 	}
+	results = orchestrator.CollapseRunResultLitesToLatest(results)
 
 	var resultIDsWithEvals []uuid.UUID
 	h.db.Model(&models.Evaluation{}).

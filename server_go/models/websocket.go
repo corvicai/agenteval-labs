@@ -140,6 +140,41 @@ type AdminProfilePayload struct {
 	ID string `json:"id"`
 }
 
+type AdminRunsPayload struct {
+	Limit int `json:"limit"`
+}
+
+type AdminRunsSummary struct {
+	ActiveRuns       int64 `json:"active_runs"`
+	ActiveWorkspaces int64 `json:"active_workspaces"`
+	ActiveUsers      int64 `json:"active_users"`
+	PendingTasks     int64 `json:"pending_tasks"`
+	RecentRuns       int64 `json:"recent_runs"`
+}
+
+type AdminRunRecord struct {
+	ID              uuid.UUID `json:"id"`
+	Status          string    `json:"status"`
+	WorkspaceID     uuid.UUID `json:"workspace_id"`
+	WorkspaceName   string    `json:"workspace_name"`
+	QuestionSetName string    `json:"question_set_name"`
+	StartedByName   string    `json:"started_by_name"`
+	TotalTasks      int       `json:"total_tasks"`
+	ResultCount     int64     `json:"result_count"`
+	SuccessCount    int64     `json:"success_count"`
+	ErrorCount      int64     `json:"error_count"`
+	PendingCount    int64     `json:"pending_count"`
+	ProgressPercent float64   `json:"progress_percent"`
+	CreatedAt       time.Time `json:"created_at"`
+	LastActivityAt  time.Time `json:"last_activity_at"`
+}
+
+type AdminRunsResponse struct {
+	Summary     AdminRunsSummary `json:"summary"`
+	Runs        []AdminRunRecord `json:"runs"`
+	GeneratedAt time.Time        `json:"generated_at"`
+}
+
 type AdminCreateUserPayload struct {
 	Name           string `json:"name"`
 	Email          string `json:"email"`

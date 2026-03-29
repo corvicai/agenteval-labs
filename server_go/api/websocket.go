@@ -96,6 +96,7 @@ const (
 	ReqAdminGetOrganizations  = "REQ_ADMIN_GET_ORGANIZATIONS"
 	ReqAdminGetUserProfile    = "REQ_ADMIN_GET_USER_PROFILE"
 	ReqAdminGetOrgProfile     = "REQ_ADMIN_GET_ORG_PROFILE"
+	ReqAdminGetRuns           = "REQ_ADMIN_GET_RUNS"
 	ReqAdminCreateUser        = "REQ_ADMIN_CREATE_USER"
 	ReqAdminCreateOrg         = "REQ_ADMIN_CREATE_ORG"
 	ReqAdminUpdateUser        = "REQ_ADMIN_UPDATE_USER"
@@ -157,6 +158,7 @@ const (
 	DataAdminOrganizations = "DATA_ADMIN_ORGANIZATIONS"
 	DataAdminUserProfile   = "DATA_ADMIN_USER_PROFILE"
 	DataAdminOrgProfile    = "DATA_ADMIN_ORG_PROFILE"
+	DataAdminRuns          = "DATA_ADMIN_RUNS"
 	DataAdminLoginLogs     = "DATA_ADMIN_LOGIN_LOGS"
 
 	// Manager Data types

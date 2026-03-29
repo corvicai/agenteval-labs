@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -536,20 +537,20 @@ func (e *Engine) checkRunCompletion(runID uuid.UUID) {
 				Where("run_id = ? AND question_id LIKE ?", runID, "eval-%").
 				Count(&evalResultCount).Error; err == nil && evalResultCount == 0 {
 				selectedEvaluatorIDs, selectErr := e.selectedEvaluatorIDsForRun(run)
-			if selectErr != nil {
-				logger.Warn("[EVAL] Failed to resolve selected evaluators for run %s: %v", runID, selectErr)
-			}
-			if len(selectedEvaluatorIDs) > 0 {
-				previousTotalTasks := run.TotalTasks
-				if err := e.RunEvaluators(runID, selectedEvaluatorIDs); err != nil {
-					if !strings.Contains(strings.ToLower(err.Error()), "no evaluator agents available") {
-						logger.Warn("[EVAL] Auto-run failed for run %s: %v", runID, err)
-					}
-				} else {
-					var refreshed models.Run
-					if refreshErr := e.db.First(&refreshed, "id = ?", runID).Error; refreshErr == nil {
-						if refreshed.TotalTasks > previousTotalTasks {
-							logger.Info("[EVAL] Auto-run queued for run %s (%d -> %d total tasks)", runID, previousTotalTasks, refreshed.TotalTasks)
+				if selectErr != nil {
+					logger.Warn("[EVAL] Failed to resolve selected evaluators for run %s: %v", runID, selectErr)
+				}
+				if len(selectedEvaluatorIDs) > 0 {
+					previousTotalTasks := run.TotalTasks
+					if err := e.RunEvaluators(runID, selectedEvaluatorIDs); err != nil {
+						if !strings.Contains(strings.ToLower(err.Error()), "no evaluator agents available") {
+							logger.Warn("[EVAL] Auto-run failed for run %s: %v", runID, err)
+						}
+					} else {
+						var refreshed models.Run
+						if refreshErr := e.db.First(&refreshed, "id = ?", runID).Error; refreshErr == nil {
+							if refreshed.TotalTasks > previousTotalTasks {
+								logger.Info("[EVAL] Auto-run queued for run %s (%d -> %d total tasks)", runID, previousTotalTasks, refreshed.TotalTasks)
 								return
 							}
 							run = refreshed
@@ -613,6 +614,119 @@ func firstNonEmptyString(m map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+type orderedQuestion struct {
+	ID   string
+	Text string
+}
+
+func parseOrderedQuestions(data []byte) []orderedQuestion {
+	if len(data) == 0 {
+		return nil
+	}
+
+	var root any
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil
+	}
+
+	// Handle string-encoded JSON
+	if s, ok := root.(string); ok {
+		var decoded any
+		if err := json.Unmarshal([]byte(s), &decoded); err == nil {
+			root = decoded
+		}
+	}
+
+	rootMap, ok := root.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	categoriesAny, _ := rootMap["categories"].([]any)
+	questions := make([]orderedQuestion, 0)
+	for catIdx, catAny := range categoriesAny {
+		catMap, _ := catAny.(map[string]any)
+		questionsAny, _ := catMap["questions"].([]any)
+		for qIdx, qAny := range questionsAny {
+			fallbackID := fmt.Sprintf("%d-%d", catIdx+1, qIdx+1)
+			qID := fallbackID
+			questionText := ""
+
+			switch q := qAny.(type) {
+			case map[string]any:
+				if id := firstNonEmptyString(q, "id", "question_id", "qid"); id != "" {
+					qID = id
+				}
+				questionText = firstNonEmptyString(q, "question", "text", "prompt")
+			case string:
+				questionText = strings.TrimSpace(q)
+			default:
+				questionText = strings.TrimSpace(fmt.Sprint(q))
+			}
+
+			if qID == "" {
+				qID = fallbackID
+			}
+			if qID == "" {
+				continue
+			}
+
+			questions = append(questions, orderedQuestion{
+				ID:   qID,
+				Text: questionText,
+			})
+		}
+	}
+
+	return questions
+}
+
+func sortAgentsForRun(agents []models.Agent, overrideMap map[uuid.UUID]models.QuestionSetAgent, explicitAgentIDs []uuid.UUID) {
+	if len(agents) < 2 {
+		return
+	}
+
+	explicitOrder := make(map[uuid.UUID]int, len(explicitAgentIDs))
+	for idx, agentID := range explicitAgentIDs {
+		explicitOrder[agentID] = idx
+	}
+
+	effectivePosition := func(agent models.Agent) int {
+		if override, ok := overrideMap[agent.ID]; ok {
+			return override.Position
+		}
+		return agent.Position
+	}
+
+	sort.SliceStable(agents, func(i, j int) bool {
+		left := agents[i]
+		right := agents[j]
+
+		leftExplicit, leftHasExplicit := explicitOrder[left.ID]
+		rightExplicit, rightHasExplicit := explicitOrder[right.ID]
+		if leftHasExplicit && rightHasExplicit && leftExplicit != rightExplicit {
+			return leftExplicit < rightExplicit
+		}
+		if leftHasExplicit != rightHasExplicit {
+			return leftHasExplicit
+		}
+
+		leftPosition := effectivePosition(left)
+		rightPosition := effectivePosition(right)
+		if leftPosition != rightPosition {
+			return leftPosition < rightPosition
+		}
+
+		leftName := strings.ToLower(strings.TrimSpace(left.Name))
+		rightName := strings.ToLower(strings.TrimSpace(right.Name))
+		if leftName != rightName {
+			return leftName < rightName
+		}
+
+		return left.ID.String() < right.ID.String()
+	})
 }
 
 func stripEvalPrefix(questionID string) string {
@@ -760,6 +874,21 @@ func (e *Engine) persistEvaluatorScore(task *Task, evaluatorAnswer string) error
 	}
 
 	return e.db.Create(&eval).Error
+}
+
+func (e *Engine) markRunRunningAndAddTasks(runID uuid.UUID, delta int) error {
+	if e.db == nil || runID == uuid.Nil {
+		return nil
+	}
+
+	updates := map[string]any{
+		"status": "running",
+	}
+	if delta > 0 {
+		updates["total_tasks"] = gorm.Expr("total_tasks + ?", delta)
+	}
+
+	return e.db.Model(&models.Run{}).Where("id = ?", runID).Updates(updates).Error
 }
 
 func extractTargetAgentID(questionID string) (uuid.UUID, string) {
@@ -955,6 +1084,8 @@ func (e *Engine) queueEvaluatorTasksForResults(run models.Run, results []models.
 	if e.db == nil {
 		return fmt.Errorf("database not configured")
 	}
+
+	results = CollapseRunResultsToLatest(results)
 
 	// Get evaluator candidates (native evaluator + legacy openai evaluators)
 	var evaluatorCandidates []models.Agent
@@ -1183,6 +1314,15 @@ func (e *Engine) RunEvaluatorsForResults(runID uuid.UUID, selectedEvaluatorIDs [
 
 // StartRun starts a new benchmark run
 func (e *Engine) StartRun(workspaceID uuid.UUID, questionSetID uuid.UUID, agentIDs []uuid.UUID) (*models.Run, error) {
+	return e.startRun(workspaceID, questionSetID, agentIDs, nil)
+}
+
+// StartRunForUser starts a run and records who initiated it.
+func (e *Engine) StartRunForUser(workspaceID uuid.UUID, questionSetID uuid.UUID, agentIDs []uuid.UUID, startedByUserID uuid.UUID) (*models.Run, error) {
+	return e.startRun(workspaceID, questionSetID, agentIDs, &startedByUserID)
+}
+
+func (e *Engine) startRun(workspaceID uuid.UUID, questionSetID uuid.UUID, agentIDs []uuid.UUID, startedByUserID *uuid.UUID) (*models.Run, error) {
 	// Get question set
 	var questionSet models.QuestionSet
 	if err := e.db.First(&questionSet, "id = ?", questionSetID).Error; err != nil {
@@ -1228,6 +1368,7 @@ func (e *Engine) StartRun(workspaceID uuid.UUID, questionSetID uuid.UUID, agentI
 	if len(agents) == 0 {
 		return nil, fmt.Errorf("no agents available")
 	}
+	sortAgentsForRun(agents, overrideMap, agentIDs)
 	if err := validateAgentSetComposition(agents); err != nil {
 		return nil, err
 	}
@@ -1242,46 +1383,14 @@ func (e *Engine) StartRun(workspaceID uuid.UUID, questionSetID uuid.UUID, agentI
 		}
 	}
 
-	// Parse questions from question set
-	var qsData struct {
-		Categories []struct {
-			Questions []struct {
-				ID       any    `json:"id"`
-				Question string `json:"question"`
-			} `json:"questions"`
-		} `json:"categories"`
-	}
-	json.Unmarshal(questionSet.Data, &qsData)
+	orderedQuestions := parseOrderedQuestions(questionSet.Data)
 
-	// Calculate Total Tasks
-	totalTasks := 0
-	nonEvaluatorAgentCount := 0
-	for _, agent := range agents {
-		if !isEvaluatorAgent(agent) {
-			nonEvaluatorAgentCount++
-		}
+	type runAgent struct {
+		agent  models.Agent
+		config map[string]any
 	}
 
-	for _, cat := range qsData.Categories {
-		totalTasks += len(cat.Questions)
-	}
-	totalTasks = totalTasks * nonEvaluatorAgentCount
-
-	// Create run record
-	run := models.Run{
-		ID:            uuid.New(),
-		WorkspaceID:   workspaceID,
-		QuestionSetID: questionSetID,
-		Status:        "running",
-		TotalTasks:    totalTasks,
-	}
-	if err := e.db.Create(&run).Error; err != nil {
-		return nil, err
-	}
-
-	e.ensureRunContext(run.ID)
-
-	// Queue tasks for each agent + question
+	benchmarkAgents := make([]runAgent, 0, len(agents))
 	for _, agent := range agents {
 		if isEvaluatorAgent(agent) {
 			logger.Debug("[ENGINE] Skipping evaluator agent %s during initial StartRun", agent.ID)
@@ -1290,45 +1399,49 @@ func (e *Engine) StartRun(workspaceID uuid.UUID, questionSetID uuid.UUID, agentI
 		baseAgentConfig := decodeConfigJSON(agent.Config)
 		agentConfig := baseAgentConfig
 
-		// Use override if available
 		if override, ok := overrideMap[agent.ID]; ok && len(override.Config) > 0 {
 			overrideCfg := decodeConfigJSON(override.Config)
 			agentConfig = mergeConfig(baseAgentConfig, overrideCfg)
 		}
 
-		globalQuestionIndex := 0
-		for catIdx, cat := range qsData.Categories {
-			for qIdx, q := range cat.Questions {
-				qID := ""
-				switch v := q.ID.(type) {
-				case string:
-					if v != "" {
-						qID = v
-					}
-				case float64:
-					qID = fmt.Sprintf("%.0f", v)
-				case int:
-					qID = fmt.Sprintf("%d", v)
-				}
+		benchmarkAgents = append(benchmarkAgents, runAgent{
+			agent:  agent,
+			config: agentConfig,
+		})
+	}
 
-				// Fallback: generate ID from category and question index
-				if qID == "" {
-					qID = fmt.Sprintf("%d-%d", catIdx+1, qIdx+1)
-				}
-				globalQuestionIndex++
+	totalTasks := len(orderedQuestions) * len(benchmarkAgents)
 
-				task := &Task{
-					RunID:          run.ID,
-					WorkspaceID:    workspaceID,
-					AgentID:        agent.ID,
-					QuestionID:     qID,
-					QuestionText:   q.Question,
-					AgentConfig:    agentConfig,
-					ProviderType:   agent.ProviderType,
-					MaxConcurrency: agent.MaxConcurrency,
-				}
-				e.QueueTask(task)
+	// Create run record
+	run := models.Run{
+		ID:              uuid.New(),
+		WorkspaceID:     workspaceID,
+		QuestionSetID:   questionSetID,
+		CreatedByUserID: startedByUserID,
+		Status:          "running",
+		TotalTasks:      totalTasks,
+	}
+	if err := e.db.Create(&run).Error; err != nil {
+		return nil, err
+	}
+
+	e.ensureRunContext(run.ID)
+
+	// Queue tasks in question order so the benchmark advances deterministically.
+	// Initial benchmark tasks are serialized per agent to avoid visible jumps like 1-5, 6-10.
+	for _, question := range orderedQuestions {
+		for _, benchmarkAgent := range benchmarkAgents {
+			task := &Task{
+				RunID:          run.ID,
+				WorkspaceID:    workspaceID,
+				AgentID:        benchmarkAgent.agent.ID,
+				QuestionID:     question.ID,
+				QuestionText:   question.Text,
+				AgentConfig:    benchmarkAgent.config,
+				ProviderType:   benchmarkAgent.agent.ProviderType,
+				MaxConcurrency: 1,
 			}
+			e.QueueTask(task)
 		}
 	}
 
@@ -1370,28 +1483,35 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 		if rid, err := uuid.Parse(opts.ResultID); err == nil {
 			var rr models.RunResult
 			if err := e.db.First(&rr, "id = ?", rid).Error; err == nil {
-			if rr.RunID != run.ID {
-				logger.Warn("[RERUN] result_id %s does not belong to run %s (got run %s). Ignoring.", rid, run.ID, rr.RunID)
-			} else {
-				resultFromPayload = &rr
-				if questionID == "" || questionID != rr.QuestionID {
-					logger.Debug("[RERUN] Overriding question_id from result_id: %s -> %s", questionID, rr.QuestionID)
-					questionID = rr.QuestionID
+				if rr.RunID != run.ID {
+					logger.Warn("[RERUN] result_id %s does not belong to run %s (got run %s). Ignoring.", rid, run.ID, rr.RunID)
+				} else {
+					resultFromPayload = &rr
+					if questionID == "" || questionID != rr.QuestionID {
+						logger.Debug("[RERUN] Overriding question_id from result_id: %s -> %s", questionID, rr.QuestionID)
+						questionID = rr.QuestionID
+					}
 				}
+			} else {
+				logger.Warn("[RERUN] result_id %s not found: %v", rid, err)
 			}
 		} else {
-			logger.Warn("[RERUN] result_id %s not found: %v", rid, err)
+			logger.Warn("[RERUN] invalid result_id %q: %v", opts.ResultID, err)
 		}
-	} else {
-		logger.Warn("[RERUN] invalid result_id %q: %v", opts.ResultID, err)
-	}
 	}
 
-	// Try to use frontend-provided values first
+	// Resolve question context from frontend when available, otherwise fall back to the DB snapshot.
 	var questionText, expectedAnswer string
-	if opts != nil && opts.OriginalQuestion != "" {
+	frontendQuestion := ""
+	frontendExpected := ""
+	if opts != nil {
+		frontendQuestion = strings.TrimSpace(opts.OriginalQuestion)
+		frontendExpected = opts.ExpectedAnswer
+	}
+
+	if frontendQuestion != "" {
 		questionText = opts.OriginalQuestion
-		expectedAnswer = opts.ExpectedAnswer
+		expectedAnswer = frontendExpected
 		logger.Debug("[RERUN] Using frontend-provided context: question=%q, expected=%q", truncate(questionText, 50), truncate(expectedAnswer, 50))
 	} else {
 		// Fallback: Get question set to find the question text
@@ -1423,6 +1543,18 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 		logger.Debug("[RERUN] Using DB-resolved context: question=%q, expected=%q", truncate(questionText, 50), truncate(expectedAnswer, 50))
 	}
 
+	if opts != nil {
+		if frontendQuestion != "" {
+			questionText = opts.OriginalQuestion
+		}
+		// If the frontend sent a non-empty expected answer, or explicitly sent question context,
+		// trust the latest expected answer from the UI even if it is now blank.
+		if frontendQuestion != "" || strings.TrimSpace(frontendExpected) != "" {
+			expectedAnswer = opts.ExpectedAnswer
+			logger.Debug("[RERUN] Applied frontend expected override: expected=%q", truncate(expectedAnswer, 50))
+		}
+	}
+
 	var agentConfig map[string]any
 	json.Unmarshal(agent.Config, &agentConfig)
 
@@ -1444,6 +1576,9 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 		if resultFromPayload != nil {
 			targetQuestionID = resultFromPayload.QuestionID
 			targetAgentID, _ = extractTargetAgentID(resultFromPayload.QuestionID)
+			if targetAgentID == uuid.Nil && resultFromPayload.AgentID != agent.ID {
+				targetAgentID = resultFromPayload.AgentID
+			}
 			logger.Debug("[RERUN] Using resultFromPayload %s (agent=%s, qid=%s)", resultFromPayload.ID, targetAgentID, targetQuestionID)
 		}
 
@@ -1474,15 +1609,20 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 
 			// Try with both original ID and prefixed ID
 			query := e.db.Where("run_id = ? AND agent_id = ? AND (question_id = ? OR question_id = ?)",
-				run.ID, targetAgentID, targetQuestionID, "eval-"+targetAgentID.String()+"-"+targetQuestionID)
+				run.ID, targetAgentID, targetQuestionID, "eval-"+targetAgentID.String()+"-"+targetQuestionID).
+				Order("created_at DESC").
+				Order("id DESC")
 
-			if err := query.First(&targetResult).Error; err == nil {
+			tx := query.Limit(1).Find(&targetResult)
+			if tx.Error == nil && tx.RowsAffected > 0 {
 				taskAgentAnswer = targetResult.Answer
 				taskQuestionText = targetResult.Answer
 				taskTargetRunResultID = targetResult.ID
 				logger.Debug("[RERUN] Found specific result: %s (Ans len: %d)", targetResult.ID, len(taskAgentAnswer))
+			} else if tx.Error != nil {
+				logger.Warn("[RERUN] Specific target lookup failed: %v", tx.Error)
 			} else {
-				logger.Warn("[RERUN] Could not find specific result: %v", err)
+				logger.Debug("[RERUN] Specific target result not found for run=%s agent=%s q=%s", run.ID, targetAgentID, targetQuestionID)
 			}
 		}
 
@@ -1492,7 +1632,10 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 			var candidates []models.RunResult
 			// Search for any results where question_id matches or ends with our targetQuestionID
 			searchPattern := "%" + targetQuestionID
-			if err := e.db.Where("run_id = ? AND (question_id = ? OR question_id LIKE ?) AND answer != ''", run.ID, targetQuestionID, searchPattern).Find(&candidates).Error; err == nil {
+			if err := e.db.Where("run_id = ? AND (question_id = ? OR question_id LIKE ?) AND answer != ''", run.ID, targetQuestionID, searchPattern).
+				Order("created_at DESC").
+				Order("id DESC").
+				Find(&candidates).Error; err == nil {
 				logger.Debug("[RERUN] Heuristic found %d candidates", len(candidates))
 				for _, r := range candidates {
 					if r.AgentID == agent.ID {
@@ -1519,6 +1662,14 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 		if len(taskAgentAnswer) == 0 {
 			logger.Warn("[RERUN] No content to evaluate for run %s, question %s", run.ID, questionID)
 		}
+
+		if targetAgentID != uuid.Nil && strings.TrimSpace(targetQuestionID) != "" {
+			questionID = fmt.Sprintf("eval-%s-%s", targetAgentID.String(), targetQuestionID)
+		}
+	}
+
+	if err := e.markRunRunningAndAddTasks(run.ID, 1); err != nil {
+		return err
 	}
 
 	task := &Task{

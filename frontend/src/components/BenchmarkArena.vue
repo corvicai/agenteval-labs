@@ -58,32 +58,103 @@
     <div class="benchmark-arena-content">
     <!-- Action Buttons Row -->
     <div class="action-buttons-row">
-      <button class="btn btn-primary" @click="startRunSetup" :disabled="isRunning || !currentQuestionSet">
-        {{ isRunning ? '⏳ Running...' : '▶️ Run Benchmark' }}
-      </button>
-      <button
-        v-if="hasEnabledEvaluators"
-        class="btn btn-secondary btn-eval"
-        @click="startEvaluationNow"
-        :disabled="!canStartEvaluation"
-        :title="startEvaluationDisabledReason"
-      >
-        🧪 Run Evaluation
-      </button>
-      <button class="btn btn-secondary btn-pdf" @click="exportToPdf" :disabled="!currentRun || isExportingPdf">
-        <span v-if="isExportingPdf" class="pdf-loading-spinner"></span>
-        <span v-else>📄</span> PDF
-      </button>
-      <button v-if="isRunning" class="btn btn-danger" @click="cancelBenchmark">
-        ⛔ Cancel
-      </button>
+      <div class="action-buttons-main">
+        <button class="btn btn-primary" @click="startRunSetup" :disabled="isRunning || !currentQuestionSet">
+          {{ isRunning ? '⏳ Running...' : '▶️ Run Benchmark' }}
+        </button>
+        <button
+          v-if="failedPrimaryRetryCount > 0"
+          class="btn btn-secondary btn-retry-failed"
+          @click="retryFailedPrimaryResults"
+          :disabled="!canRetryFailedPrimary"
+          :title="retryFailedPrimaryTitle"
+        >
+          🔁 Retry Failed Agents
+          <span class="btn-inline-count">{{ failedPrimaryRetryCount }}</span>
+        </button>
+        <button
+          v-if="failedEvaluatorRetryCount > 0"
+          class="btn btn-secondary btn-retry-failed btn-retry-failed-eval"
+          @click="retryFailedEvaluatorResults"
+          :disabled="!canRetryFailedEvaluators"
+          :title="retryFailedEvaluatorTitle"
+        >
+          🧪 Retry Failed Evaluations
+          <span class="btn-inline-count">{{ failedEvaluatorRetryCount }}</span>
+        </button>
+        <button
+          v-if="hasEnabledEvaluators"
+          class="btn btn-secondary btn-eval"
+          @click="startEvaluationNow"
+          :disabled="!canStartEvaluation"
+          :title="startEvaluationDisabledReason"
+        >
+          🧪 Run Evaluation
+        </button>
+        <div class="pdf-export-controls">
+          <select
+            v-model="pdfExportScope"
+            class="pdf-export-select"
+            :disabled="!currentRun || isExportingPdf"
+            aria-label="PDF export scope"
+          >
+            <option value="auto">Auto</option>
+            <option value="full">Full report</option>
+            <option value="selected" :disabled="!canExportSelectedQuestionPdf">Selected question</option>
+            <option value="filtered" :disabled="!canExportFilteredQuestionsPdf">{{ filteredQuestionsExportLabel }}</option>
+          </select>
+          <button
+            class="btn btn-secondary btn-pdf"
+            @click="exportToPdf()"
+            :disabled="!canExportPdf"
+            :title="pdfExportDisabledReason"
+          >
+            <span v-if="isExportingPdf" class="pdf-loading-spinner"></span>
+            <span v-else>📄</span> PDF
+          </button>
+        </div>
+        <button v-if="isRunning" class="btn btn-danger" @click="cancelBenchmark">
+          ⛔ Cancel
+        </button>
+        <select
+          v-if="currentQuestionSet && flatQuestions.length > 0"
+          v-model="questionFilter"
+          class="question-filter-select"
+          :class="{ 'is-filtered': questionFilter !== 'all' }"
+          aria-label="Filter questions"
+          title="Filter questions by status"
+        >
+          <option value="all">All ({{ questionFilterCounts.all }})</option>
+          <option value="error">Error ({{ questionFilterCounts.error }})</option>
+          <option value="running">Running ({{ questionFilterCounts.running }})</option>
+          <option v-if="showEvaluationScoreFilters" value="low_score">Below 5/10 ({{ questionFilterCounts.low_score }})</option>
+          <option v-if="showEvaluationScoreFilters" value="critical_score">Below 1/10 ({{ questionFilterCounts.critical_score }})</option>
+        </select>
+      </div>
     </div>
 
+
     <!-- Progress Bar -->
-    <div v-if="isRunning && activeRunQuestionSetId === currentQuestionSet?.id" class="progress-bar">
-      <div class="progress-fill-started" :style="{ width: progressPercentStarted + '%' }"></div>
+    <div
+      v-if="isRunning && activeRunQuestionSetId === currentQuestionSet?.id"
+      class="progress-bar"
+      :class="`progress-${progressPhase}`"
+    >
+      <div class="progress-fill-started" :style="{ width: progressTouchedPercent + '%' }"></div>
       <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
-      <span class="progress-text">{{ progressStatusText }}</span>
+      <div class="progress-content">
+        <div class="progress-summary">
+          <span class="progress-phase-chip" :class="`phase-${progressPhase}`">{{ progressPhaseLabel }}</span>
+          <span class="progress-text">{{ progressHeadline }}</span>
+        </div>
+        <div class="progress-meta">
+          <span class="progress-meta-item">{{ progressTaskRatioText }}</span>
+          <span v-if="progressRunningCount > 0" class="progress-meta-item">{{ progressRunningCount }} running</span>
+          <span v-if="progressQueuedCount > 0" class="progress-meta-item">{{ progressQueuedCount }} queued</span>
+          <span v-if="progressErrorCount > 0" class="progress-meta-item is-error">{{ progressErrorCount }} errors</span>
+          <span v-if="progressEtaText" class="progress-meta-item">{{ progressEtaText }}</span>
+        </div>
+      </div>
     </div>
 
     <!-- Loading Indicator -->
@@ -109,8 +180,13 @@
         <!-- Questions List View -->
         <div class="questions-list-view">
           <div class="questions-list-header">
-            <h2>{{ currentQuestionSet.name }}</h2>
-            <p class="questions-count">{{ flatQuestions.length }} question{{ flatQuestions.length !== 1 ? 's' : '' }}</p>
+            <div>
+              <h2>{{ currentQuestionSet.name }}</h2>
+              <p class="questions-count">
+                {{ filteredQuestionEntries.length }} of {{ flatQuestions.length }}
+                question{{ flatQuestions.length !== 1 ? 's' : '' }}
+              </p>
+            </div>
           </div>
           
           <!-- Stats Section -->
@@ -162,58 +238,127 @@
           
           <div class="questions-list-container">
             <div 
-              v-for="(question, index) in flatQuestions" 
-              :key="question.id || index"
+              v-for="entry in filteredQuestionEntries" 
+              :key="entry.question.id || entry.index"
               class="question-item"
-              :class="{ 'selected': selectedQuestionId === question.id }"
-              @click="selectedQuestionId = question.id"
+              :class="{ 'selected': selectedQuestionId === entry.question.id }"
+              @click="selectQuestionForAnalysis(entry.question.id)"
             >
-              <div class="question-number">Q{{ index + 1 }}</div>
+              <div class="question-number">Q{{ entry.index + 1 }}</div>
               <div class="question-content">
-                <div class="question-text">{{ question.question || question.text }}</div>
-                <div v-if="question.category" class="question-category">{{ question.category }}</div>
-                <div v-if="getQuestionResponse(question.id)" class="question-response">
+                <div class="question-text">{{ entry.question.question || entry.question.text }}</div>
+                <div v-if="entry.question.category" class="question-category">{{ entry.question.category }}</div>
+                <div
+                  v-if="isEditingExpectedAnswer(entry.question.id)"
+                  class="question-response question-expected question-expected-editing"
+                >
+                  <div class="response-label">
+                    Expected Answer:
+                    <span v-if="savingExpectedAnswerQuestionId === entry.question.id" class="expected-answer-saving">
+                      Saving...
+                    </span>
+                  </div>
+                  <div class="expected-answer-editor">
+                    <textarea
+                      v-model="expectedAnswerDraft"
+                      class="expected-answer-textarea"
+                      rows="3"
+                      placeholder="Enter expected answer..."
+                      @click.stop
+                      @keydown.esc.stop.prevent="cancelExpectedAnswerEdit"
+                      @keydown.enter.ctrl.stop.prevent="saveExpectedAnswer(entry.question)"
+                      @keydown.enter.meta.stop.prevent="saveExpectedAnswer(entry.question)"
+                    ></textarea>
+                    <div class="expected-answer-editor-actions">
+                      <button
+                        class="btn-expected-inline btn-expected-save"
+                        @click.stop="saveExpectedAnswer(entry.question)"
+                        :disabled="savingExpectedAnswerQuestionId === entry.question.id"
+                      >
+                        Save
+                      </button>
+                      <button
+                        class="btn-expected-inline"
+                        @click.stop="cancelExpectedAnswerEdit"
+                        :disabled="savingExpectedAnswerQuestionId === entry.question.id"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div v-else-if="getQuestionExpectedAnswer(entry.question)" class="question-response question-expected">
+                  <div class="response-label">
+                    Expected Answer:
+                    <button
+                      class="btn-expected-inline btn-expected-edit"
+                      @click.stop="startExpectedAnswerEdit(entry.question)"
+                    >
+                      Edit
+                    </button>
+                  </div>
+                  <div
+                    class="response-text"
+                    v-html="formatResponseHtml(getQuestionExpectedAnswer(entry.question))"
+                  ></div>
+                </div>
+                <button
+                  v-else
+                  class="btn-add-expected-inline"
+                  @click.stop="startExpectedAnswerEdit(entry.question)"
+                >
+                  + Expected Answer
+                </button>
+                <div v-if="getQuestionResponse(entry.question.id)" class="question-response">
                   <div class="response-label">Response:</div>
                   <div class="response-text">
                     <div 
-                      v-if="!expandedResponses[question.id]"
-                      v-html="formatResponseHtml(getQuestionResponse(question.id, true))"
+                      v-if="!expandedResponses[entry.question.id]"
+                      v-html="formatResponseHtml(getQuestionResponse(entry.question.id, true))"
                     ></div>
                     <div 
                       v-else
-                      v-html="formatResponseHtml(getQuestionResponse(question.id, false))"
+                      v-html="formatResponseHtml(getQuestionResponse(entry.question.id, false))"
                     ></div>
                     <button 
-                      v-if="isResponseLong(question.id)"
+                      v-if="isResponseLong(entry.question.id)"
                       class="btn-expand-response"
-                      @click.stop="toggleResponse(question.id)"
+                      @click.stop="toggleResponse(entry.question.id)"
                     >
-                      {{ expandedResponses[question.id] ? 'Show less' : 'Show more' }}
+                      {{ expandedResponses[entry.question.id] ? 'Show less' : 'Show more' }}
                     </button>
                   </div>
                 </div>
-                <div v-if="getQuestionEvaluation(question.id)" class="question-response question-evaluation">
+                <div
+                  v-if="getQuestionEvaluation(entry.question.id)"
+                  class="question-response question-evaluation"
+                  :class="getQuestionEvaluationSeverityClass(entry.question.id)"
+                >
                   <div class="response-label">
                     Evaluation:
-                    <span v-if="getQuestionEvaluationScore(question.id)" class="evaluation-score-chip">
-                      {{ getQuestionEvaluationScore(question.id) }}
+                    <span
+                      v-if="getQuestionEvaluationScore(entry.question.id)"
+                      class="evaluation-score-chip"
+                      :class="getQuestionEvaluationScoreChipClass(entry.question.id)"
+                    >
+                      {{ getQuestionEvaluationScore(entry.question.id) }}
                     </span>
                   </div>
                   <div class="response-text">
                     <div
-                      v-if="!expandedEvaluations[question.id]"
-                      v-html="formatResponseHtml(getQuestionEvaluation(question.id, true))"
+                      v-if="!expandedEvaluations[entry.question.id]"
+                      v-html="formatResponseHtml(getQuestionEvaluation(entry.question.id, true))"
                     ></div>
                     <div
                       v-else
-                      v-html="formatResponseHtml(getQuestionEvaluation(question.id, false))"
+                      v-html="formatResponseHtml(getQuestionEvaluation(entry.question.id, false))"
                     ></div>
                     <button
-                      v-if="isEvaluationLong(question.id)"
+                      v-if="isEvaluationLong(entry.question.id)"
                       class="btn-expand-response"
-                      @click.stop="toggleEvaluation(question.id)"
+                      @click.stop="toggleEvaluation(entry.question.id)"
                     >
-                      {{ expandedEvaluations[question.id] ? 'Show less' : 'Show more' }}
+                      {{ expandedEvaluations[entry.question.id] ? 'Show less' : 'Show more' }}
                     </button>
                   </div>
                 </div>
@@ -221,21 +366,44 @@
               <div class="question-actions">
                 <span
                   class="question-status"
-                  :class="getQuestionStatus(question.id)"
-                  :title="getQuestionStatusTooltip(question.id) || null"
+                  :class="getQuestionStatus(entry.question.id)"
+                  :title="getQuestionStatusTooltip(entry.question.id) || null"
                 >
-                  {{ getQuestionStatusText(question.id) }}
+                  {{ getQuestionStatusText(entry.question.id) }}
                 </span>
-                <button 
-                  v-if="hasQuestionBeenRun(question.id)"
-                  class="btn-retry" 
-                  @click.stop="retryQuestionForAllAgents(question.id)"
-                  :disabled="isQuestionLoading(question.id)"
-                  :title="isQuestionLoading(question.id) ? 'Retrying...' : 'Retry this question'"
+                <button
+                  v-if="getQuestionEvaluatorRetryCount(entry.question.id) > 0"
+                  class="btn-retry btn-retry-eval"
+                  @click.stop="retryQuestionForEvaluators(entry.question.id)"
+                  :disabled="isQuestionLoading(entry.question.id)"
+                  :title="getQuestionEvaluatorRetryTitle(entry.question.id)"
                 >
-                  {{ isQuestionLoading(question.id) ? '⏳ Retrying' : '🔄 Retry' }}
+                  {{ isQuestionLoading(entry.question.id) ? '⏳ Eval' : '🧪 Retry Eval' }}
+                  <span v-if="getQuestionEvaluatorRetryCount(entry.question.id) > 1" class="btn-inline-count">
+                    {{ getQuestionEvaluatorRetryCount(entry.question.id) }}
+                  </span>
+                </button>
+                <button 
+                  v-if="hasQuestionBeenRun(entry.question.id)"
+                  class="btn-retry" 
+                  @click.stop="retryQuestionForAllAgents(entry.question.id)"
+                  :disabled="isQuestionLoading(entry.question.id)"
+                  :title="isQuestionLoading(entry.question.id) ? 'Retrying...' : 'Retry this question'"
+                >
+                  {{ isQuestionLoading(entry.question.id) ? '⏳ Retrying' : '🔄 Retry' }}
+                </button>
+                <button
+                  class="btn-retry btn-export-question"
+                  @click.stop="exportQuestionEntryToPdf(entry)"
+                  :disabled="isExportingPdf"
+                  :title="'Export this question as a compact PDF'"
+                >
+                  {{ isExportingPdf ? '⏳ PDF' : '📄 PDF' }}
                 </button>
               </div>
+            </div>
+            <div v-if="filteredQuestionEntries.length === 0" class="empty-state">
+              <p>No questions match the current filter.</p>
             </div>
           </div>
         </div>
@@ -316,17 +484,17 @@ import SummarySection from './SummarySection.vue'
 import RunSetupModal from './RunSetupModal.vue'
 import ChatPanel from './ChatPanel.vue'
 import DetailsModal from './modals/DetailsModal.vue'
-import PrintReport from './PrintReport.vue'
 import LeftSidebar from './LeftSidebar.vue'
 import wsService from '../services/websocket.js'
 import { exportResultsReport } from '../utils/exporters.js'
 import { downloadManager } from '../services/DownloadManager.js'
 import { contentCache } from '../services/ContentCache.js'
 import { useWSStore } from '../stores/wsStore'
+import { extractTextOnly } from '../utils/chatHelpers.js'
 import { processContent } from '../utils/markdown.js'
 import { isEvaluatorAgentObject, toAgentID, uniqueStringIDs, mergeAgentIDs } from '../utils/arena/agents.js'
 import { mergeQuestionSetForUI, getRunQuestionSetID } from '../utils/arena/questionSet.js'
-import { extractScoreOutOfTen, truncatePreviewText, extractQuestionIdsFromQuestionSet } from '../utils/arena/parsing.js'
+import { extractScoreOutOfTen, truncatePreviewText, extractQuestionIdsFromQuestionSet, parseEvaluatorTaskQuestionID } from '../utils/arena/parsing.js'
 import { calculateStats, calculateAverageEvaluationScore, formatDuration } from '../utils/arena/stats.js'
 import { flattenQuestionSetQuestions, hasQuestionBeenRun as hasQuestionBeenRunUtil, getQuestionStatus as getQuestionStatusUtil, isQuestionLoading as isQuestionLoadingUtil, getQuestionStatusText as getQuestionStatusTextUtil, getQuestionStatusTooltip as getQuestionStatusTooltipUtil } from '../utils/arena/questions.js'
 import { getPrimaryResponseEntry as getPrimaryResponseEntryUtil, getQuestionResponse as getQuestionResponseUtil, getQuestionEvaluation as getQuestionEvaluationUtil } from '../utils/arena/responses.js'
@@ -386,15 +554,22 @@ const showDetailsModal = ref(false)
 const selectedDetails = ref(null)
 const expandedResponses = ref({})
 const expandedEvaluations = ref({})
+const editingExpectedQuestionId = ref('')
+const expectedAnswerDraft = ref('')
+const savingExpectedAnswerQuestionId = ref('')
 const isDev = import.meta.env.DEV
 const showLegacyAgentPanels = false
 const latestRunCache = new Map()
+const questionSetStateCache = new Map()
+const completionTimeline = ref([])
 const pendingResultsBuffer = ref([])
 const pendingEvaluatorRuns = ref({})
 let arenaWsCleanup = null
 const startRunError = ref(null)
 const isExportingPdf = ref(false)
 const isRestoringRun = ref(false)
+const questionFilter = ref('all')
+const pdfExportScope = ref('auto')
 const {
   retryingQuestions,
   retryRegistry,
@@ -589,8 +764,14 @@ watch(() => props.workspaceId, (newId) => {
   if (newId && wsState.isConnected) {
     reconcileRetriesFromServer()
   }
-  if (newId && currentQuestionSet.value && !isRunning.value) {
-    fetchLatestResultsForQS(currentQuestionSet.value.id)
+  if (newId && currentQuestionSet.value) {
+    const selectedQuestionSetId = String(currentQuestionSet.value.id || '')
+    const activeRunningQuestionSetId = String(activeRunQuestionSetId.value || '')
+    if (!isRunning.value || (activeRunningQuestionSetId && activeRunningQuestionSetId !== selectedQuestionSetId)) {
+      fetchLatestResultsForQS(selectedQuestionSetId, {
+        force: activeRunningQuestionSetId !== '' && activeRunningQuestionSetId !== selectedQuestionSetId
+      })
+    }
   }
 })
 
@@ -613,12 +794,112 @@ function initQuestionSet(sets) {
     }
 }
 
-watch(currentQuestionSet, (newSet) => {
+function cloneArenaState(value) {
+  if (value == null) return value
+  try {
+    if (typeof structuredClone === 'function') {
+      return structuredClone(value)
+    }
+    return JSON.parse(JSON.stringify(value))
+  } catch (e) {
+    return value
+  }
+}
+
+function cacheQuestionSetState(questionSetId, questionSetSnapshot = currentQuestionSet.value) {
+  const qsId = String(questionSetId || '')
+  if (!qsId) return
+
+  questionSetStateCache.set(qsId, {
+    questionSet: cloneArenaState(questionSetSnapshot),
+    currentRun: cloneArenaState(currentRun.value),
+    runResults: cloneArenaState(runResults.value),
+    taskProgress: cloneArenaState(taskProgress.value),
+    isRunning: isRunning.value && String(activeRunQuestionSetId.value || '') === qsId,
+    activeRunQuestionSetId: String(activeRunQuestionSetId.value || ''),
+    startedTasks: startedTasks.value || 0,
+    completedTasks: completedTasks.value || 0,
+    totalTasks: totalTasks.value || 0,
+    selectedQuestionId: selectedQuestionId.value || '',
+    completionTimeline: cloneArenaState(completionTimeline.value) || []
+  })
+}
+
+function restoreCachedQuestionSetState(questionSetId) {
+  const qsId = String(questionSetId || '')
+  if (!qsId) return false
+
+  const cached = questionSetStateCache.get(qsId)
+  if (!cached) return false
+
+  if (cached.questionSet && String(cached.questionSet.id || '') === qsId) {
+    currentQuestionSet.value = mergeQuestionSetForUI(cloneArenaState(cached.questionSet), currentQuestionSet.value)
+  }
+  currentRun.value = cloneArenaState(cached.currentRun) || null
+  runResults.value = cloneArenaState(cached.runResults) || {}
+  taskProgress.value = cloneArenaState(cached.taskProgress) || {}
+  isRunning.value = !!cached.isRunning
+  activeRunQuestionSetId.value = cached.isRunning
+    ? (cached.activeRunQuestionSetId || qsId)
+    : null
+  wsStore.setRunningQuestionSetId(activeRunQuestionSetId.value || null)
+  startedTasks.value = cached.startedTasks || 0
+  completedTasks.value = cached.completedTasks || 0
+  totalTasks.value = cached.totalTasks || 0
+  selectedQuestionId.value = cached.selectedQuestionId || selectedQuestionId.value || ''
+  completionTimeline.value = cloneArenaState(cached.completionTimeline) || []
+
+  return true
+}
+
+async function syncSelectedQuestionSetState(questionSetId) {
+  const selectedQuestionSetId = String(questionSetId || '')
+  if (!selectedQuestionSetId) return
+
+  const cachedRunData = getCachedRunForQS(selectedQuestionSetId)
+  const hasCachedState = restoreCachedQuestionSetState(selectedQuestionSetId)
+
+  const runningForSelectedQS = getRunningRunForCurrentQS()
+  if (runningForSelectedQS?.id) {
+    localStorage.setItem('activeRunId', runningForSelectedQS.id)
+    await restoreActiveRun(runningForSelectedQS.id)
+    cacheQuestionSetState(selectedQuestionSetId)
+    return
+  }
+
+  const activeRunningQuestionSetId = String(activeRunQuestionSetId.value || '')
+  if (isRunning.value && activeRunningQuestionSetId === selectedQuestionSetId) {
+    const activeRunId = String(localStorage.getItem('activeRunId') || currentRun.value?.id || '')
+    if (activeRunId) {
+      await restoreActiveRun(activeRunId)
+      cacheQuestionSetState(selectedQuestionSetId)
+      return
+    }
+  }
+
+  if (hasCachedState && cachedRunData) {
+    return
+  }
+
+  await fetchLatestResultsForQS(selectedQuestionSetId, {
+    force: activeRunningQuestionSetId !== '' && activeRunningQuestionSetId !== selectedQuestionSetId
+  })
+  cacheQuestionSetState(selectedQuestionSetId)
+}
+
+watch(currentQuestionSet, (newSet, oldSet) => {
   emit('update:currentQuestionSet', newSet)
+  const previousId = String(oldSet?.id || '')
+  const nextId = String(newSet?.id || '')
+
+  if (previousId && previousId !== nextId) {
+    cacheQuestionSetState(previousId, oldSet)
+  }
+
   if (newSet) {
     localStorage.setItem('lastQuestionSetId', newSet.id)
-    if (!isRunning.value) {
-       fetchLatestResultsForQS(newSet.id)
+    if (previousId !== nextId) {
+      void syncSelectedQuestionSetState(newSet.id)
     }
   } else {
     localStorage.removeItem('lastQuestionSetId')
@@ -627,6 +908,135 @@ watch(currentQuestionSet, (newSet) => {
 
 // Computed
 const flatQuestions = computed(() => flattenQuestionSetQuestions(currentQuestionSet.value?.data))
+
+function questionHasRunningState(questionId) {
+  const qIdStr = String(questionId)
+  if (isQuestionRetrying(qIdStr)) return true
+
+  for (const agentId in runResults.value || {}) {
+    const agentResults = runResults.value[agentId] || {}
+    for (const [resultKey, result] of Object.entries(agentResults)) {
+      const parsed = parseEvaluatorTaskQuestionID(String(resultKey))
+      const candidateQuestionId = String(parsed?.questionId || resultKey)
+      if (candidateQuestionId !== qIdStr) continue
+      if (result?.loading || result?.queued) return true
+    }
+  }
+  return false
+}
+
+function questionHasErrorState(questionId) {
+  const qIdStr = String(questionId)
+  for (const agentId in runResults.value || {}) {
+    const agentResults = runResults.value[agentId] || {}
+    for (const [resultKey, result] of Object.entries(agentResults)) {
+      const parsed = parseEvaluatorTaskQuestionID(String(resultKey))
+      const candidateQuestionId = String(parsed?.questionId || resultKey)
+      if (candidateQuestionId !== qIdStr) continue
+      if (result?.error) return true
+    }
+  }
+  return false
+}
+
+function questionHasEvaluationBelowThreshold(questionId, threshold) {
+  const score = getQuestionEvaluationScoreValue(questionId)
+  return score != null && score < threshold
+}
+
+function matchesQuestionFilter(questionId, filter = questionFilter.value) {
+  switch (filter) {
+    case 'error':
+      return questionHasErrorState(questionId)
+    case 'running':
+      return questionHasRunningState(questionId)
+    case 'low_score':
+      return questionHasEvaluationBelowThreshold(questionId, 5)
+    case 'critical_score':
+      return questionHasEvaluationBelowThreshold(questionId, 1)
+    default:
+      return true
+  }
+}
+
+const questionFilterCounts = computed(() => {
+  let error = 0
+  let running = 0
+  let lowScore = 0
+  let criticalScore = 0
+
+  flatQuestions.value.forEach((question) => {
+    if (questionHasErrorState(question.id)) error++
+    if (questionHasRunningState(question.id)) running++
+    if (questionHasEvaluationBelowThreshold(question.id, 5)) lowScore++
+    if (questionHasEvaluationBelowThreshold(question.id, 1)) criticalScore++
+  })
+
+  return {
+    all: flatQuestions.value.length,
+    error,
+    running,
+    low_score: lowScore,
+    critical_score: criticalScore
+  }
+})
+
+const filteredQuestionEntries = computed(() =>
+  flatQuestions.value
+    .map((question, index) => ({ question, index }))
+    .filter((entry) => matchesQuestionFilter(entry.question.id))
+)
+
+const selectedQuestionEntry = computed(() => {
+  if (!selectedQuestionId.value) return null
+  const index = flatQuestions.value.findIndex((question) => String(question.id) === String(selectedQuestionId.value))
+  if (index === -1) return null
+  return {
+    question: flatQuestions.value[index],
+    index
+  }
+})
+
+const canExportSelectedQuestionPdf = computed(() => !!selectedQuestionEntry.value)
+const canExportFilteredQuestionsPdf = computed(() => filteredQuestionEntries.value.length > 0)
+
+const filteredQuestionsExportLabel = computed(() => {
+  const count = filteredQuestionEntries.value.length
+  return questionFilter.value === 'all'
+    ? `Visible questions (${count})`
+    : `Filtered questions (${count})`
+})
+
+const filteredQuestionsButtonLabel = computed(() =>
+  questionFilter.value === 'all' ? 'PDF Visible' : 'PDF Filtered'
+)
+
+const canExportPdf = computed(() => {
+  if (!currentRun.value || isExportingPdf.value) return false
+  if (pdfExportScope.value === 'auto') return true
+  if (pdfExportScope.value === 'selected') return canExportSelectedQuestionPdf.value
+  if (pdfExportScope.value === 'filtered') return canExportFilteredQuestionsPdf.value
+  return true
+})
+
+const pdfExportDisabledReason = computed(() => {
+  if (!currentRun.value) return 'Run a benchmark before exporting'
+  if (isExportingPdf.value) return 'Preparing PDF...'
+  if (pdfExportScope.value === 'auto') {
+    return selectedQuestionEntry.value
+      ? 'Export the selected question'
+      : (questionFilter.value !== 'all' && canExportFilteredQuestionsPdf.value
+          ? 'Export the current filtered questions'
+          : 'Export the full report')
+  }
+  if (pdfExportScope.value === 'selected' && !canExportSelectedQuestionPdf.value) {
+    return 'Select a question first'
+  }
+  if (pdfExportScope.value === 'filtered' && !canExportFilteredQuestionsPdf.value) {
+    return 'No questions match the current filter'
+  }
+  return 'Export PDF'
+})
 
 const currentQuestionIndex = computed(() => {
   if (!selectedQuestionId.value) return 0
@@ -637,48 +1047,168 @@ const hasResults = computed(() => {
   return runResults.value && Object.keys(runResults.value).length > 0
 })
 
-// Granular progress: started tasks add a small baseline, completed tasks count fully
-const progressPercent = computed(() => {
-  if (totalTasks.value === 0) return 0
-  return Math.round((completedTasks.value / totalTasks.value) * 100)
-})
-
-const STARTED_TASK_WEIGHT_PERCENT = 10
-
-const progressPercentStarted = computed(() => {
-  if (totalTasks.value === 0) return 0
-  // Started but not completed tasks contribute a small baseline progress
-  const inProgress = Math.max(0, startedTasks.value - completedTasks.value)
-  const inProgressContribution = (inProgress / totalTasks.value) * STARTED_TASK_WEIGHT_PERCENT
-  const completedContribution = (completedTasks.value / totalTasks.value) * 100
-  const softBoost = softProgressBoost.value
-  return Math.min(100, Math.round(completedContribution + inProgressContribution + softBoost))
-})
-
-const softProgressBoost = computed(() => {
-  let boost = 0
-  const progress = taskProgress.value || {}
-  for (const agentId in progress) {
-    const agentProgress = progress[agentId] || {}
-    for (const qId in agentProgress) {
-      const entry = agentProgress[qId]
-      const elapsedMs = typeof entry?.elapsed_ms === 'number' ? entry.elapsed_ms : 0
-      const ticks = Math.floor(elapsedMs / 10000)
-      boost += ticks * 0.5
+const progressCounters = computed(() => {
+  const rawTotal = Math.max(Number(totalTasks.value || 0), Number(startedTasks.value || 0), Number(completedTasks.value || 0), 0)
+  if (rawTotal === 0) {
+    return {
+      total: 0,
+      started: 0,
+      completed: 0,
+      running: 0,
+      queued: 0
     }
   }
-  return boost
+
+  const completed = Math.min(Math.max(Number(completedTasks.value || 0), 0), rawTotal)
+  const started = Math.min(Math.max(Number(startedTasks.value || 0), completed), rawTotal)
+  const running = Math.max(started - completed, 0)
+  const queued = Math.max(rawTotal - started, 0)
+
+  return {
+    total: rawTotal,
+    started,
+    completed,
+    running,
+    queued
+  }
 })
 
-const progressStatusText = computed(() => {
-  const inProgress = startedTasks.value - completedTasks.value
-  if (completedTasks.value === 0 && inProgress > 0) {
-    return `${inProgress} task${inProgress > 1 ? 's' : ''} running... (${progressPercentStarted.value}%)`
+const progressPercent = computed(() => {
+  if (progressCounters.value.total === 0) return 0
+  return Math.round((progressCounters.value.completed / progressCounters.value.total) * 100)
+})
+
+const progressTouchedPercent = computed(() => {
+  if (progressCounters.value.total === 0) return 0
+  return Math.round((progressCounters.value.started / progressCounters.value.total) * 100)
+})
+
+const progressRunningCount = computed(() => progressCounters.value.running)
+const progressQueuedCount = computed(() => progressCounters.value.queued)
+
+const progressErrorCount = computed(() => {
+  let count = 0
+  for (const agentId in runResults.value || {}) {
+    const agentResults = runResults.value[agentId] || {}
+    for (const resultKey in agentResults) {
+      if (agentResults[resultKey]?.error) count++
+    }
   }
-  if (inProgress > 0) {
-    return `${completedTasks.value}/${totalTasks.value} done, ${inProgress} running (${progressPercentStarted.value}%)`
+  return count
+})
+
+const primaryTaskCapacity = computed(() => {
+  const questionCount = flatQuestions.value.length
+  if (questionCount === 0) return 0
+
+  const runAgentIds = Array.isArray(currentRun.value?.agentIds) ? currentRun.value.agentIds : []
+  const primaryRunAgents = runAgentIds.filter((agentId) => !isEvaluatorAgentID(agentId))
+  if (primaryRunAgents.length > 0) {
+    return primaryRunAgents.length * questionCount
   }
-  return `${completedTasks.value}/${totalTasks.value} tasks (${progressPercent.value}%)`
+
+  const enabledPrimaryCount = enabledAgents.value.filter((agent) => !isEvaluatorAgentObject(agent)).length
+  return enabledPrimaryCount * questionCount
+})
+
+const hasActiveEvaluatorActivity = computed(() => {
+  for (const agentId in taskProgress.value || {}) {
+    const agentProgress = taskProgress.value[agentId] || {}
+    for (const questionId in agentProgress) {
+      if (String(questionId).startsWith('eval-')) return true
+    }
+  }
+
+  for (const agentId in runResults.value || {}) {
+    const agentResults = runResults.value[agentId] || {}
+    for (const resultKey in agentResults) {
+      if (!String(resultKey).startsWith('eval-')) continue
+      const result = agentResults[resultKey]
+      if (result?.loading || result?.queued) {
+        return true
+      }
+    }
+  }
+
+  return false
+})
+
+const progressPhase = computed(() => {
+  if (!isRunning.value) return 'benchmark'
+
+  const phaseHasEvaluationTotals =
+    primaryTaskCapacity.value > 0 &&
+    progressCounters.value.total > primaryTaskCapacity.value &&
+    progressCounters.value.completed >= primaryTaskCapacity.value
+
+  if (hasActiveRetryEntries() && !hasActiveEvaluatorActivity.value) {
+    return 'retry'
+  }
+
+  if (hasActiveEvaluatorActivity.value || phaseHasEvaluationTotals) {
+    return 'evaluation'
+  }
+
+  return 'benchmark'
+})
+
+const progressPhaseLabel = computed(() => {
+  if (progressPhase.value === 'evaluation') return 'Evaluation'
+  if (progressPhase.value === 'retry') return 'Retry'
+  return 'Benchmark'
+})
+
+const progressEvaluationCounters = computed(() => {
+  const evaluationTotal = Math.max(progressCounters.value.total - primaryTaskCapacity.value, 0)
+  if (evaluationTotal === 0) {
+    return {
+      total: 0,
+      completed: 0
+    }
+  }
+
+  return {
+    total: evaluationTotal,
+    completed: Math.min(Math.max(progressCounters.value.completed - primaryTaskCapacity.value, 0), evaluationTotal)
+  }
+})
+
+const progressHeadline = computed(() => {
+  if (progressPhase.value === 'evaluation' && progressEvaluationCounters.value.total > 0) {
+    return `Evaluations ${progressEvaluationCounters.value.completed}/${progressEvaluationCounters.value.total}`
+  }
+  if (progressPhase.value === 'retry') {
+    return `Retrying ${progressCounters.value.completed}/${progressCounters.value.total}`
+  }
+  return `Benchmark ${progressCounters.value.completed}/${progressCounters.value.total}`
+})
+
+const progressTaskRatioText = computed(() => {
+  if (progressCounters.value.total === 0) return '0%'
+  return `${progressPercent.value}% complete`
+})
+
+const progressEtaText = computed(() => {
+  const remaining = Math.max(progressCounters.value.total - progressCounters.value.completed, 0)
+  if (remaining === 0) return ''
+
+  const recent = completionTimeline.value.slice(-12)
+  if (recent.length < 2) return ''
+
+  const spanMs = recent[recent.length - 1] - recent[0]
+  if (!Number.isFinite(spanMs) || spanMs <= 0) return ''
+
+  const completionsPerMs = (recent.length - 1) / spanMs
+  if (!Number.isFinite(completionsPerMs) || completionsPerMs <= 0) return ''
+
+  const etaMs = remaining / completionsPerMs
+  if (!Number.isFinite(etaMs) || etaMs <= 0) return ''
+
+  const etaMinutes = Math.round(etaMs / 60000)
+  if (etaMinutes >= 2) return `ETA ~${etaMinutes}m`
+
+  const etaSeconds = Math.max(1, Math.round(etaMs / 1000))
+  return `ETA ~${etaSeconds}s`
 })
 
 const mergedAgents = computed(() => {
@@ -740,6 +1270,7 @@ const enabledAgents = computed(() =>
 )
 const enabledEvaluatorAgents = computed(() => enabledAgents.value.filter((a) => isEvaluatorAgentObject(a)))
 const hasEnabledEvaluators = computed(() => enabledEvaluatorAgents.value.length > 0)
+const showEvaluationScoreFilters = computed(() => hasEnabledEvaluators.value)
 
 const hasPrimaryRunAnswers = computed(() => {
   for (const agentId in runResults.value || {}) {
@@ -936,10 +1467,147 @@ function getQuestionEvaluation(questionId, truncated = true) {
   })
 }
 
-function getQuestionEvaluationScore(questionId) {
+function formatScoreOutOfTen(score) {
+  if (!Number.isFinite(score)) return ''
+  const rounded = Math.round(score * 10) / 10
+  return Number.isInteger(rounded) ? `${rounded}/10` : `${rounded.toFixed(1)}/10`
+}
+
+function getQuestionEvaluationScoreValue(questionId) {
   const fullText = getQuestionEvaluation(questionId, false)
   const score = extractScoreOutOfTen(fullText)
-  return score == null ? '' : `${score}/10`
+  return Number.isFinite(score) ? score : null
+}
+
+function getQuestionEvaluationScore(questionId) {
+  const score = getQuestionEvaluationScoreValue(questionId)
+  return score == null ? '' : formatScoreOutOfTen(score)
+}
+
+function getQuestionEvaluationSeverity(questionId) {
+  const score = getQuestionEvaluationScoreValue(questionId)
+  if (score == null) return 'ok'
+  if (score < 1) return 'danger'
+  if (score < 5) return 'warning'
+  return 'ok'
+}
+
+function getQuestionEvaluationSeverityClass(questionId) {
+  const severity = getQuestionEvaluationSeverity(questionId)
+  if (severity === 'danger') return 'question-evaluation-danger'
+  if (severity === 'warning') return 'question-evaluation-warning'
+  return ''
+}
+
+function getQuestionEvaluationScoreChipClass(questionId) {
+  const severity = getQuestionEvaluationSeverity(questionId)
+  if (severity === 'danger') return 'score-chip-danger'
+  if (severity === 'warning') return 'score-chip-warning'
+  return ''
+}
+
+function getQuestionExpectedAnswer(question) {
+  if (!question || typeof question !== 'object') return ''
+  return question.expected || question.expected_answer || ''
+}
+
+function isEditingExpectedAnswer(questionId) {
+  return String(editingExpectedQuestionId.value || '') === String(questionId || '')
+}
+
+function startExpectedAnswerEdit(question) {
+  const questionId = String(question?.id || '')
+  if (!questionId) return
+  editingExpectedQuestionId.value = questionId
+  expectedAnswerDraft.value = getQuestionExpectedAnswer(question)
+}
+
+function cancelExpectedAnswerEdit() {
+  if (savingExpectedAnswerQuestionId.value) return
+  editingExpectedQuestionId.value = ''
+  expectedAnswerDraft.value = ''
+}
+
+function buildQuestionSetDataWithExpectedAnswer(questionSet, questionId, expectedAnswer) {
+  let rawData = questionSet?.data
+  if (!rawData) return null
+
+  if (typeof rawData === 'string') {
+    try {
+      rawData = JSON.parse(rawData)
+    } catch (e) {
+      return null
+    }
+  }
+
+  const targetQuestionId = String(questionId || '')
+  let found = false
+
+  const categories = (rawData.categories || []).map((category, catIdx) => ({
+    ...category,
+    questions: (category.questions || []).map((question, index) => {
+      const currentId = question?.id != null && question.id !== '' ? String(question.id) : `${catIdx + 1}-${index + 1}`
+      if (currentId !== targetQuestionId) {
+        return { ...question }
+      }
+
+      found = true
+      const updatedQuestion = {
+        ...question,
+        expected: expectedAnswer
+      }
+      if (Object.prototype.hasOwnProperty.call(updatedQuestion, 'expected_answer')) {
+        updatedQuestion.expected_answer = expectedAnswer
+      }
+      if (Object.prototype.hasOwnProperty.call(updatedQuestion, 'expectedAnswer')) {
+        updatedQuestion.expectedAnswer = expectedAnswer
+      }
+      return updatedQuestion
+    })
+  }))
+
+  if (!found) return null
+  return {
+    ...rawData,
+    categories
+  }
+}
+
+async function saveExpectedAnswer(question) {
+  const questionId = String(question?.id || editingExpectedQuestionId.value || '')
+  if (!questionId || !currentQuestionSet.value?.id) return
+
+  const nextExpectedAnswer = expectedAnswerDraft.value.trim()
+  const currentExpectedAnswer = getQuestionExpectedAnswer(question)
+  if (nextExpectedAnswer === currentExpectedAnswer) {
+    cancelExpectedAnswerEdit()
+    return
+  }
+
+  const updatedData = buildQuestionSetDataWithExpectedAnswer(currentQuestionSet.value, questionId, nextExpectedAnswer)
+  if (!updatedData) {
+    startRunError.value = 'Failed to update expected answer: question not found in question set.'
+    return
+  }
+
+  try {
+    savingExpectedAnswerQuestionId.value = questionId
+    const updated = await wsService.updateQuestionSet(currentQuestionSet.value.id, {
+      name: currentQuestionSet.value.name,
+      version: currentQuestionSet.value.version || '1.0',
+      data: updatedData
+    })
+
+    currentQuestionSet.value = mergeQuestionSetForUI(updated, currentQuestionSet.value)
+    cacheQuestionSetState(currentQuestionSet.value.id, currentQuestionSet.value)
+    editingExpectedQuestionId.value = ''
+    expectedAnswerDraft.value = ''
+  } catch (e) {
+    console.error('[Arena] Failed to save expected answer inline:', e)
+    startRunError.value = e?.message || 'Failed to save expected answer.'
+  } finally {
+    savingExpectedAnswerQuestionId.value = ''
+  }
 }
 
 function isResponseLong(questionId) {
@@ -985,21 +1653,43 @@ function handleQuestionSetUpdated(updated) {
   currentQuestionSet.value = mergeQuestionSetForUI(updated, currentQuestionSet.value)
 }
 
+function selectQuestionForAnalysis(questionId, options = {}) {
+  const nextId = String(questionId || '')
+  if (!nextId) return
+
+  selectedQuestionId.value = nextId
+}
+
 function prevQuestion() {
   const idx = currentQuestionIndex.value
   if (idx > 0) {
-    selectedQuestionId.value = flatQuestions.value[idx - 1].id
+    selectQuestionForAnalysis(flatQuestions.value[idx - 1].id)
   }
 }
 
 function nextQuestion() {
   const idx = currentQuestionIndex.value
   if (idx < flatQuestions.value.length - 1) {
-    selectedQuestionId.value = flatQuestions.value[idx + 1].id
+    selectQuestionForAnalysis(flatQuestions.value[idx + 1].id)
   }
 }
 
 function getQuestionKey(text) { return text }
+
+function getQuestionFilterLabel(filter = questionFilter.value) {
+  switch (filter) {
+    case 'error':
+      return 'questions with errors'
+    case 'running':
+      return 'running questions'
+    case 'low_score':
+      return 'questions below 5/10'
+    case 'critical_score':
+      return 'questions below 1/10'
+    default:
+      return 'visible questions'
+  }
+}
 
 function extractAnswerText(result) {
   if (typeof result === 'string') return result
@@ -1086,6 +1776,29 @@ watch(selectedQuestionId, (newId) => {
   if (newId) prioritizeQuestionInQueue(newId)
 })
 
+watch(showEvaluationScoreFilters, (visible) => {
+  if (visible) return
+  if (questionFilter.value === 'low_score' || questionFilter.value === 'critical_score') {
+    questionFilter.value = 'all'
+  }
+}, { immediate: true })
+
+watch(selectedQuestionEntry, (entry) => {
+  if (entry) return
+  if (pdfExportScope.value === 'selected') {
+    pdfExportScope.value = 'auto'
+  }
+})
+
+watch(() => currentRun.value?.id, (newRunId, oldRunId) => {
+  if (!newRunId || newRunId === oldRunId) return
+  const cachedState = questionSetStateCache.get(String(currentQuestionSet.value?.id || ''))
+  const cachedRunId = String(cachedState?.currentRun?.id || '')
+  const cachedTimeline = Array.isArray(cachedState?.completionTimeline) ? cachedState.completionTimeline : []
+  if (cachedRunId === String(newRunId) && cachedTimeline.length > 0) return
+  completionTimeline.value = []
+})
+
 function splitSelectedAgents(payload = {}) {
   return splitSelectedAgentsUtil(payload, isEvaluatorAgentID)
 }
@@ -1097,6 +1810,11 @@ const {
   cancelBenchmark,
   rerunQuestion,
   retryQuestionForAllAgents,
+  retryQuestionForEvaluators,
+  retryFailedPrimaryResults,
+  retryFailedEvaluatorResults,
+  getFailedRetryTargets,
+  getQuestionEvaluatorTargets,
   onValidation,
   onRetry
 } = useArenaRunExecution({
@@ -1131,8 +1849,49 @@ const {
   getPendingEvaluatorIds,
   popPendingEvaluators,
   resolveQuestionSetIdForRun,
-  getAgentResults
+  getAgentResults,
+  onTaskCompleted: () => {
+    const now = Date.now()
+    completionTimeline.value = [...completionTimeline.value.slice(-11), now]
+  }
 })
+
+const failedPrimaryRetryTargets = computed(() => getFailedRetryTargets('primary'))
+const failedPrimaryRetryCount = computed(() => failedPrimaryRetryTargets.value.length)
+
+const failedEvaluatorRetryTargets = computed(() => getFailedRetryTargets('evaluator'))
+const failedEvaluatorRetryCount = computed(() => failedEvaluatorRetryTargets.value.length)
+
+const canRetryFailedPrimary = computed(() => {
+  return !!currentRun.value?.id && failedPrimaryRetryCount.value > 0 && !isRunning.value
+})
+
+const canRetryFailedEvaluators = computed(() => {
+  return !!currentRun.value?.id && failedEvaluatorRetryCount.value > 0 && !isRunning.value
+})
+
+const retryFailedPrimaryTitle = computed(() => {
+  if (!currentRun.value?.id) return 'No run available to retry'
+  if (isRunning.value) return 'Wait for the current run or retry activity to finish'
+  return `Retry ${failedPrimaryRetryCount.value} failed agent result${failedPrimaryRetryCount.value === 1 ? '' : 's'}`
+})
+
+const retryFailedEvaluatorTitle = computed(() => {
+  if (!currentRun.value?.id) return 'No run available to retry'
+  if (isRunning.value) return 'Wait for the current run or retry activity to finish'
+  return `Retry ${failedEvaluatorRetryCount.value} failed evaluator result${failedEvaluatorRetryCount.value === 1 ? '' : 's'}`
+})
+
+function getQuestionEvaluatorRetryCount(questionId) {
+  return getQuestionEvaluatorTargets(questionId).length
+}
+
+function getQuestionEvaluatorRetryTitle(questionId) {
+  const count = getQuestionEvaluatorRetryCount(questionId)
+  if (count === 0) return 'No evaluator available for this question'
+  if (isQuestionLoading(questionId)) return 'Wait for the current question activity to finish'
+  return `Retry evaluation for this question${count > 1 ? ` (${count} evaluator targets)` : ''}`
+}
 
 async function handleRunSave(payload) {
   const savedQuestionSet = payload?.questionSet
@@ -1243,7 +2002,89 @@ async function waitForResultsToLoad(maxWaitMs = 5000) {
   })
 }
 
-async function exportToPdf() {
+function buildCompactQuestionCards(entries = []) {
+  return entries.map(({ question, index }) => {
+    const questionId = String(question?.id || '')
+    return {
+      id: questionId,
+      questionNumber: index + 1,
+      question: question?.question || question?.text || '',
+      grounding: getQuestionExpectedAnswer(question),
+      response: extractTextOnly(getQuestionResponse(questionId, false) || ''),
+      evaluation: extractTextOnly(getQuestionEvaluation(questionId, false) || ''),
+      evaluationScore: getQuestionEvaluationScore(questionId),
+      evaluationSeverity: getQuestionEvaluationSeverity(questionId)
+    }
+  })
+}
+
+function resolvePdfScope(scope = pdfExportScope.value) {
+  if (scope === 'auto') {
+    if (canExportSelectedQuestionPdf.value) return 'selected'
+    if (questionFilter.value !== 'all' && canExportFilteredQuestionsPdf.value) return 'filtered'
+    return 'full'
+  }
+  if (scope === 'selected') return canExportSelectedQuestionPdf.value ? 'selected' : 'full'
+  if (scope === 'filtered') return canExportFilteredQuestionsPdf.value ? 'filtered' : 'full'
+  return 'full'
+}
+
+function getPdfQuestionEntries(scope) {
+  if (scope === 'selected') {
+    return selectedQuestionEntry.value ? [selectedQuestionEntry.value] : []
+  }
+  if (scope === 'filtered') {
+    return filteredQuestionEntries.value
+  }
+  return []
+}
+
+function getCompactPdfHeader(scope, count) {
+  if (scope === 'selected') {
+    return {
+      reportTitle: 'Selected Question Analysis',
+      reportSubtitle: 'Compact export with question, grounding, response, and evaluation.'
+    }
+  }
+
+  return {
+    reportTitle: count === 1 ? 'Filtered Question Analysis' : 'Filtered Questions Analysis',
+    reportSubtitle: `${count} question${count === 1 ? '' : 's'} from ${getQuestionFilterLabel()}.`
+  }
+}
+
+function triggerCompactPdfPrint(entries = [], scope = 'selected') {
+  const questionCards = buildCompactQuestionCards(entries)
+  if (questionCards.length === 0) {
+    startRunError.value = 'No questions available for this PDF export scope.'
+    return false
+  }
+
+  const { reportTitle, reportSubtitle } = getCompactPdfHeader(scope, questionCards.length)
+  emit('trigger-print', {
+    workspaceName: currentQuestionSet.value?.name || 'Benchmark',
+    summary: null,
+    results: [],
+    reportVariant: 'question_cards',
+    reportTitle,
+    reportSubtitle,
+    questionCards
+  })
+  return true
+}
+
+function exportQuestionEntryToPdf(entry) {
+  if (!entry || isExportingPdf.value) return
+  selectQuestionForAnalysis(entry.question?.id || selectedQuestionId.value)
+  triggerCompactPdfPrint([entry], 'selected')
+}
+
+function exportFilteredQuestionsPdf() {
+  if (isExportingPdf.value) return
+  triggerCompactPdfPrint(filteredQuestionEntries.value, 'filtered')
+}
+
+async function exportToPdf(scope = pdfExportScope.value) {
   if (!currentRun.value || isExportingPdf.value) return
   
   isExportingPdf.value = true
@@ -1253,9 +2094,15 @@ async function exportToPdf() {
     if (isLoadingResults.value || hasLoadingResults()) {
       await waitForResultsToLoad()
     }
+
+    const resolvedScope = resolvePdfScope(scope)
+    if (resolvedScope !== 'full') {
+      const entries = getPdfQuestionEntries(resolvedScope)
+      triggerCompactPdfPrint(entries, resolvedScope)
+      return
+    }
     
     // Build agents array from displayAgents with their results
-    // Always include all questions in PDF export, regardless of selection
     const agentsArray = displayAgents.value.map(agent => ({
       id: agent.id,
       name: agent.name || agent.config?.name || 'Agent',

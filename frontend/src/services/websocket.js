@@ -739,6 +739,10 @@ class WebSocketService {
         return this.request('REQ_ADMIN_GET_ORG_PROFILE', { id: orgId })
     }
 
+    adminGetRuns(limit = 100) {
+        return this.request('REQ_ADMIN_GET_RUNS', { limit })
+    }
+
     adminCreateUser(userData) {
         return this.request('REQ_ADMIN_CREATE_USER', userData)
     }
