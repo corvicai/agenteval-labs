@@ -3,7 +3,21 @@ package orchestrator
 import (
 	"context"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+func TestShouldCloseMCPSession(t *testing.T) {
+	if shouldCloseMCPSession("") {
+		t.Fatal("expected empty session id to skip MCP DELETE close")
+	}
+	if shouldCloseMCPSession("   ") {
+		t.Fatal("expected blank session id to skip MCP DELETE close")
+	}
+	if !shouldCloseMCPSession("session-v2") {
+		t.Fatal("expected non-empty session id to allow MCP DELETE close")
+	}
+}
 
 func TestGoRunnerExecuteOpenRouterWithMockKey(t *testing.T) {
 	runner := newGoRunner()
@@ -75,5 +89,35 @@ func TestGoRunnerExecuteAnthropicWithMockKey(t *testing.T) {
 	}
 	if resp.Answer == "" {
 		t.Fatalf("expected non-empty answer")
+	}
+}
+
+func TestMCPToolResultError_WhenProtocolMarksToolError(t *testing.T) {
+	res := &mcp.CallToolResult{
+		IsError: true,
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: "Error calling tool 'query': agent failed to answer reason=Agent failed to compose a response"},
+		},
+	}
+
+	err := mcpToolResultError(res, extractTextFromMCP(res))
+	if err == nil {
+		t.Fatal("expected MCP tool error to be detected")
+	}
+	if err.Error() == "" {
+		t.Fatal("expected non-empty error message")
+	}
+}
+
+func TestMCPToolResultError_WhenServerEmbedsErrorAsPlainText(t *testing.T) {
+	res := &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: "Error calling tool 'query': agent failed to answer reason=Agent failed to compose a response"},
+		},
+	}
+
+	err := mcpToolResultError(res, extractTextFromMCP(res))
+	if err == nil {
+		t.Fatal("expected embedded MCP error text to be detected")
 	}
 }

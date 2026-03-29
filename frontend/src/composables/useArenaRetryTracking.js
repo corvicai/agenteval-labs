@@ -30,6 +30,13 @@ export function useArenaRetryTracking(options = {}) {
     return `retry_tracking_${wsId || 'global'}`
   }
 
+  function scopedQuestionKey(questionId, questionSetId = '') {
+    const qIdStr = String(questionId || '')
+    if (!qIdStr) return ''
+    const qsId = String(questionSetId || resolveValue(getQuestionSetId, ''))
+    return qsId ? `${qsId}::${qIdStr}` : qIdStr
+  }
+
   function hasActiveRetryEntries() {
     return Object.values(retryRegistry.value || {}).some((item) => item?.status === 'queued' || item?.status === 'running')
   }
@@ -61,9 +68,10 @@ export function useArenaRetryTracking(options = {}) {
       const item = retryRegistry.value[retryId]
       if (!item?.question_id) continue
       if (item.status !== 'queued' && item.status !== 'running') continue
-      const qIdStr = String(item.question_id)
-      if (!active[qIdStr]) active[qIdStr] = {}
-      active[qIdStr][retryId] = true
+      const questionKey = scopedQuestionKey(item.question_id, item.question_set_id)
+      if (!questionKey) continue
+      if (!active[questionKey]) active[questionKey] = {}
+      active[questionKey][retryId] = true
     }
     retryingQuestions.value = active
   }
@@ -80,7 +88,7 @@ export function useArenaRetryTracking(options = {}) {
       if (parsed && typeof parsed === 'object') {
         retryRegistry.value = parsed
         pruneRetryRegistry()
-        rebuildRetryingQuestionsFromRegistry()
+        retryingQuestions.value = {}
         persistRetryRegistry()
       }
     } catch (e) {
@@ -93,23 +101,26 @@ export function useArenaRetryTracking(options = {}) {
   function markRetryStarted(questionId, retryId, meta = {}) {
     if (!questionId || !retryId) return
     const qIdStr = String(questionId)
-    if (!retryingQuestions.value[qIdStr]) {
-      retryingQuestions.value[qIdStr] = {}
+    const existing = retryRegistry.value[retryId] || {}
+    const questionSetId = meta.questionSetId || existing.question_set_id || resolveValue(getQuestionSetId, '')
+    const questionKey = scopedQuestionKey(qIdStr, questionSetId)
+    if (!questionKey) return
+    if (!retryingQuestions.value[questionKey]) {
+      retryingQuestions.value[questionKey] = {}
     }
-    retryingQuestions.value[qIdStr][retryId] = true
+    retryingQuestions.value[questionKey][retryId] = true
 
     if (String(retryId).startsWith('local-')) {
       return
     }
 
     const now = Date.now()
-    const existing = retryRegistry.value[retryId] || {}
     retryRegistry.value[retryId] = {
       retry_id: retryId,
       run_id: meta.runId || existing.run_id || resolveValue(getRunId, ''),
       agent_id: meta.agentId || existing.agent_id || '',
       question_id: qIdStr,
-      question_set_id: meta.questionSetId || existing.question_set_id || resolveValue(getQuestionSetId, ''),
+      question_set_id: questionSetId,
       status: meta.status || existing.status || 'queued',
       updated_at: new Date(now).toISOString(),
       expires_at: new Date(now + ttlMs).toISOString()
@@ -123,15 +134,17 @@ export function useArenaRetryTracking(options = {}) {
       return { questionCleared: false }
     }
     const qIdStr = String(questionId)
-    const retries = retryingQuestions.value[qIdStr]
+    const existing = retryRegistry.value[retryId]
+    const questionSetId = existing?.question_set_id || resolveValue(getQuestionSetId, '')
+    const questionKey = scopedQuestionKey(qIdStr, questionSetId)
+    const retries = retryingQuestions.value[questionKey]
     if (retries) {
       delete retries[retryId]
       if (Object.keys(retries).length === 0) {
-        delete retryingQuestions.value[qIdStr]
+        delete retryingQuestions.value[questionKey]
       }
     }
 
-    const existing = retryRegistry.value[retryId]
     if (existing) {
       if (status === 'queued' || status === 'running') {
         existing.status = status
@@ -144,7 +157,7 @@ export function useArenaRetryTracking(options = {}) {
       persistRetryRegistry()
     }
 
-    return { questionCleared: !retryingQuestions.value[qIdStr] }
+    return { questionCleared: !retryingQuestions.value[questionKey] }
   }
 
   function clearRetryTrackingForRun(runId) {
@@ -163,8 +176,8 @@ export function useArenaRetryTracking(options = {}) {
 
   function isQuestionRetrying(questionId) {
     if (!questionId) return false
-    const qIdStr = String(questionId)
-    const retries = retryingQuestions.value[qIdStr]
+    const questionKey = scopedQuestionKey(questionId)
+    const retries = retryingQuestions.value[questionKey]
     return !!(retries && Object.keys(retries).length > 0)
   }
 

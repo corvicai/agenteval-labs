@@ -57,7 +57,8 @@ export function useArenaRunExecution(options = {}) {
     getPendingEvaluatorIds,
     popPendingEvaluators,
     resolveQuestionSetIdForRun,
-    getAgentResults
+    getAgentResults,
+    onTaskCompleted
   } = options
 
   function applyStartedRunState(runId, questionSetId, primaryAgentIds, evaluatorAgentIds, backendTotalTasks = 0) {
@@ -228,6 +229,9 @@ export function useArenaRunExecution(options = {}) {
 
   function processTaskCompleted(data) {
     completedTasks.value++
+    if (typeof onTaskCompleted === 'function') {
+      onTaskCompleted(data)
+    }
     if (!runResults.value[data.agent_id]) runResults.value[data.agent_id] = {}
 
     runResults.value[data.agent_id] = {
@@ -258,7 +262,10 @@ export function useArenaRunExecution(options = {}) {
 
     const qIdStr = String(data.question_id)
     if (data.retry_id) {
-      markRetryFinished(qIdStr, data.retry_id)
+      const retryQuestionId = qIdStr.startsWith('eval-')
+        ? (parseEvaluatorTaskQuestionID(qIdStr)?.questionId || qIdStr)
+        : qIdStr
+      markRetryFinished(retryQuestionId, data.retry_id)
     }
 
     if (qIdStr.startsWith('eval-')) {
@@ -316,19 +323,21 @@ export function useArenaRunExecution(options = {}) {
     }
   }
 
-  async function rerunQuestion(agentId, questionId, localRetryId = null) {
+  async function rerunQuestion(agentId, questionId, localRetryId = null, rerunOptions = {}) {
     if (!currentRun.value) return
 
     const qIdStr = String(questionId)
-    if (runResults.value[agentId] && runResults.value[agentId][qIdStr]) {
-      runResults.value[agentId][qIdStr].loading = true
-      runResults.value[agentId][qIdStr].error = null
+    const resultKey = String(rerunOptions?.resultKey || qIdStr)
+    if (runResults.value[agentId] && runResults.value[agentId][resultKey]) {
+      runResults.value[agentId][resultKey].loading = true
+      runResults.value[agentId][resultKey].error = null
     }
 
     const flatQuestions = typeof getFlatQuestions === 'function' ? getFlatQuestions() : []
     const mergedAgents = typeof getMergedAgents === 'function' ? getMergedAgents() : []
     const question = flatQuestions.find((item) => String(item.id) === qIdStr)
-    const resultItem = runResults.value[agentId]?.[qIdStr]
+    const resultItem = runResults.value[agentId]?.[resultKey] || runResults.value[agentId]?.[qIdStr]
+    const explicitTargetAgentId = String(rerunOptions?.targetAgentId || '')
 
     let resultIdToUse = resultItem?.id
     const agent = mergedAgents.find((item) => item.id === agentId)
@@ -346,7 +355,9 @@ export function useArenaRunExecution(options = {}) {
       }
 
       let targetMatch = null
-      if (targetAgentId) {
+      if (explicitTargetAgentId) {
+        targetMatch = candidates.find((candidate) => candidate.agent_id === explicitTargetAgentId)
+      } else if (targetAgentId) {
         targetMatch = candidates.find((candidate) => candidate.agent_id === targetAgentId)
       } else if (candidates.length === 1) {
         targetMatch = candidates[0]
@@ -365,7 +376,7 @@ export function useArenaRunExecution(options = {}) {
       const response = await wsService.rerunTask(currentRun.value.id, agentId, questionId, {
         questionSetId: currentQuestionSet.value?.id,
         resultId: resultIdToUse,
-        originalQuestion: question?.question || '',
+        originalQuestion: question?.question || question?.text || '',
         expectedAnswer: question?.expected || question?.expected_answer || ''
       })
       const retryId = response?.retry_id || response?.retryId
@@ -382,13 +393,131 @@ export function useArenaRunExecution(options = {}) {
       }
     } catch (e) {
       console.error('Failed to rerun:', e)
-      if (runResults.value[agentId] && runResults.value[agentId][qIdStr]) {
-        runResults.value[agentId][qIdStr].loading = false
+      if (runResults.value[agentId] && runResults.value[agentId][resultKey]) {
+        runResults.value[agentId][resultKey].loading = false
       }
       if (localRetryId) {
         markRetryFinished(qIdStr, localRetryId)
       }
     }
+  }
+
+  function getRetryEligibleAgents(kind = 'primary') {
+    const mergedAgents = typeof getMergedAgents === 'function' ? getMergedAgents() : []
+    return mergedAgents.filter((agent) => {
+      if (!agent.enabled) return false
+      const isEvaluator = isEvaluatorAgentObject(agent)
+      if (kind === 'evaluator') return isEvaluator
+      if (kind === 'all') return true
+      return !isEvaluator
+    })
+  }
+
+  function markLocalRetryPending(agentId, questionId, localRetryId, options = {}) {
+    const qIdStr = String(questionId)
+    const resultKey = String(options?.resultKey || qIdStr)
+    markRetryStarted(qIdStr, localRetryId)
+    if (!runResults.value[agentId]) runResults.value[agentId] = {}
+    runResults.value[agentId][resultKey] = {
+      ...(runResults.value[agentId][resultKey] || {}),
+      loading: true,
+      queued: false,
+      error: null
+    }
+  }
+
+  function getFailedRetryTargets(kind = 'primary') {
+    if (!currentRun.value) return []
+
+    const flatQuestions = typeof getFlatQuestions === 'function' ? getFlatQuestions() : []
+    const knownQuestionIds = new Set(flatQuestions.map((question) => String(question.id)))
+    const enabledAgents = getRetryEligibleAgents(kind)
+    const targets = []
+
+    flatQuestions.forEach((question) => {
+      const qIdStr = String(question.id)
+      enabledAgents.forEach((agent) => {
+        if (isEvaluatorAgentObject(agent)) {
+          const agentResults = runResults.value[agent.id] || {}
+          Object.entries(agentResults).forEach(([resultKey, result]) => {
+            const parsed = parseEvaluatorTaskQuestionID(String(resultKey))
+            const originalQuestionId = String(parsed?.questionId || resultKey)
+            if (originalQuestionId !== qIdStr) return
+            if (!knownQuestionIds.has(originalQuestionId)) return
+            if (!result?.error) return
+            if (result.loading || result.queued) return
+            targets.push({
+              agentId: agent.id,
+              questionId: originalQuestionId,
+              resultKey: String(resultKey),
+              targetAgentId: String(parsed?.targetAgentId || agent.config?.target_agent_id || '')
+            })
+          })
+          return
+        }
+
+        const result = runResults.value[agent.id]?.[qIdStr]
+        if (!result?.error) return
+        if (result.loading || result.queued) return
+        targets.push({
+          agentId: agent.id,
+          questionId: qIdStr,
+          resultKey: qIdStr,
+          targetAgentId: ''
+        })
+      })
+    })
+
+    return targets
+  }
+
+  function getQuestionEvaluatorTargets(questionId) {
+    if (!currentRun.value || !questionId) return []
+
+    const qIdStr = String(questionId)
+    const evaluatorAgents = getRetryEligibleAgents('evaluator')
+    if (evaluatorAgents.length === 0) return []
+
+    const primaryCandidates = []
+    getRetryEligibleAgents('primary').forEach((agent) => {
+      const result = runResults.value[agent.id]?.[qIdStr]
+      if (!result?.answer) return
+      if (result.error || result.loading || result.queued) return
+      primaryCandidates.push({
+        agentId: agent.id,
+        questionId: qIdStr,
+        resultId: result.id || ''
+      })
+    })
+
+    if (primaryCandidates.length === 0) return []
+
+    const targets = []
+    evaluatorAgents.forEach((agent) => {
+      const configuredTargetAgentId = String(agent.config?.target_agent_id || '')
+      const applicableCandidates = configuredTargetAgentId
+        ? primaryCandidates.filter((candidate) => candidate.agentId === configuredTargetAgentId)
+        : primaryCandidates
+
+      applicableCandidates.forEach((candidate) => {
+        const canonicalResultKey = `eval-${candidate.agentId}-${qIdStr}`
+        const existingEvalResult = runResults.value[agent.id]?.[canonicalResultKey]
+        targets.push({
+          agentId: agent.id,
+          questionId: qIdStr,
+          resultKey: canonicalResultKey,
+          targetAgentId: candidate.agentId,
+          resultId: existingEvalResult?.id || ''
+        })
+      })
+    })
+
+    const deduped = new Map()
+    targets.forEach((target) => {
+      deduped.set(`${target.agentId}::${target.resultKey}`, target)
+    })
+
+    return [...deduped.values()]
   }
 
   async function retryQuestionForAllAgents(questionId) {
@@ -398,8 +527,7 @@ export function useArenaRunExecution(options = {}) {
     }
 
     const qIdStr = String(questionId)
-    const mergedAgents = typeof getMergedAgents === 'function' ? getMergedAgents() : []
-    const enabledAgents = mergedAgents.filter((agent) => agent.enabled && !isEvaluatorAgentObject(agent))
+    const enabledAgents = getRetryEligibleAgents('primary')
 
     if (enabledAgents.length === 0) {
       showAlert('No enabled agents found. Please enable at least one agent.')
@@ -410,19 +538,90 @@ export function useArenaRunExecution(options = {}) {
     enabledAgents.forEach((agent) => {
       const localRetryId = `local-${agent.id}-${Date.now()}`
       localRetryIds[agent.id] = localRetryId
-      markRetryStarted(qIdStr, localRetryId)
-      if (!runResults.value[agent.id]) runResults.value[agent.id] = {}
-      runResults.value[agent.id][qIdStr] = {
-        ...(runResults.value[agent.id][qIdStr] || {}),
-        loading: true,
-        queued: false,
-        error: null
-      }
+      markLocalRetryPending(agent.id, qIdStr, localRetryId, { resultKey: qIdStr })
     })
 
     for (const agent of enabledAgents) {
       await rerunQuestion(agent.id, questionId, localRetryIds[agent.id])
     }
+  }
+
+  async function retryQuestionForEvaluators(questionId) {
+    if (!currentRun.value || !questionId) {
+      showAlert('No active run. Please start a benchmark first.')
+      return
+    }
+
+    const evaluatorTargets = getQuestionEvaluatorTargets(questionId)
+    if (evaluatorTargets.length === 0) {
+      showAlert('No evaluator targets available for this question.')
+      return
+    }
+
+    const batchStamp = Date.now()
+    const localRetryIds = new Map()
+
+    evaluatorTargets.forEach((target, index) => {
+      const localRetryId = `local-eval-${target.agentId}-${target.resultKey}-${batchStamp}-${index}`
+      localRetryIds.set(`${target.agentId}::${target.resultKey}`, localRetryId)
+      markLocalRetryPending(target.agentId, target.questionId, localRetryId, {
+        resultKey: target.resultKey
+      })
+    })
+
+    for (const target of evaluatorTargets) {
+      const localRetryId = localRetryIds.get(`${target.agentId}::${target.resultKey}`)
+      await rerunQuestion(target.agentId, target.questionId, localRetryId, {
+        resultKey: target.resultKey,
+        targetAgentId: target.targetAgentId
+      })
+    }
+  }
+
+  async function retryFailedResults(kind = 'primary') {
+    if (!currentRun.value) {
+      showAlert('No active run. Please start a benchmark first.')
+      return
+    }
+
+    const failedTargets = getFailedRetryTargets(kind)
+    if (failedTargets.length === 0) {
+      if (kind === 'evaluator') {
+        showAlert('No failed evaluator results found in the current run.')
+      } else {
+        showAlert('No failed primary results found in the current run.')
+      }
+      return
+    }
+
+    const batchStamp = Date.now()
+    const localRetryIds = new Map()
+
+    failedTargets.forEach((target, index) => {
+      const localRetryId = `local-${target.agentId}-${target.resultKey}-${batchStamp}-${index}`
+      const targetKey = `${target.agentId}::${target.resultKey}::${target.targetAgentId || ''}`
+      localRetryIds.set(targetKey, localRetryId)
+      markLocalRetryPending(target.agentId, target.questionId, localRetryId, {
+        resultKey: target.resultKey
+      })
+    })
+
+    for (const target of failedTargets) {
+      const targetKey = `${target.agentId}::${target.resultKey}::${target.targetAgentId || ''}`
+      const localRetryId = localRetryIds.get(targetKey)
+      await rerunQuestion(target.agentId, target.questionId, localRetryId, {
+        resultKey: target.resultKey,
+        targetAgentId: target.targetAgentId
+      })
+    }
+  }
+
+  async function retryFailedPrimaryResults() {
+    await retryFailedResults('primary')
+  }
+
+  async function retryFailedEvaluatorResults() {
+    await retryFailedResults('evaluator')
   }
 
   async function rateResult(resultId, rating) {
@@ -472,6 +671,11 @@ export function useArenaRunExecution(options = {}) {
     cancelBenchmark,
     rerunQuestion,
     retryQuestionForAllAgents,
+    retryQuestionForEvaluators,
+    retryFailedPrimaryResults,
+    retryFailedEvaluatorResults,
+    getFailedRetryTargets,
+    getQuestionEvaluatorTargets,
     onValidation,
     onRetry
   }

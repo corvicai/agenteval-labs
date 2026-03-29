@@ -19,6 +19,7 @@ var db *gorm.DB
 
 func setup() {
 	var err error
+	_ = os.Setenv("ENCRYPTION_KEY", "1234567890abcdef")
 	newLogger := logger.New(
 		log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
 		logger.Config{

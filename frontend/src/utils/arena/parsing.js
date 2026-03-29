@@ -1,4 +1,4 @@
-const SCORE_OUT_OF_TEN_REGEX = /(^|[^0-9])(\d{1,2})\s*\/\s*10($|[^0-9])/g
+const SCORE_OUT_OF_TEN_REGEX = /(^|[^0-9.])((?:10(?:\.0+)?)|(?:\d(?:\.\d+)?))\s*\/\s*10($|[^0-9])/g
 const BASE64_IMAGE_PATTERN = /data:image\/[^;]+;base64,[A-Za-z0-9+/=\s]+/g
 
 export function parseEvaluatorTaskQuestionID(questionId) {
@@ -24,7 +24,7 @@ export function extractScoreOutOfTen(text) {
   SCORE_OUT_OF_TEN_REGEX.lastIndex = 0
   const matches = [...text.matchAll(SCORE_OUT_OF_TEN_REGEX)]
   for (let i = matches.length - 1; i >= 0; i--) {
-    const raw = Number.parseInt(matches[i][2], 10)
+    const raw = Number.parseFloat(matches[i][2])
     if (Number.isNaN(raw)) continue
     if (raw < 0 || raw > 10) continue
     return raw

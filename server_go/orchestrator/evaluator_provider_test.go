@@ -172,6 +172,31 @@ func TestEvaluatorLegacyAPIKeyCompatibility(t *testing.T) {
 	}
 }
 
+func TestResolveEvaluatorProvider_AutoWithLegacyAPIKeyPrefersOpenAI(t *testing.T) {
+	cfg := map[string]any{
+		"llm_provider": "auto",
+		"api_key":      "sk-legacy-openai",
+		"openai_mode":  "standard",
+	}
+
+	provider := ResolveEvaluatorProvider(cfg)
+	if provider != EvaluatorProviderOpenAI {
+		t.Fatalf("expected %s, got %s", EvaluatorProviderOpenAI, provider)
+	}
+}
+
+func TestIsSelectedEvaluatorProviderConfigured_AutoWithLegacyAPIKeyRemainsValid(t *testing.T) {
+	cfg := map[string]any{
+		"llm_provider": "auto",
+		"api_key":      "sk-legacy-openai",
+		"openai_mode":  "standard",
+	}
+
+	if !IsSelectedEvaluatorProviderConfigured(cfg) {
+		t.Fatalf("expected auto selection with legacy api_key to be valid through OpenAI fallback")
+	}
+}
+
 func TestIsSelectedEvaluatorProviderConfigured_RespectsUserChoice(t *testing.T) {
 	cfg := map[string]any{
 		"llm_provider":   "openai",

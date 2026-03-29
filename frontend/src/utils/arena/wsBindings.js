@@ -80,6 +80,10 @@ export function registerArenaWsEvents(options = {}) {
     },
 
     EVT_TASK_STARTED: (data) => {
+      const runId = String(data.run_id || '')
+      const currentRunId = String(currentRun.value?.id || '')
+      if (currentRunId && runId && runId !== currentRunId) return
+
       if (isRunning.value) {
         startedTasks.value++
         if (currentRun.value?.id) {

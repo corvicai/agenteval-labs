@@ -116,15 +116,53 @@ func HasConfiguredEvaluatorProvider(cfg map[string]any) bool {
 		IsEvaluatorAnthropicConfigured(cfg)
 }
 
+func isAutoEvaluatorNVIDIAConfigured(cfg map[string]any) bool {
+	return strings.TrimSpace(firstNonEmptyString(cfg, "nvidia_api_key")) != ""
+}
+
+func isAutoEvaluatorOpenRouterConfigured(cfg map[string]any) bool {
+	return strings.TrimSpace(firstNonEmptyString(cfg, "openrouter_api_key")) != ""
+}
+
+func isAutoEvaluatorAnthropicConfigured(cfg map[string]any) bool {
+	return strings.TrimSpace(firstNonEmptyString(cfg, "anthropic_api_key")) != ""
+}
+
+func isAutoEvaluatorCompatibleConfigured(cfg map[string]any) bool {
+	apiKey := strings.TrimSpace(firstNonEmptyString(cfg, "compatible_api_key", "openai_compatible_api_key"))
+	if apiKey == "" {
+		return false
+	}
+	return strings.TrimSpace(firstNonEmptyString(cfg, "compatible_base_url", "openai_compatible_base_url", "base_url")) != ""
+}
+
+func isAutoEvaluatorOpenAIConfigured(cfg map[string]any) bool {
+	if strings.TrimSpace(firstNonEmptyString(cfg, "openai_api_key", "api_key")) == "" {
+		return false
+	}
+	if EvaluatorOpenAIMode(cfg) == "managed" && EvaluatorOpenAIPromptID(cfg) == "" {
+		return false
+	}
+	return true
+}
+
+func hasConfiguredAutoEvaluatorProvider(cfg map[string]any) bool {
+	return isAutoEvaluatorOpenAIConfigured(cfg) ||
+		isAutoEvaluatorNVIDIAConfigured(cfg) ||
+		isAutoEvaluatorOpenRouterConfigured(cfg) ||
+		isAutoEvaluatorCompatibleConfigured(cfg) ||
+		isAutoEvaluatorAnthropicConfigured(cfg)
+}
+
 func ResolveEvaluatorProvider(cfg map[string]any) string {
 	preferredProvider := PreferredEvaluatorProvider(cfg)
 
 	if preferredProvider == EvaluatorProviderAuto {
-		nvidiaConfigured := IsEvaluatorNVIDIAConfigured(cfg)
-		openRouterConfigured := IsEvaluatorOpenRouterConfigured(cfg)
-		anthropicConfigured := IsEvaluatorAnthropicConfigured(cfg)
-		openaiConfigured := IsEvaluatorOpenAIConfigured(cfg)
-		compatibleConfigured := IsEvaluatorCompatibleConfigured(cfg)
+		nvidiaConfigured := isAutoEvaluatorNVIDIAConfigured(cfg)
+		openRouterConfigured := isAutoEvaluatorOpenRouterConfigured(cfg)
+		anthropicConfigured := isAutoEvaluatorAnthropicConfigured(cfg)
+		openaiConfigured := isAutoEvaluatorOpenAIConfigured(cfg)
+		compatibleConfigured := isAutoEvaluatorCompatibleConfigured(cfg)
 
 		order := evaluatorAutoProviderOrder(cfg)
 		for _, provider := range order {
@@ -168,7 +206,7 @@ func IsSelectedEvaluatorProviderConfigured(cfg map[string]any) bool {
 	case EvaluatorProviderOpenAICompatible:
 		return IsEvaluatorCompatibleConfigured(cfg)
 	case EvaluatorProviderAuto:
-		return HasConfiguredEvaluatorProvider(cfg)
+		return hasConfiguredAutoEvaluatorProvider(cfg)
 	default:
 		return IsEvaluatorOpenAIConfigured(cfg)
 	}

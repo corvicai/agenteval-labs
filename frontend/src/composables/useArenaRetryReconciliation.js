@@ -1,4 +1,5 @@
 import { resolveRetryStatusItems as resolveRetryStatusItemsUtil } from '../utils/arena/runs.js'
+import { parseEvaluatorTaskQuestionID } from '../utils/arena/parsing.js'
 
 export function useArenaRetryReconciliation(options = {}) {
   const {
@@ -21,17 +22,33 @@ export function useArenaRetryReconciliation(options = {}) {
     fetchLatestResultsForQS
   } = options
 
+  function resolveRetryQuestionRefs(item) {
+    const rawQuestionId = item?.question_id != null ? String(item.question_id) : ''
+    if (!rawQuestionId) {
+      return {
+        questionId: '',
+        resultKey: ''
+      }
+    }
+
+    const parsed = parseEvaluatorTaskQuestionID(rawQuestionId)
+    return {
+      questionId: String(parsed?.questionId || rawQuestionId),
+      resultKey: rawQuestionId
+    }
+  }
+
   function applyRetryLoadingState(item) {
     const agentId = item?.agent_id
-    const questionId = item?.question_id != null ? String(item.question_id) : ''
-    if (!agentId || !questionId) return
+    const { resultKey } = resolveRetryQuestionRefs(item)
+    if (!agentId || !resultKey) return
 
     if (!runResults.value[agentId]) {
       runResults.value[agentId] = {}
     }
 
-    runResults.value[agentId][questionId] = {
-      ...(runResults.value[agentId][questionId] || {}),
+    runResults.value[agentId][resultKey] = {
+      ...(runResults.value[agentId][resultKey] || {}),
       loading: true,
       queued: item?.status === 'queued',
       error: null
@@ -45,19 +62,6 @@ export function useArenaRetryReconciliation(options = {}) {
     const retryIds = Object.keys(retryRegistry.value)
     if (retryIds.length === 0) return
 
-    retryIds.forEach((retryId) => {
-      const item = retryRegistry.value[retryId]
-      if (item?.status === 'queued' || item?.status === 'running') {
-        markRetryStarted(item.question_id, retryId, {
-          runId: item.run_id,
-          agentId: item.agent_id,
-          questionSetId: item.question_set_id,
-          status: item.status
-        })
-        applyRetryLoadingState(item)
-      }
-    })
-
     try {
       const response = await wsService.getRetryStatus(retryIds)
       const items = resolveRetryStatusItemsUtil(response)
@@ -67,7 +71,7 @@ export function useArenaRetryReconciliation(options = {}) {
       for (const item of items) {
         if (!item?.retry_id) continue
         const retryId = item.retry_id
-        const qIdStr = item?.question_id != null ? String(item.question_id) : ''
+        const { questionId: qIdStr } = resolveRetryQuestionRefs(item)
         known.add(retryId)
 
         if (item.status === 'queued' || item.status === 'running') {
@@ -107,7 +111,8 @@ export function useArenaRetryReconciliation(options = {}) {
         if (known.has(retryId)) return
         const entry = retryRegistry.value[retryId]
         if (entry?.question_id) {
-          markRetryFinished(entry.question_id, retryId, 'not_found')
+          const parsed = parseEvaluatorTaskQuestionID(String(entry.question_id))
+          markRetryFinished(String(parsed?.questionId || entry.question_id), retryId, 'not_found')
         } else {
           delete retryRegistry.value[retryId]
         }
@@ -120,7 +125,7 @@ export function useArenaRetryReconciliation(options = {}) {
       }
 
       if (shouldRefreshResults && currentQuestionSet.value?.id) {
-        fetchLatestResultsForQS(currentQuestionSet.value.id)
+        fetchLatestResultsForQS(currentQuestionSet.value.id, { force: true })
       }
     } catch (e) {
       console.warn('[Arena] Failed to reconcile retries:', e)

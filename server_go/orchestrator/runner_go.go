@@ -39,6 +39,10 @@ func (r *goRunner) Health() error {
 	return nil
 }
 
+func shouldCloseMCPSession(sessionID string) bool {
+	return strings.TrimSpace(sessionID) != ""
+}
+
 func (r *goRunner) Execute(ctx context.Context, req ExecutionRequest) (ExecutionResponse, error) {
 	ctx, cancel := ensureRunnerContext(ctx)
 	defer cancel()
@@ -154,15 +158,28 @@ func (r *goRunner) callMCP(ctx context.Context, endpoint, token, question string
 		ctx = context.Background()
 	}
 
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+	connCtx, cancelConn := context.WithCancel(ctx)
+
+	session, err := client.Connect(connCtx, &mcp.StreamableClientTransport{
 		Endpoint:             endpoint,
 		HTTPClient:           httpClient,
 		DisableStandaloneSSE: true,
 	}, nil)
 	if err != nil {
+		cancelConn()
 		return ExecutionResponse{}, nil, err
 	}
-	defer session.Close()
+	defer cancelConn()
+	defer func() {
+		sessionID := session.ID()
+		if !shouldCloseMCPSession(sessionID) {
+			logger.Debug("[GO RUNNER] MCP server at %s is stateless; skipping DELETE close", endpoint)
+			return
+		}
+		if err := session.Close(); err != nil {
+			logger.Debug("[GO RUNNER] MCP session close failed for %s (session_id=%s): %v", endpoint, strings.TrimSpace(sessionID), err)
+		}
+	}()
 
 	logger.Debug("[GO RUNNER] MCP query: %s", truncate(question, 200))
 	logTimeouts(ctx, httpClient.Timeout)
@@ -184,7 +201,7 @@ func (r *goRunner) callMCP(ctx context.Context, endpoint, token, question string
 		}
 	}()
 
-	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+	res, err := session.CallTool(connCtx, &mcp.CallToolParams{
 		Name: "query",
 		Arguments: map[string]any{
 			"query_content": question,
@@ -210,6 +227,15 @@ func (r *goRunner) callMCP(ctx context.Context, endpoint, token, question string
 		"duration_ms":  int(time.Since(callStart).Milliseconds()),
 		"raw_response": rawResponse,
 		"retry_count":  retry,
+	}
+
+	if toolErr := mcpToolResultError(res, answerText); toolErr != nil {
+		metadata["mcp_tool_error"] = true
+		return ExecutionResponse{
+			Success:  false,
+			Error:    toolErr.Error(),
+			Metadata: metadata,
+		}, metadata, nil
 	}
 
 	return ExecutionResponse{
@@ -463,6 +489,7 @@ func (r *goRunner) executeNVIDIA(ctx context.Context, req ExecutionRequest) Exec
 
 	resultText, rawResponse, err := callOpenAIWithBaseURL(ctx, apiKey, "", baseURL, "chat/completions", body, parseOpenAIChat)
 	if err != nil {
+		err = wrapProviderRequestError("nvidia", err)
 		metadata := errorMeta(start, err, nil)
 		addTimeoutMeta(metadata, ctx, runnerTaskTimeout)
 		if isGatewayTimeoutError(err) {
@@ -592,6 +619,7 @@ func (r *goRunner) executeOpenRouter(ctx context.Context, req ExecutionRequest) 
 
 	resultText, rawResponse, err := callOpenAIWithBaseURLAndHeaders(ctx, apiKey, "", baseURL, "chat/completions", body, parseOpenAIChat, extraHeaders)
 	if err != nil {
+		err = wrapProviderRequestError("openrouter", err)
 		metadata := errorMeta(start, err, nil)
 		addTimeoutMeta(metadata, ctx, runnerTaskTimeout)
 		if isGatewayTimeoutError(err) {
@@ -714,6 +742,7 @@ func (r *goRunner) executeOpenAICompatible(ctx context.Context, req ExecutionReq
 	extraHeaders := extractStringMap(req.Config, "compatible_headers")
 	resultText, rawResponse, err := callOpenAIWithBaseURLAndHeaders(ctx, apiKey, "", baseURL, "chat/completions", body, parseOpenAIChat, extraHeaders)
 	if err != nil {
+		err = wrapProviderRequestError("openai_compatible", err)
 		metadata := errorMeta(start, err, nil)
 		addTimeoutMeta(metadata, ctx, runnerTaskTimeout)
 		if isGatewayTimeoutError(err) {
@@ -834,6 +863,7 @@ func (r *goRunner) executeAnthropic(ctx context.Context, req ExecutionRequest) E
 
 	resultText, rawResponse, err := callAnthropicMessages(ctx, apiKey, baseURL, version, body)
 	if err != nil {
+		err = wrapProviderRequestError("anthropic", err)
 		metadata := errorMeta(start, err, nil)
 		addTimeoutMeta(metadata, ctx, runnerTaskTimeout)
 		if isGatewayTimeoutError(err) {
@@ -893,9 +923,17 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(body))
 		if readErr == nil {
+			bodyText := string(body)
+			if req.Method == http.MethodDelete &&
+				resp.StatusCode == http.StatusMethodNotAllowed &&
+				strings.Contains(strings.ToLower(bodyText), "session termination not supported") {
+				logger.Debug("[GO RUNNER] MCP session close not supported by %s %s: %s",
+					req.Method, req.URL.String(), bodyText)
+				return resp, err
+			}
 			if len(body) > 0 {
 				logger.Warn("[GO RUNNER] MCP HTTP %d from %s %s: %s",
-					resp.StatusCode, req.Method, req.URL.String(), string(body))
+					resp.StatusCode, req.Method, req.URL.String(), bodyText)
 			} else {
 				logger.Warn("[GO RUNNER] MCP HTTP %d from %s %s (empty body)",
 					resp.StatusCode, req.Method, req.URL.String())
@@ -1026,6 +1064,29 @@ func extractTextFromMCP(res *mcp.CallToolResult) string {
 	return b.String()
 }
 
+func mcpToolResultError(res *mcp.CallToolResult, answerText string) error {
+	if res == nil {
+		return errors.New("empty MCP tool response")
+	}
+
+	trimmed := strings.TrimSpace(answerText)
+	if res.IsError {
+		if trimmed != "" {
+			return errors.New(trimmed)
+		}
+		return errors.New("MCP tool returned an error")
+	}
+
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(trimmed, "Error calling tool '") ||
+		strings.HasPrefix(trimmed, `Error calling tool "`) ||
+		(strings.Contains(lower, "agent failed to answer") && strings.Contains(lower, "reason=")) {
+		return errors.New(trimmed)
+	}
+
+	return nil
+}
+
 func buildImageDataURL(imageData map[string]any) (string, error) {
 	if imageData == nil {
 		return "", errors.New("image_data is missing")
@@ -1062,6 +1123,21 @@ func buildEvaluationPrompt(question, originalQuestion, expectedAnswer string) st
 	b.WriteString("\n\n")
 	b.WriteString("Please evaluate if the response correctly addresses the original question and matches the expected answer if provided. If the question is about one topic (e.g. apples) but the response is about another (e.g. bananas), mark it as a failure.")
 	return b.String()
+}
+
+func wrapProviderRequestError(provider string, err error) error {
+	if err == nil {
+		return nil
+	}
+	provider = strings.TrimSpace(strings.ToLower(provider))
+	if provider == "" {
+		return err
+	}
+	message := strings.TrimSpace(err.Error())
+	if message == "" || strings.HasPrefix(strings.ToLower(message), provider+" request failed") {
+		return err
+	}
+	return fmt.Errorf("%s request failed: %w", provider, err)
 }
 
 func callOpenAIResponses(ctx context.Context, apiKey, projectID, promptID, promptVersion string, inputPayload any) (string, map[string]any, error) {

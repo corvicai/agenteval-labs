@@ -859,38 +859,125 @@ textarea {
 
 .progress-bar {
   position: relative;
-  height: 40px;
-  background: #f8f9fa;
-  border-top: 1px solid #dee2e6;
+  min-height: 58px;
+  margin: 0 16px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
   overflow: hidden;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
 }
 
 .progress-fill {
   position: absolute;
+  inset: 0 auto 0 0;
   height: 100%;
-  background: linear-gradient(90deg, #49399d, #6f5cc3);
+  background: linear-gradient(90deg, #2563eb, #0ea5e9);
   transition: width 0.3s ease;
   z-index: 2;
 }
 
 .progress-fill-started {
   position: absolute;
+  inset: 0 auto 0 0;
   height: 100%;
-  background: linear-gradient(90deg, rgba(73, 57, 157, 0.3), rgba(111, 92, 195, 0.4));
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.18), rgba(14, 165, 233, 0.28));
   transition: width 0.3s ease;
   z-index: 1;
 }
 
+.progress-bar.progress-evaluation .progress-fill {
+  background: linear-gradient(90deg, #059669, #34d399);
+}
+
+.progress-bar.progress-evaluation .progress-fill-started {
+  background: linear-gradient(90deg, rgba(5, 150, 105, 0.18), rgba(52, 211, 153, 0.28));
+}
+
+.progress-bar.progress-retry .progress-fill {
+  background: linear-gradient(90deg, #d97706, #f59e0b);
+}
+
+.progress-bar.progress-retry .progress-fill-started {
+  background: linear-gradient(90deg, rgba(217, 119, 6, 0.18), rgba(245, 158, 11, 0.3));
+}
+
+.progress-content {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+}
+
+.progress-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.progress-phase-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: #dbeafe;
+  color: #1d4ed8;
+  border: 1px solid rgba(29, 78, 216, 0.12);
+  white-space: nowrap;
+}
+
+.progress-phase-chip.phase-evaluation {
+  background: #dcfce7;
+  color: #166534;
+  border-color: rgba(22, 101, 52, 0.12);
+}
+
+.progress-phase-chip.phase-retry {
+  background: #fef3c7;
+  color: #92400e;
+  border-color: rgba(146, 64, 14, 0.12);
+}
+
 .progress-text {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  color: #212529;
+  position: static;
+  transform: none;
+  color: #0f172a;
   font-weight: 600;
-  font-size: 0.875rem;
-  z-index: 1;
-  mix-blend-mode: difference;
+  font-size: 0.92rem;
+  line-height: 1.2;
+  min-width: 0;
+}
+
+.progress-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.progress-meta-item {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  color: #334155;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.progress-meta-item.is-error {
+  background: #fee2e2;
+  color: #991b1b;
+  border-color: rgba(153, 27, 27, 0.12);
 }
 
 .new-questions-modal .actions-modal-overlay {
