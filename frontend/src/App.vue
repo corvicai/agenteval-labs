@@ -5,7 +5,7 @@
       <div class="banner-content">
         <span class="banner-icon">🕵️</span>
         <span class="banner-text">
-          You are currently logged in as <strong>{{ currentUser?.name || currentUser?.user?.name }}</strong>
+          You are currently logged in as <strong>{{ currentUserName }}</strong>
         </span>
         <button class="btn btn-primary btn-stop-impersonation" @click="handleLogout">
           Stop Impersonating
@@ -30,6 +30,10 @@
             :workspace-name="printData.workspaceName || 'Benchmark'"
             :summary-stats="printData.summary"
             :results="printData.results"
+            :report-variant="printData.reportVariant || 'full'"
+            :report-title="printData.reportTitle"
+            :report-subtitle="printData.reportSubtitle"
+            :question-cards="printData.questionCards || []"
           />
         </div>
       </div>
@@ -61,8 +65,8 @@
       </div>
           <div class="controls">
             <div class="buttons">
-              <span class="user-badge" @click="openMyProfile">
-                👤 {{ currentUser?.name }}
+              <span class="user-badge" :class="{ admin: isAdmin }" @click="openMyProfile">
+                {{ isAdmin ? '👑' : '👤' }} {{ currentUserName }}
               </span>
               <button class="btn btn-danger btn-logout-compact icon-only has-tooltip"
                       title="Logout"
@@ -87,6 +91,12 @@
             :class="{ active: viewMode === 'stats' }"
             @click="viewMode = 'stats'"
           >📊 Stats</button>
+          <button
+            v-if="isAdmin"
+            class="nav-btn"
+            :class="{ active: viewMode === 'admin' || viewMode === 'admin-profile' }"
+            @click="openAdminPanel"
+          >⚙️ Admin</button>
           <button 
             class="nav-btn" 
             :class="{ active: viewMode === 'docs' }"
@@ -98,6 +108,34 @@
     <main v-if="viewMode === 'stats' && currentWorkspace" class="main-content">
       <StatsView 
         :workspaceId="currentWorkspace.id" 
+        :isAdmin="isAdmin"
+      />
+    </main>
+
+    <!-- Admin Panel -->
+    <main v-if="viewMode === 'admin' && isAdmin" class="main-content no-padding">
+      <AdminPanel
+        :current-user-id="currentUserId"
+        :initial-tab="adminTab"
+        @close="viewMode = 'benchmarks'"
+        @view-user-profile="handleViewUserProfile"
+        @view-org-profile="handleViewOrgProfile"
+        @tab-change="val => adminTab = val"
+      />
+    </main>
+
+    <!-- Admin Profile View -->
+    <main
+      v-if="viewMode === 'admin-profile' && isAdmin && profileEntityType && profileEntityId"
+      class="main-content"
+    >
+      <AdminProfileView
+        :entity-type="profileEntityType"
+        :entity-id="profileEntityId"
+        @back="closeAdminProfile"
+        @view-user="handleViewUserProfile"
+        @view-org="handleViewOrgProfile"
+        @updated="handleProfileUpdated"
       />
     </main>
 
@@ -105,7 +143,7 @@
     <!-- Manager Panel -->
     <main v-if="viewMode === 'manager' && isManager" class="main-content">
       <ManagerPanel 
-        :current-user-id="currentUser?.id"
+        :current-user-id="currentUserId"
         :workspace-id="currentWorkspace?.id"
       />
     </main>
@@ -221,6 +259,8 @@ import OnboardingScreen from './components/OnboardingScreen.vue'
 import CorvicLogo from './components/CorvicLogo.vue'
 import BenchmarkArena from './components/BenchmarkArena.vue'
 import BenchmarkDocumentView from './components/BenchmarkDocumentView.vue'
+import AdminPanel from './components/AdminPanel.vue'
+import AdminProfileView from './components/AdminProfileView.vue'
 import ManagerPanel from './components/ManagerPanel.vue';
 import StatsView from './components/StatsView.vue';
 import QuestionEditorModal from './components/QuestionEditorModal.vue';
@@ -244,13 +284,22 @@ const { state: wsState, syncState, connect: wsConnect, disconnect: wsDisconnect 
 // Auth State
 const isAuthenticated = ref(api.isLoggedIn())
 const currentUser = ref(api.getStoredUser())
-const viewMode = ref(localStorage.getItem('viewMode') || 'benchmarks'); // 'benchmarks', 'stats', 'manager'
+const initialViewMode = localStorage.getItem('viewMode') || 'benchmarks'
+const viewMode = ref(initialViewMode === 'admin-profile' ? 'admin' : initialViewMode); // 'benchmarks', 'stats', 'manager', 'admin', 'admin-profile'
 const benchmarkMode = ref(localStorage.getItem('benchmarkMode') || 'runner') // 'history', 'runner'
 const isLoggingIn = ref(false) // Flag to prevent concurrent initialization during login
 
 // Manager state
 const isManager = ref(false)
 const appReady = ref(false)
+const currentUserRecord = computed(() => currentUser.value?.user || currentUser.value || null)
+const currentUserId = computed(() => currentUserRecord.value?.id || currentUserRecord.value?.ID || '')
+const currentUserName = computed(() => currentUserRecord.value?.name || '')
+const currentUserEmail = computed(() => currentUserRecord.value?.email || '')
+const isAdmin = computed(() => Boolean(currentUserRecord.value?.is_admin))
+const profileEntityType = ref(null)
+const profileEntityId = ref(null)
+const adminTab = ref('users')
 
 
 // Watch benchmarkMode to persist
@@ -262,6 +311,14 @@ watch(benchmarkMode, (newVal) => {
 watch(viewMode, (newVal) => {
   localStorage.setItem('viewMode', newVal)
 })
+
+watch(isAdmin, (adminEnabled) => {
+  if (adminEnabled) return
+  if (viewMode.value === 'admin' || viewMode.value === 'admin-profile') {
+    closeAdminProfile()
+    viewMode.value = 'benchmarks'
+  }
+}, { immediate: true })
 
 
 
@@ -497,7 +554,44 @@ function handleArenaHistoryClick() {
 }
 
 function openMyProfile() {
-  // Profile view removed - admin functionality removed
+  if (!isAdmin.value || !currentUserId.value) return
+  adminTab.value = 'users'
+  profileEntityType.value = 'user'
+  profileEntityId.value = currentUserId.value
+  viewMode.value = 'admin-profile'
+}
+
+function openAdminPanel() {
+  if (!isAdmin.value) return
+  closeAdminProfile()
+  viewMode.value = 'admin'
+}
+
+function closeAdminProfile() {
+  profileEntityType.value = null
+  profileEntityId.value = null
+  viewMode.value = isAdmin.value ? 'admin' : 'benchmarks'
+}
+
+function handleViewUserProfile(userId) {
+  if (!isAdmin.value || !userId) return
+  adminTab.value = 'users'
+  profileEntityType.value = 'user'
+  profileEntityId.value = userId
+  viewMode.value = 'admin-profile'
+}
+
+function handleViewOrgProfile(orgId) {
+  if (!isAdmin.value || !orgId) return
+  adminTab.value = 'organizations'
+  profileEntityType.value = 'organization'
+  profileEntityId.value = orgId
+  viewMode.value = 'admin-profile'
+}
+
+function handleProfileUpdated(updatedUser) {
+  if (!updatedUser?.id || updatedUser.id !== currentUserId.value) return
+  currentUser.value = { ...currentUser.value, ...updatedUser }
 }
 
 const enabledAgents = computed(() => agents.value.filter(a => a.enabled))
@@ -601,6 +695,9 @@ async function handleLogout() {
   isAuthenticated.value = false
   currentUser.value = null
   currentWorkspace.value = null
+  profileEntityType.value = null
+  profileEntityId.value = null
+  adminTab.value = 'users'
   afkOverlayVisible.value = false
   isReconnectingFromAfk.value = false
   reconnectOverlayMode.value = 'afk'
@@ -640,7 +737,7 @@ async function loadWorkspaces() {
 
     if ((workspaces.value?.length || 0) === 0) {
       try {
-        const fallbackOwner = currentUser.value?.name || currentUser.value?.email || 'My'
+        const fallbackOwner = currentUserName.value || currentUserEmail.value || 'My'
         const fallbackName = `${fallbackOwner} Workspace`
         console.warn('[App] No workspaces found; creating a default workspace:', fallbackName)
         const created = await wsService.createWorkspace(fallbackName)

@@ -44,3 +44,4 @@ ops/nginx/.basic-auth-hosts.map
 *.sql.gz
 
 *firebase-service-account.json
+.mutagen.yml

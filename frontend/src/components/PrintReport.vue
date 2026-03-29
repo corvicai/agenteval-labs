@@ -97,75 +97,122 @@
       </div>
     </div>
 
-    <!-- Results Pages -->
-    <div 
-      v-for="(question, qIndex) in results" 
-      :key="qIndex"
-      class="print-page result-page"
-    >
-      <div class="page-header-mini">
-        <span class="workspace-ref">{{ workspaceName }} Benchmark</span>
-        <span class="page-num">Item #{{ qIndex + 1 }}</span>
+    <!-- Compact Question Cards (variant: question_cards) -->
+    <div v-if="reportVariant === 'question_cards'" class="compact-cards-report">
+      <!-- Compact Header -->
+      <div class="compact-header">
+        <div class="compact-header-meta">
+          <span class="compact-workspace">{{ workspaceName }}</span>
+          <span class="compact-date">{{ reportDate }}</span>
+        </div>
+        <h1 class="compact-title">{{ reportTitle || 'Question Analysis' }}</h1>
+        <p v-if="reportSubtitle" class="compact-subtitle">{{ reportSubtitle }}</p>
       </div>
 
-      <div class="question-container">
-        <div class="q-badge">Question</div>
-        <p class="q-text">{{ typeof question.question === 'object' ? question.question.question : question.question }}</p>
-      </div>
+      <!-- One card per question -->
+      <div
+        v-for="card in questionCards"
+        :key="card.id"
+        class="compact-card print-page"
+      >
+        <div class="compact-card-badge">Q{{ card.questionNumber }}</div>
 
-      <div class="question-container expected-container" v-if="question.expectedAnswer">
-        <div class="q-badge expected-badge">Expected Answer</div>
-        <div class="q-text expected-text" v-html="renderMarkdown(question.expectedAnswer)"></div>
-      </div>
+        <div class="compact-section compact-question">
+          <div class="compact-label">Question</div>
+          <p class="compact-text">{{ card.question }}</p>
+        </div>
 
-      <div class="responses-comparison-grid">
-        <div
-          v-for="(ans, aIndex) in orderedQuestionAgents(question)"
-          :key="aIndex"
-          class="response-card"
-        >
-          <div class="response-header">
-            <div class="agent-info">
-              <span class="agent-name">{{ ans.name }}</span>
-              <span class="provider-pill">{{ ans.provider }}</span>
-            </div>
-            <div v-if="ans.humanValidation" class="validation-status" :class="ans.humanValidation">
-              {{ getValidationIcon(ans.humanValidation) }}
-              <span class="v-text">{{ ans.humanValidation }}</span>
-            </div>
+        <div v-if="card.grounding" class="compact-section compact-grounding">
+          <div class="compact-label">Grounding / Expected</div>
+          <div class="compact-body" v-html="renderMarkdown(card.grounding)"></div>
+        </div>
+
+        <div v-if="card.response" class="compact-section compact-response">
+          <div class="compact-label">Response</div>
+          <div class="compact-body" v-html="renderMarkdown(card.response)"></div>
+        </div>
+
+        <div v-if="card.evaluation" class="compact-section compact-evaluation" :class="'eval-' + (card.evaluationSeverity || 'none')">
+          <div class="compact-label">
+            Evaluation
+            <span v-if="card.evaluationScore" class="compact-eval-score">{{ card.evaluationScore }}</span>
           </div>
-          
-          <div class="response-body">
-            <div v-if="ans.error" class="error-box">
-              <span class="error-icon">❌</span>
-              <div class="error-content">
-                <strong>Execution Error</strong>
-                <p>{{ ans.error }}</p>
+          <div class="compact-body" v-html="renderMarkdown(card.evaluation)"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Full Report (default) -->
+    <template v-else>
+      <div
+        v-for="(question, qIndex) in results"
+        :key="qIndex"
+        class="print-page result-page"
+      >
+        <div class="page-header-mini">
+          <span class="workspace-ref">{{ workspaceName }} Benchmark</span>
+          <span class="page-num">Item #{{ qIndex + 1 }}</span>
+        </div>
+
+        <div class="question-container">
+          <div class="q-badge">Question</div>
+          <p class="q-text">{{ typeof question.question === 'object' ? question.question.question : question.question }}</p>
+        </div>
+
+        <div class="question-container expected-container" v-if="question.expectedAnswer">
+          <div class="q-badge expected-badge">Expected Answer</div>
+          <div class="q-text expected-text" v-html="renderMarkdown(question.expectedAnswer)"></div>
+        </div>
+
+        <div class="responses-comparison-grid">
+          <div
+            v-for="(ans, aIndex) in orderedQuestionAgents(question)"
+            :key="aIndex"
+            class="response-card"
+          >
+            <div class="response-header">
+              <div class="agent-info">
+                <span class="agent-name">{{ ans.name }}</span>
+                <span class="provider-pill">{{ ans.provider }}</span>
+              </div>
+              <div v-if="ans.humanValidation" class="validation-status" :class="ans.humanValidation">
+                {{ getValidationIcon(ans.humanValidation) }}
+                <span class="v-text">{{ ans.humanValidation }}</span>
               </div>
             </div>
-            <div 
-              v-else-if="ans.answer" 
-              class="markdown-content" 
-              v-html="renderMarkdown(ans.answerText || ans.answer)"
-            ></div>
-            <div v-else class="empty-state">
-              <em>Waiting for manual response input...</em>
-            </div>
-          </div>
 
-          <div class="response-footer" v-if="ans.duration">
-            <div class="meta-pill">
-              <span class="icon">⏱️</span>
-              {{ ans.duration }}s
+            <div class="response-body">
+              <div v-if="ans.error" class="error-box">
+                <span class="error-icon">❌</span>
+                <div class="error-content">
+                  <strong>Execution Error</strong>
+                  <p>{{ ans.error }}</p>
+                </div>
+              </div>
+              <div
+                v-else-if="ans.answer"
+                class="markdown-content"
+                v-html="renderMarkdown(ans.answerText || ans.answer)"
+              ></div>
+              <div v-else class="empty-state">
+                <em>Waiting for manual response input...</em>
+              </div>
+            </div>
+
+            <div class="response-footer" v-if="ans.duration">
+              <div class="meta-pill">
+                <span class="icon">⏱️</span>
+                {{ ans.duration }}s
+              </div>
             </div>
           </div>
         </div>
+
+        <div class="page-footer-mini">
+          Confidential - Generated for {{ workspaceName }}
+        </div>
       </div>
-      
-      <div class="page-footer-mini">
-        Confidential - Generated for {{ workspaceName }}
-      </div>
-    </div>
+    </template>
   </div>
 </template>
 
@@ -181,7 +228,11 @@ export default {
   props: {
     workspaceName: String,
     summaryStats: Object,
-    results: Array
+    results: { type: Array, default: () => [] },
+    reportVariant: { type: String, default: 'full' }, // 'full' | 'question_cards'
+    reportTitle: String,
+    reportSubtitle: String,
+    questionCards: { type: Array, default: () => [] }
   },
   computed: {
     reportDate() {
@@ -783,4 +834,128 @@ export default {
 .card-accent-2 { border-top: 5px solid var(--secondary); }
 .card-accent-3 { border-top: 5px solid var(--info); }
 .card-accent-4 { border-top: 5px solid var(--success); }
+
+/* ─── Compact Question Cards ─────────────────────────────── */
+.compact-cards-report {
+  font-family: 'Outfit', 'Inter', system-ui, sans-serif;
+  color: var(--text-main);
+}
+
+.compact-header {
+  padding: 40px 50px 24px;
+  border-bottom: 2px solid var(--border);
+  margin-bottom: 0;
+}
+
+.compact-header-meta {
+  display: flex;
+  gap: 16px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  margin-bottom: 10px;
+}
+
+.compact-title {
+  font-size: 2rem;
+  font-weight: 800;
+  margin: 0 0 6px 0;
+  color: var(--primary);
+}
+
+.compact-subtitle {
+  font-size: 0.95rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.compact-card {
+  padding: 36px 50px;
+  position: relative;
+}
+
+.compact-card-badge {
+  display: inline-block;
+  background: var(--primary);
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 800;
+  padding: 4px 12px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 20px;
+}
+
+.compact-section {
+  margin-bottom: 20px;
+  padding: 16px 20px;
+  border-radius: 10px;
+  border-left: 5px solid transparent;
+}
+
+.compact-label {
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.compact-text {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0;
+  line-height: 1.45;
+}
+
+.compact-body {
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: #374151;
+}
+
+.compact-question {
+  background: #f8fafc;
+  border-left-color: var(--primary);
+}
+.compact-question .compact-label { color: var(--primary); }
+
+.compact-grounding {
+  background: #f0fdf4;
+  border-left-color: var(--success);
+}
+.compact-grounding .compact-label { color: #166534; }
+
+.compact-response {
+  background: #eff6ff;
+  border-left-color: var(--info);
+}
+.compact-response .compact-label { color: #1d4ed8; }
+
+.compact-evaluation {
+  background: #fafafa;
+  border-left-color: var(--text-muted);
+}
+.compact-evaluation .compact-label { color: var(--text-muted); }
+.compact-evaluation.eval-critical { background: #fef2f2; border-left-color: var(--danger); }
+.compact-evaluation.eval-critical .compact-label { color: var(--danger); }
+.compact-evaluation.eval-low { background: #fffbeb; border-left-color: var(--warning); }
+.compact-evaluation.eval-low .compact-label { color: #92400e; }
+
+.compact-eval-score {
+  background: var(--primary);
+  color: white;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
 </style>
