@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	dbcompat "benchmarking-platform/internal/db"
 	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/models"
 
@@ -1421,7 +1422,7 @@ func (e *Engine) startRun(workspaceID uuid.UUID, questionSetID uuid.UUID, agentI
 		Status:          "running",
 		TotalTasks:      totalTasks,
 	}
-	if err := e.db.Create(&run).Error; err != nil {
+	if err := dbcompat.CreateRunCompat(e.db, &run); err != nil {
 		return nil, err
 	}
 

@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"benchmarking-platform/internal/logger"
@@ -144,5 +145,29 @@ func EnsureCriticalSchema(db *gorm.DB) error {
 	}
 
 	logger.Info("[DB] Critical schema compatibility check completed")
+	return nil
+}
+
+func IsMissingRunsCreatedByColumnError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, `created_by_user_id`) &&
+		strings.Contains(msg, `relation "runs"`) &&
+		strings.Contains(msg, `does not exist`)
+}
+
+func CreateRunCompat(db *gorm.DB, run *models.Run) error {
+	if err := db.Create(run).Error; err != nil {
+		if !IsMissingRunsCreatedByColumnError(err) {
+			return err
+		}
+
+		logger.Warn("[DB] runs.created_by_user_id missing; retrying run insert without starter column")
+		return db.Omit("CreatedByUserID").Create(run).Error
+	}
+
 	return nil
 }

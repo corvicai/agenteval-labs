@@ -343,13 +343,6 @@ watch(isAdmin, (adminEnabled) => {
   }
 }, { immediate: true })
 
-watch(
-  [isAuthenticated, appReady, () => workspaces.value.length],
-  () => {
-    maybeOpenPendingShareLink()
-  }
-)
-
 
 
 // State
@@ -375,6 +368,13 @@ const isReconnectingFromAfk = ref(false)
 const reconnectOverlayMode = ref('afk')
 const reconnectOverlayGraceMs = 7000
 let reconnectOverlayTimer = null
+
+watch(
+  [isAuthenticated, appReady, () => workspaces.value.length],
+  () => {
+    maybeOpenPendingShareLink()
+  }
+)
 
 const DEFAULT_AFK_TIMEOUT_MS = 300000
 const MIN_AFK_TIMEOUT_MS = 60000

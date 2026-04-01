@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	dbcompat "benchmarking-platform/internal/db"
 	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/middleware"
 	"benchmarking-platform/models"
@@ -163,7 +164,7 @@ func (h *Hub) handleSeedHistoricalRun(c *Connection, env models.Envelope) {
 		CreatedAt:     payload.CreatedAt,
 	}
 
-	if err := h.db.Create(&run).Error; err != nil {
+	if err := dbcompat.CreateRunCompat(h.db, &run); err != nil {
 		c.SendError(env.CorrelationID, "failed to create run: "+err.Error())
 		return
 	}

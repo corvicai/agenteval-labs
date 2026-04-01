@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	dbcompat "benchmarking-platform/internal/db"
+
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
@@ -127,7 +129,7 @@ func (h *RunHandler) StartRun(c echo.Context) error {
 		Status:          "running",
 		TotalTasks:      totalTasks,
 	}
-	if err := h.DB.Create(&run).Error; err != nil {
+	if err := dbcompat.CreateRunCompat(h.DB, &run); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
