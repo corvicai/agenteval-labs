@@ -28,6 +28,32 @@ import (
 	"benchmarking-platform/orchestrator"
 )
 
+type appRevisionInfo struct {
+	Commit    string `json:"commit"`
+	Branch    string `json:"branch,omitempty"`
+	Dirty     string `json:"dirty,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func loadAppRevisionInfo() appRevisionInfo {
+	return appRevisionInfo{
+		Commit:    firstNonEmpty(os.Getenv("APP_REVISION"), os.Getenv("GIT_COMMIT")),
+		Branch:    firstNonEmpty(os.Getenv("APP_REVISION_BRANCH")),
+		Dirty:     firstNonEmpty(os.Getenv("APP_REVISION_DIRTY")),
+		UpdatedAt: firstNonEmpty(os.Getenv("APP_REVISION_UPDATED_AT")),
+	}
+}
+
 func hostOnly(raw string) string {
 	value := strings.TrimSpace(raw)
 	if value == "" {
@@ -114,6 +140,15 @@ var upgrader = websocket.Upgrader{
 
 func main() {
 	logger.Init()
+	appRevision := loadAppRevisionInfo()
+	if appRevision.Commit != "" {
+		logger.Info("[BUILD] Revision commit=%s branch=%s dirty=%s updated_at=%s",
+			appRevision.Commit,
+			appRevision.Branch,
+			appRevision.Dirty,
+			appRevision.UpdatedAt,
+		)
+	}
 
 	e := echo.New()
 
@@ -265,7 +300,10 @@ func main() {
 	authRateLimiter := echoMiddleware.RateLimiter(echoMiddleware.NewRateLimiterMemoryStore(20))
 
 	e.GET("/health", func(c echo.Context) error {
-		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+		return c.JSON(http.StatusOK, map[string]any{
+			"status":   "ok",
+			"revision": appRevision,
+		})
 	})
 	e.GET("/prompts/evaluator-system", func(c echo.Context) error {
 		prompt := orchestrator.DefaultEvaluatorSystemPrompt()

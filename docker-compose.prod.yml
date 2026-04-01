@@ -30,6 +30,10 @@ services:
       - APP_ENV=production
       - JWT_SECRET=${JWT_SECRET}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://65.109.82.75,http://localhost,http://127.0.0.1,https://corvic.micheldiz.com,http://corvic.micheldiz.com}
+      - APP_REVISION=${APP_REVISION:-}
+      - APP_REVISION_BRANCH=${APP_REVISION_BRANCH:-}
+      - APP_REVISION_DIRTY=${APP_REVISION_DIRTY:-}
+      - APP_REVISION_UPDATED_AT=${APP_REVISION_UPDATED_AT:-}
     depends_on:
       db-prod:
         condition: service_healthy

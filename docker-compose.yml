@@ -36,6 +36,10 @@ services:
       - DATABASE_URL=host=benchmarking-db user=postgres password=dev_secure_827361 dbname=benchmarking port=5432 sslmode=disable
       - PORT=8080
       - FIREBASE_SERVICE_ACCOUNT=/app/firebase-service-account.json
+      - APP_REVISION=${APP_REVISION:-}
+      - APP_REVISION_BRANCH=${APP_REVISION_BRANCH:-}
+      - APP_REVISION_DIRTY=${APP_REVISION_DIRTY:-}
+      - APP_REVISION_UPDATED_AT=${APP_REVISION_UPDATED_AT:-}
     networks:
       - benchmarking-net
       - benchmarking-public
@@ -52,6 +56,10 @@ services:
     environment:
       - PORT=8080
       - API_URL=http://go-api:8080
+      - APP_REVISION=${APP_REVISION:-}
+      - APP_REVISION_BRANCH=${APP_REVISION_BRANCH:-}
+      - APP_REVISION_DIRTY=${APP_REVISION_DIRTY:-}
+      - APP_REVISION_UPDATED_AT=${APP_REVISION_UPDATED_AT:-}
     env_file: .env
     depends_on:
       - go-api
@@ -73,6 +81,10 @@ services:
     env_file: .env
     environment:
       - VITE_API_URL=http://go-api:8080
+      - VITE_APP_REVISION=${APP_REVISION:-}
+      - VITE_APP_REVISION_BRANCH=${APP_REVISION_BRANCH:-}
+      - VITE_APP_REVISION_DIRTY=${APP_REVISION_DIRTY:-}
+      - VITE_APP_REVISION_UPDATED_AT=${APP_REVISION_UPDATED_AT:-}
 
     depends_on:
       - go-api

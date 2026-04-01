@@ -27,6 +27,10 @@ export const config = {
     AFK_TIMEOUT_MS: env.VITE_AFK_TIMEOUT_MS || import.meta.env.VITE_AFK_TIMEOUT_MS,
 
     // Meta
+    APP_REVISION: env.VITE_APP_REVISION || env.APP_REVISION || import.meta.env.VITE_APP_REVISION || env.VITE_GIT_COMMIT || import.meta.env.VITE_GIT_COMMIT,
+    APP_REVISION_BRANCH: env.VITE_APP_REVISION_BRANCH || env.APP_REVISION_BRANCH || import.meta.env.VITE_APP_REVISION_BRANCH,
+    APP_REVISION_DIRTY: env.VITE_APP_REVISION_DIRTY || env.APP_REVISION_DIRTY || import.meta.env.VITE_APP_REVISION_DIRTY,
+    APP_REVISION_UPDATED_AT: env.VITE_APP_REVISION_UPDATED_AT || env.APP_REVISION_UPDATED_AT || import.meta.env.VITE_APP_REVISION_UPDATED_AT,
     GIT_COMMIT: env.VITE_GIT_COMMIT || import.meta.env.VITE_GIT_COMMIT,
     DEV: import.meta.env.DEV,
     PROD: import.meta.env.PROD,

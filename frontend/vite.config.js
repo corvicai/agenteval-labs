@@ -12,7 +12,10 @@ const envDir = fs.existsSync(path.join(parentDir, '.env')) ? parentDir : configD
 
 function resolveGitCommitHash() {
     const explicitCommit =
-        process.env.VITE_GIT_COMMIT?.trim() || process.env.GIT_COMMIT?.trim()
+        process.env.VITE_APP_REVISION?.trim() ||
+        process.env.APP_REVISION?.trim() ||
+        process.env.VITE_GIT_COMMIT?.trim() ||
+        process.env.GIT_COMMIT?.trim()
     if (explicitCommit) {
         return explicitCommit
     }
@@ -31,6 +34,29 @@ function resolveGitCommitHash() {
 
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, envDir, '')
+    env.VITE_APP_REVISION =
+        env.VITE_APP_REVISION ||
+        process.env.VITE_APP_REVISION ||
+        process.env.APP_REVISION ||
+        env.VITE_GIT_COMMIT ||
+        process.env.VITE_GIT_COMMIT ||
+        process.env.GIT_COMMIT ||
+        resolveGitCommitHash()
+    env.VITE_APP_REVISION_BRANCH =
+        env.VITE_APP_REVISION_BRANCH ||
+        process.env.VITE_APP_REVISION_BRANCH ||
+        process.env.APP_REVISION_BRANCH ||
+        ''
+    env.VITE_APP_REVISION_DIRTY =
+        env.VITE_APP_REVISION_DIRTY ||
+        process.env.VITE_APP_REVISION_DIRTY ||
+        process.env.APP_REVISION_DIRTY ||
+        ''
+    env.VITE_APP_REVISION_UPDATED_AT =
+        env.VITE_APP_REVISION_UPDATED_AT ||
+        process.env.VITE_APP_REVISION_UPDATED_AT ||
+        process.env.APP_REVISION_UPDATED_AT ||
+        ''
     env.VITE_GIT_COMMIT = env.VITE_GIT_COMMIT || resolveGitCommitHash()
 
     // Explicitly expose VITE_ variables to the client

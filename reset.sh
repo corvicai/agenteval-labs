@@ -3,6 +3,20 @@
 set -Eeuo pipefail
 trap 'code=$?; echo "❌ reset.sh failed at line ${BASH_LINENO[0]} (exit ${code})"; exit ${code}' ERR
 
+load_optional_runtime_env() {
+    local env_file="${APP_RUNTIME_ENV_FILE:-$HOME/.config/agenteval/revision.env}"
+
+    if [[ ! -f "${env_file}" ]]; then
+        return
+    fi
+
+    set -a
+    # shellcheck disable=SC1090
+    . "${env_file}"
+    set +a
+    echo "ℹ️ Loaded runtime env from ${env_file}"
+}
+
 ensure_encryption_key() {
     local env_file=".env"
 
@@ -106,6 +120,7 @@ reload_prod_proxy_auth_if_needed() {
     docker compose --env-file .env.prod -f docker-compose.proxy.prod.yml restart nginx
 }
 
+load_optional_runtime_env
 ensure_encryption_key
 echo "ℹ️ Running reset with args: $*"
 
