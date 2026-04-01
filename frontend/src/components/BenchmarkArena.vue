@@ -46,6 +46,7 @@
       :question-sets="questionSets"
       :current-question-set="currentQuestionSet"
       :agents="mergedAgents"
+      :workspaces="workspaces"
       :running-question-set-id="wsState.runningQuestionSetId"
       :workspace-id="workspaceId"
       @create-question-set="createNewQuestionSet"
@@ -116,23 +117,73 @@
         <button v-if="isRunning" class="btn btn-danger" @click="cancelBenchmark">
           ⛔ Cancel
         </button>
-        <select
-          v-if="currentQuestionSet && flatQuestions.length > 0"
-          v-model="questionFilter"
-          class="question-filter-select"
-          :class="{ 'is-filtered': questionFilter !== 'all' }"
-          aria-label="Filter questions"
-          title="Filter questions by status"
-        >
-          <option value="all">All ({{ questionFilterCounts.all }})</option>
-          <option value="error">Error ({{ questionFilterCounts.error }})</option>
-          <option value="running">Running ({{ questionFilterCounts.running }})</option>
-          <option v-if="showEvaluationScoreFilters" value="low_score">Below 5/10 ({{ questionFilterCounts.low_score }})</option>
-          <option v-if="showEvaluationScoreFilters" value="critical_score">Below 1/10 ({{ questionFilterCounts.critical_score }})</option>
-        </select>
+      </div>
+      <div
+        v-if="currentQuestionSet && flatQuestions.length > 0"
+        class="action-row-filters"
+      >
+        <span class="action-row-filters-label">Questions</span>
+        <div class="questions-filter-group" role="tablist" aria-label="Question status filter">
+          <button
+            type="button"
+            class="questions-filter-btn"
+            :class="{ active: questionFilter === 'all' }"
+            @click="questionFilter = 'all'"
+          >
+            All
+            <span class="questions-filter-count">{{ questionFilterCounts.all }}</span>
+          </button>
+          <button
+            type="button"
+            class="questions-filter-btn"
+            :class="{ active: questionFilter === 'error' }"
+            @click="questionFilter = 'error'"
+          >
+            Error
+            <span class="questions-filter-count">{{ questionFilterCounts.error }}</span>
+          </button>
+          <button
+            type="button"
+            class="questions-filter-btn"
+            :class="{ active: questionFilter === 'running' }"
+            @click="questionFilter = 'running'"
+          >
+            Running
+            <span class="questions-filter-count">{{ questionFilterCounts.running }}</span>
+          </button>
+          <button
+            v-if="showEvaluationScoreFilters"
+            type="button"
+            class="questions-filter-btn"
+            :class="{ active: questionFilter === 'low_score' }"
+            @click="questionFilter = 'low_score'"
+          >
+            Below 5/10
+            <span class="questions-filter-count">{{ questionFilterCounts.low_score }}</span>
+          </button>
+          <button
+            v-if="showEvaluationScoreFilters"
+            type="button"
+            class="questions-filter-btn"
+            :class="{ active: questionFilter === 'critical_score' }"
+            @click="questionFilter = 'critical_score'"
+          >
+            Below 1/10
+            <span class="questions-filter-count">{{ questionFilterCounts.critical_score }}</span>
+          </button>
+          <button
+            v-if="currentRun"
+            type="button"
+            class="questions-filter-btn questions-filter-btn-export"
+            @click="exportFilteredQuestionsPdf"
+            :disabled="!canExportFilteredQuestionsPdf || isExportingPdf"
+            :title="canExportFilteredQuestionsPdf ? 'Export current filtered questions' : 'No questions match the current filter'"
+          >
+            📄 {{ filteredQuestionsButtonLabel }}
+          </button>
+        </div>
       </div>
     </div>
-
 
     <!-- Progress Bar -->
     <div
@@ -512,6 +563,10 @@ import { useArenaRunResultsLoader } from '../composables/useArenaRunResultsLoade
 const props = defineProps({
   workspaceId: String,
   agents: {
+    type: Array,
+    default: () => []
+  },
+  workspaces: {
     type: Array,
     default: () => []
   },

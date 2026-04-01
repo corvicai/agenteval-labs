@@ -64,6 +64,18 @@
         <h1 @click="viewMode = 'benchmarks'">Benchmarking</h1>
       </div>
           <div class="controls">
+            <div v-if="workspaces.length > 1" class="workspace-switcher">
+              <label for="workspace-switcher-select">Workspace</label>
+              <select
+                id="workspace-switcher-select"
+                :value="currentWorkspace?.id || ''"
+                @change="handleWorkspaceSelectionChange"
+              >
+                <option v-for="workspace in workspaces" :key="workspace.id" :value="workspace.id">
+                  {{ workspace.name }}
+                </option>
+              </select>
+            </div>
             <div class="buttons">
               <span class="user-badge" :class="{ admin: isAdmin }" @click="openMyProfile">
                 {{ isAdmin ? '👑' : '👤' }} {{ currentUserName }}
@@ -173,6 +185,7 @@
                 v-if="viewMode === 'benchmarks'"
                 :key="currentWorkspace?.id || 'no-workspace'"
                 :workspace-id="currentWorkspace?.id"
+                :workspaces="workspaces"
                 :agents="agents || []"
                 :question-sets="questionSets || []"
                 :initial-question-set-id="currentQuestionSet?.id"
@@ -214,6 +227,15 @@
         :question-set="currentQuestionSet"
         @update="loadAgents"
         @close="showConfig = false"
+      />
+
+      <QuestionSetShareAcceptModal
+        v-if="showShareAcceptModal && pendingShareToken"
+        :token="pendingShareToken"
+        :workspaces="workspaces"
+        :current-workspace-id="currentWorkspace?.id"
+        @close="dismissPendingShareLink"
+        @accepted="handleQuestionSetShareAccepted"
       />
     </template>
     <MaintenanceOverlay :active="wsState.isMaintenance" />
@@ -270,6 +292,7 @@ import AfkReconnectOverlay from './components/AfkReconnectOverlay.vue'
 import AgentManagerModal from './components/AgentManagerModal.vue'
 import DocsView from './components/DocsView.vue'
 import PrintReport from './components/PrintReport.vue'
+import QuestionSetShareAcceptModal from './components/QuestionSetShareAcceptModal.vue'
 import * as api from './services/api.js'
 import wsService from './services/websocket.js'
 import { useWSStore } from './stores/wsStore'
@@ -320,6 +343,13 @@ watch(isAdmin, (adminEnabled) => {
   }
 }, { immediate: true })
 
+watch(
+  [isAuthenticated, appReady, () => workspaces.value.length],
+  () => {
+    maybeOpenPendingShareLink()
+  }
+)
+
 
 
 // State
@@ -337,6 +367,8 @@ const workspaces = ref([])
 const workspacesLoading = ref(false)
 const workspacesError = ref('')
 const currentWorkspace = ref(api.getStoredWorkspace())
+const pendingShareToken = ref('')
+const showShareAcceptModal = ref(false)
 const refreshInterval = ref(null)
 const afkOverlayVisible = ref(false)
 const isReconnectingFromAfk = ref(false)
@@ -458,7 +490,15 @@ const historyFilter = ref('')
 
 // Print state
 const showPrintView = ref(false)
-const printData = ref({ workspaceName: '', summary: {}, results: [] })
+const printData = ref({
+  workspaceName: '',
+  summary: {},
+  results: [],
+  reportVariant: 'full',
+  reportTitle: '',
+  reportSubtitle: '',
+  questionCards: []
+})
 
 watch(currentWorkspace, (newVal) => {
   if (newVal) {
@@ -546,6 +586,34 @@ function applyMeResponse(me) {
 
   currentUser.value = mergedUser
   api.setStoredUser(mergedUser)
+}
+
+function getPendingShareTokenFromUrl() {
+  const params = new URLSearchParams(window.location.search)
+  return String(params.get('share') || '').trim()
+}
+
+function clearPendingShareTokenFromUrl() {
+  const url = new URL(window.location.href)
+  url.searchParams.delete('share')
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`
+  window.history.replaceState({}, '', nextUrl)
+}
+
+function maybeOpenPendingShareLink() {
+  if (!pendingShareToken.value) {
+    pendingShareToken.value = getPendingShareTokenFromUrl()
+  }
+  if (!pendingShareToken.value) return
+  if (!isAuthenticated.value || !appReady.value) return
+  if (!workspaces.value.length) return
+  showShareAcceptModal.value = true
+}
+
+function dismissPendingShareLink() {
+  showShareAcceptModal.value = false
+  pendingShareToken.value = ''
+  clearPendingShareTokenFromUrl()
 }
 
 function handleArenaHistoryClick() {
@@ -678,6 +746,7 @@ async function onLogin() {
       console.error('[App] Login initialization failed:', err)
     } finally {
       appReady.value = true
+      maybeOpenPendingShareLink()
       scheduleAfkTimer()
       isLoggingIn.value = false
     }
@@ -807,6 +876,15 @@ async function selectWorkspace(ws) {
   }
 }
 
+function handleWorkspaceSelectionChange(event) {
+  const nextWorkspaceId = String(event?.target?.value || '')
+  if (!nextWorkspaceId) return
+  const targetWorkspace = workspaces.value.find((workspace) => workspace.id === nextWorkspaceId)
+  if (targetWorkspace) {
+    selectWorkspace(targetWorkspace)
+  }
+}
+
 async function loadQuestionSets(preferredId = null) {
   if (!isAuthenticated.value || !currentWorkspace.value) return
   try {
@@ -841,6 +919,28 @@ async function loadQuestionSets(preferredId = null) {
     }
   } catch (e) {
     console.error('Failed to load question sets:', e)
+  }
+}
+
+async function handleQuestionSetShareAccepted(result) {
+  const targetWorkspaceId = String(result?.workspace_id || '')
+  const importedQuestionSet = result?.question_set || null
+
+  dismissPendingShareLink()
+
+  if (targetWorkspaceId && currentWorkspace.value?.id === targetWorkspaceId && importedQuestionSet?.id) {
+    currentQuestionSet.value = importedQuestionSet
+    await loadQuestionSets(importedQuestionSet.id)
+    return
+  }
+
+  const targetWorkspace = workspaces.value.find((workspace) => workspace.id === targetWorkspaceId)
+  if (targetWorkspace && window.confirm(`Question set imported to "${targetWorkspace.name}". Switch to that workspace now?`)) {
+    await selectWorkspace(targetWorkspace)
+    if (importedQuestionSet?.id) {
+      currentQuestionSet.value = importedQuestionSet
+      await loadQuestionSets(importedQuestionSet.id)
+    }
   }
 }
 
@@ -1084,8 +1184,13 @@ function handleTriggerPrint(data) {
   }
 
   printData.value = {
-    ...data,
-    workspaceName: wsName
+    workspaceName: wsName,
+    summary: data.summary || null,
+    results: data.results || [],
+    reportVariant: data.reportVariant || 'full',
+    reportTitle: data.reportTitle || '',
+    reportSubtitle: data.reportSubtitle || '',
+    questionCards: data.questionCards || []
   }
   showPrintView.value = true
 }
@@ -1422,6 +1527,7 @@ onMounted(async () => {
         handleLogout()
       } finally {
         appReady.value = true
+        maybeOpenPendingShareLink()
         lastAfkResetAt = Date.now()
         scheduleAfkTimer()
       }

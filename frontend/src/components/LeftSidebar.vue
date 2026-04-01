@@ -45,6 +45,15 @@
           <button class="btn btn-secondary btn-sm btn-full-width" @click="handleCloneQuestionSet" :disabled="!currentQuestionSet || !workspaceId">
             📄 Clone Set
           </button>
+          <button class="btn btn-secondary btn-sm btn-full-width" @click="openTransferModal('share')" :disabled="!currentQuestionSet">
+            🔗 Share Link
+          </button>
+          <button class="btn btn-secondary btn-sm btn-full-width" @click="openTransferModal('copy')" :disabled="!currentQuestionSet || availableTransferWorkspaces.length === 0">
+            📥 Copy To Workspace
+          </button>
+          <button class="btn btn-secondary btn-sm btn-full-width" @click="openTransferModal('move')" :disabled="!currentQuestionSet || availableTransferWorkspaces.length === 0">
+            📦 Move To Workspace
+          </button>
           <button class="btn btn-primary btn-sm btn-full-width" @click="handleCreateQuestionSet">
             <span class="icon">➕</span> Add Validation Set
           </button>
@@ -92,12 +101,23 @@
       @close="onQuestionEditorClose"
       @saved="onQuestionSetSaved"
     />
+
+    <QuestionSetTransferModal
+      v-if="showTransferModal && currentQuestionSet"
+      :mode="transferMode"
+      :question-set="currentQuestionSet"
+      :workspaces="workspaces"
+      :current-workspace-id="workspaceId"
+      @close="closeTransferModal"
+      @completed="handleTransferCompleted"
+    />
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import QuestionEditorModal from './QuestionEditorModal.vue'
+import QuestionSetTransferModal from './QuestionSetTransferModal.vue'
 import wsService from '../services/websocket.js'
 
 const props = defineProps({
@@ -107,6 +127,10 @@ const props = defineProps({
   },
   currentQuestionSet: Object,
   agents: {
+    type: Array,
+    default: () => []
+  },
+  workspaces: {
     type: Array,
     default: () => []
   },
@@ -124,7 +148,13 @@ const emit = defineEmits([
 
 const activeTab = ref('questionSets')
 const showQuestionEditor = ref(false)
+const showTransferModal = ref(false)
 const previousQuestionSet = ref(null)
+const transferMode = ref('share')
+
+const availableTransferWorkspaces = computed(() =>
+  (props.workspaces || []).filter((workspace) => String(workspace?.id || '') !== String(props.workspaceId || ''))
+)
 
 function getQuestionCount(set) {
   if (!set || !set.data) return 0
@@ -210,6 +240,30 @@ async function handleCloneQuestionSet() {
   } catch (error) {
     console.error('Failed to clone question set:', error)
     alert('Failed to clone set: ' + (error?.message || 'Unknown error'))
+  }
+}
+
+function openTransferModal(mode) {
+  if (!props.currentQuestionSet) return
+  transferMode.value = mode
+  showTransferModal.value = true
+}
+
+function closeTransferModal() {
+  showTransferModal.value = false
+}
+
+function handleTransferCompleted(result) {
+  showTransferModal.value = false
+
+  if (result?.mode === 'move') {
+    emit('select-question-set', null)
+    alert(`Question set moved to "${result.workspace_name}". Use the workspace selector in the header to open it.`)
+    return
+  }
+
+  if (result?.mode === 'copy') {
+    alert(`Question set copied to "${result.workspace_name}". Use the workspace selector in the header to open it.`)
   }
 }
 
