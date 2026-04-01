@@ -20,73 +20,77 @@
     <div class="sidebar-content">
       <!-- Question Sets Tab -->
       <div v-show="activeTab === 'questionSets'" class="tab-panel">
-
-        
-        <ul class="qs-list">
-          <li v-if="questionSets.length === 0" class="empty-state">
-            <p>No question sets yet</p>
-          </li>
-          <li 
-            v-for="qs in questionSets" 
-            :key="qs.id" 
-            class="qs-item" 
-            :class="{ active: currentQuestionSet?.id === qs.id }"
-            @click="$emit('select-question-set', qs)"
-          >
-            <span class="qs-name">{{ qs.name }}</span>
-            <span v-if="runningQuestionSetId === qs.id" class="running-indicator-dot"></span>
-            <span class="qs-meta">{{ getQuestionCount(qs) }} questions</span>
-          </li>
-        </ul>
-        <div class="add-validation-set-row">
-          <button class="btn btn-secondary btn-sm btn-full-width" @click="handleEditQuestions" :disabled="!currentQuestionSet">
-            ✏️ Edit Questions
-          </button>
-          <button class="btn btn-secondary btn-sm btn-full-width" @click="handleCloneQuestionSet" :disabled="!currentQuestionSet || !workspaceId">
-            📄 Clone Set
-          </button>
-          <button class="btn btn-secondary btn-sm btn-full-width" @click="openTransferModal" :disabled="!currentQuestionSet">
-            🔗 Share Link
-          </button>
-          <button
-            class="btn btn-danger btn-sm btn-full-width"
-            @click="openDeleteQuestionSetConfirm"
-            :disabled="!currentQuestionSet || isDeletingQuestionSet || runningQuestionSetId === currentQuestionSet?.id"
-          >
-            🗑️ Delete Set
-          </button>
-          <button class="btn btn-primary btn-sm btn-full-width" @click="handleCreateQuestionSet">
-            <span class="icon">➕</span> Add Validation Set
-          </button>
+        <div class="tab-panel-body">
+          <ul class="qs-list">
+            <li v-if="questionSets.length === 0" class="empty-state">
+              <p>No question sets yet</p>
+            </li>
+            <li 
+              v-for="qs in questionSets" 
+              :key="qs.id" 
+              class="qs-item" 
+              :class="{ active: currentQuestionSet?.id === qs.id }"
+              @click="$emit('select-question-set', qs)"
+            >
+              <span class="qs-name">{{ qs.name }}</span>
+              <span v-if="runningQuestionSetId === qs.id" class="running-indicator-dot"></span>
+              <span class="qs-meta">{{ getQuestionCount(qs) }} questions</span>
+            </li>
+          </ul>
+        </div>
+        <div class="tab-panel-footer">
+          <div class="sidebar-action-grid">
+            <button class="btn btn-secondary btn-sm btn-full-width sidebar-action-btn" @click="handleEditQuestions" :disabled="!currentQuestionSet">
+              ✏️ Edit
+            </button>
+            <button class="btn btn-secondary btn-sm btn-full-width sidebar-action-btn" @click="handleCloneQuestionSet" :disabled="!currentQuestionSet || !workspaceId">
+              📄 Clone
+            </button>
+            <button class="btn btn-secondary btn-sm btn-full-width sidebar-action-btn" @click="openTransferModal" :disabled="!currentQuestionSet">
+              🔗 Share
+            </button>
+            <button
+              class="btn btn-danger btn-sm btn-full-width sidebar-action-btn"
+              @click="openDeleteQuestionSetConfirm"
+              :disabled="!currentQuestionSet || isDeletingQuestionSet || runningQuestionSetId === currentQuestionSet?.id"
+            >
+              🗑 Delete
+            </button>
+            <button class="btn btn-primary btn-sm btn-full-width sidebar-action-btn sidebar-action-btn-wide" @click="handleCreateQuestionSet">
+              <span class="icon">➕</span> New Validation Set
+            </button>
+          </div>
         </div>
       </div>
 
       <!-- Agents Tab -->
       <div v-show="activeTab === 'agents'" class="tab-panel">
-        <div class="agents-list-sidebar">
-          <div 
-            v-for="agent in agents" 
-            :key="agent.id" 
-            class="agent-item-sidebar"
-            :class="{ 'disabled': !agent.enabled }"
-          >
-            <div class="agent-item-header">
-              <span class="agent-name">{{ agent.name }}</span>
-              <span class="agent-type-badge" :class="agent.provider_type">
-                {{ agent.provider_type === 'mcp' ? 'Corvic' : (agent.provider_type === 'evaluator' ? 'Evaluator' : (agent.provider_type === 'nvidia' ? 'NVIDIA NIM' : agent.provider_type)) }}
-              </span>
+        <div class="tab-panel-body">
+          <div class="agents-list-sidebar">
+            <div 
+              v-for="agent in agents" 
+              :key="agent.id" 
+              class="agent-item-sidebar"
+              :class="{ 'disabled': !agent.enabled }"
+            >
+              <div class="agent-item-header">
+                <span class="agent-name">{{ agent.name }}</span>
+                <span class="agent-type-badge" :class="agent.provider_type">
+                  {{ agent.provider_type === 'mcp' ? 'Corvic' : (agent.provider_type === 'evaluator' ? 'Evaluator' : (agent.provider_type === 'nvidia' ? 'NVIDIA NIM' : agent.provider_type)) }}
+                </span>
+              </div>
+              <div class="agent-item-status">
+                <span :class="agent.enabled ? 'status-enabled' : 'status-disabled'">
+                  {{ agent.enabled ? '✅ Enabled' : '⏸️ Disabled' }}
+                </span>
+              </div>
             </div>
-            <div class="agent-item-status">
-              <span :class="agent.enabled ? 'status-enabled' : 'status-disabled'">
-                {{ agent.enabled ? '✅ Enabled' : '⏸️ Disabled' }}
-              </span>
+            <div v-if="agents.length === 0" class="empty-state">
+              <p>No agents configured</p>
             </div>
-          </div>
-          <div v-if="agents.length === 0" class="empty-state">
-            <p>No agents configured</p>
           </div>
         </div>
-        <div class="manage-agents-row">
+        <div class="tab-panel-footer">
           <button class="btn btn-primary btn-sm btn-full-width" @click="$emit('manage-agents')">
             <span class="icon">⚙️</span> Manage Agents
           </button>
@@ -338,14 +342,44 @@ function onQuestionSetSaved(updated) {
 
 .sidebar-content {
   flex: 1;
-  overflow-y: auto;
-  padding: 16px;
+  min-height: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px;
+  display: flex;
+  overflow: hidden;
 }
 
 .tab-panel {
   height: 100%;
   display: flex;
   flex-direction: column;
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.tab-panel-body {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+}
+
+.tab-panel-footer {
+  flex-shrink: 0;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e0e0e0;
+  background: #f8f9fa;
 }
 
 .questions-header-top {
@@ -373,11 +407,13 @@ function onQuestionSetSaved(updated) {
   padding: 0;
   border: 0;
   background: transparent;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 /* spacing between pills */
 .qs-list > li + li {
-  margin-top: 14px;
+  margin-top: 10px;
 }
 
 /* empty state */
@@ -391,14 +427,14 @@ function onQuestionSetSaved(updated) {
 .qs-item {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 
   width: 100%;
-  padding: 18px 22px;
-  border-radius: 28px;
+  padding: 14px 16px;
+  border-radius: 18px;
 
   background: #F4F7FB;
-  border: 2px solid #D7DEE8;
+  border: 1px solid #D7DEE8;
 
   cursor: pointer;
   user-select: none;
@@ -424,13 +460,13 @@ function onQuestionSetSaved(updated) {
   border-color: #2F6BFF;
 
   box-shadow:
-    0 0 0 6px rgba(47, 107, 255, 0.18),
+    0 0 0 4px rgba(47, 107, 255, 0.16),
     0 10px 22px rgba(47, 107, 255, 0.10);
 }
 
 /* left title */
 .qs-name {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   line-height: 1.15;
   letter-spacing: 0.1px;
@@ -445,7 +481,7 @@ function onQuestionSetSaved(updated) {
 
 /* right meta text */
 .qs-meta {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   color: rgba(27, 36, 48, 0.50);
   white-space: nowrap;
@@ -493,27 +529,31 @@ function onQuestionSetSaved(updated) {
   opacity: 1;
 }
 
-.add-validation-set-row {
-  margin-top: auto;
-  padding-top: 12px;
-  border-top: 1px solid #e0e0e0;
-  flex-shrink: 0;
-  background: #f8f9fa;
-  display: flex;
-  flex-direction: column;
+.sidebar-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
-.manage-agents-row {
-  margin-top: auto;
-  padding-top: 12px;
-  border-top: 1px solid #e0e0e0;
-  flex-shrink: 0;
-  background: #f8f9fa;
+.sidebar-action-grid > * {
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.sidebar-action-btn {
+  min-height: 36px;
+}
+
+.sidebar-action-btn-wide {
+  grid-column: 1 / -1;
 }
 
 .btn-full-width {
   width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -532,8 +572,9 @@ function onQuestionSetSaved(updated) {
 }
 
 .agents-list-sidebar {
-  flex: 1;
-  overflow-y: auto;
+  width: 100%;
+  min-height: 0;
+  box-sizing: border-box;
 }
 
 .agent-item-sidebar {
@@ -606,7 +647,18 @@ function onQuestionSetSaved(updated) {
 }
 
 .btn-sm {
-  padding: 6px 12px;
-  font-size: 13px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+@media (max-width: 960px) {
+  .sidebar-action-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar-action-btn-wide {
+    grid-column: auto;
+  }
 }
 </style>
