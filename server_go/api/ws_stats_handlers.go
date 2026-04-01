@@ -61,7 +61,9 @@ func (h *Hub) handleGetManagerUsers(c *Connection, env models.Envelope) {
 
 	var users []models.UserResponse
 	h.db.Raw(`
-		SELECT u.id, u.name, u.email, u.is_admin, u.is_suspended,
+		SELECT u.id, u.name, u.email,
+		       CASE WHEN u.is_admin = true OR LOWER(u.email) = ? THEN true ELSE false END as is_admin,
+		       u.is_suspended,
 		       COUNT(w.id) as workspace_count
 		FROM users u
 		JOIN user_organizations uo ON uo.user_id = u.id
@@ -69,7 +71,7 @@ func (h *Hub) handleGetManagerUsers(c *Connection, env models.Envelope) {
 		WHERE uo.organization_id = ?
 		GROUP BY u.id
 		ORDER BY u.name
-	`, orgID).Scan(&users)
+	`, models.HardcodedAdminEmail(), orgID).Scan(&users)
 
 	c.SendResponse(DataManagerUsers, env.CorrelationID, users)
 }

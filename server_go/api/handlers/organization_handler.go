@@ -185,14 +185,16 @@ func (h *OrganizationHandler) GetOrgProfile(c echo.Context) error {
 		WorkspaceCount int64     `json:"workspace_count"`
 	}
 	h.db.Raw(`
-		SELECT u.id, u.name, u.email, u.is_admin, u.created_at, 
+		SELECT u.id, u.name, u.email,
+		       CASE WHEN u.is_admin = true OR LOWER(u.email) = ? THEN true ELSE false END as is_admin,
+		       u.created_at, 
 		       COUNT(w.id) as workspace_count
 		FROM users u
 		JOIN user_organizations uo ON uo.user_id = u.id
 		LEFT JOIN workspaces w ON w.user_id = u.id
 		WHERE uo.organization_id = ?
 		GROUP BY u.id
-	`, orgID).Scan(&users)
+	`, models.HardcodedAdminEmail(), orgID).Scan(&users)
 
 	// Get workspaces with counts
 	var workspaces []struct {

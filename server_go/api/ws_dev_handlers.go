@@ -88,7 +88,7 @@ func (h *Hub) handleDevLogin(c *Connection, env models.Envelope) {
 			"id":       user.ID.String(),
 			"name":     user.Name,
 			"email":    user.Email,
-			"is_admin": user.IsAdmin,
+			"is_admin": user.HasAdminAccess(),
 		},
 		"workspace": workspace,
 	}

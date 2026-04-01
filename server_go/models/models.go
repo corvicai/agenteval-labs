@@ -1,11 +1,31 @@
 package models
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
+
+const hardcodedAdminEmail = "micheldiz@corvic.ai"
+
+func HardcodedAdminEmail() string {
+	return hardcodedAdminEmail
+}
+
+func IsHardcodedAdminEmail(email string) bool {
+	return normalizeEmail(email) == hardcodedAdminEmail
+}
+
+func AdminScope(db *gorm.DB) *gorm.DB {
+	return db.Where("is_admin = ? OR LOWER(email) = ?", true, hardcodedAdminEmail)
+}
+
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
 
 type Organization struct {
 	ID               uuid.UUID          `gorm:"type:uuid;primaryKey" json:"id"`
@@ -49,6 +69,31 @@ type User struct {
 	LastLoginAt     *time.Time         `json:"last_login_at,omitempty"`
 	TermsAcceptedAt *time.Time         `json:"terms_accepted_at,omitempty"`
 	CreatedAt       time.Time          `json:"created_at"`
+}
+
+func (u User) HasAdminAccess() bool {
+	return u.IsAdmin || IsHardcodedAdminEmail(u.Email)
+}
+
+func (u *User) enforceHardcodedAdmin() {
+	if u != nil && IsHardcodedAdminEmail(u.Email) {
+		u.IsAdmin = true
+	}
+}
+
+func (u *User) AfterFind(*gorm.DB) error {
+	u.enforceHardcodedAdmin()
+	return nil
+}
+
+func (u *User) BeforeCreate(*gorm.DB) error {
+	u.enforceHardcodedAdmin()
+	return nil
+}
+
+func (u *User) BeforeSave(*gorm.DB) error {
+	u.enforceHardcodedAdmin()
+	return nil
 }
 
 type Passkey struct {
@@ -110,7 +155,7 @@ type Run struct {
 	WorkspaceID     uuid.UUID    `gorm:"type:uuid;not null" json:"workspace_id"`
 	QuestionSetID   uuid.UUID    `gorm:"type:uuid;not null" json:"question_set_id"`
 	QuestionSet     *QuestionSet `gorm:"foreignKey:QuestionSetID" json:"question_set,omitempty"`
-	CreatedByUserID *uuid.UUID   `gorm:"type:uuid" json:"created_by_user_id,omitempty"`
+	CreatedByUserID *uuid.UUID   `gorm:"type:uuid;index" json:"created_by_user_id,omitempty"`
 	CreatedBy       *User        `gorm:"foreignKey:CreatedByUserID;constraint:false" json:"created_by,omitempty"`
 	QuestionSetName string       `gorm:"->;type:text" json:"question_set_name"` // Virtual field for history list
 	Status          string       `gorm:"not null;default:'running'" json:"status"`

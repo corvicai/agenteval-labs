@@ -148,7 +148,7 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 			"id":       user.ID.String(),
 			"name":     user.Name,
 			"email":    user.Email,
-			"is_admin": user.IsAdmin,
+			"is_admin": user.HasAdminAccess(),
 		},
 	}
 

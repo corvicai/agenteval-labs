@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"benchmarking-platform/internal/logger"
+	"benchmarking-platform/models"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -129,5 +130,19 @@ func AutoMigrate(db *gorm.DB) error {
 	}
 
 	logger.Info("[DB] Migrations completed successfully")
+	return nil
+}
+
+func EnsureCriticalSchema(db *gorm.DB) error {
+	logger.Info("[DB] Ensuring critical schema compatibility")
+
+	if err := db.AutoMigrate(
+		&models.Run{},
+		&models.QuestionSetShareLink{},
+	); err != nil {
+		return fmt.Errorf("ensure critical schema: %w", err)
+	}
+
+	logger.Info("[DB] Critical schema compatibility check completed")
 	return nil
 }

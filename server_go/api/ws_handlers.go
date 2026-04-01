@@ -87,6 +87,16 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 		h.handleUpdateQuestionSet(c, env)
 	case ReqCreateQuestionSet:
 		h.handleCreateQuestionSet(c, env)
+	case ReqCreateQuestionSetShareLink:
+		h.handleCreateQuestionSetShareLink(c, env)
+	case ReqGetQuestionSetShareLink:
+		h.handleGetQuestionSetShareLink(c, env)
+	case ReqAcceptQuestionSetShareLink:
+		h.handleAcceptQuestionSetShareLink(c, env)
+	case ReqCopyQuestionSetToWorkspace:
+		h.handleCopyQuestionSetToWorkspace(c, env)
+	case ReqMoveQuestionSetToWorkspace:
+		h.handleMoveQuestionSetToWorkspace(c, env)
 	case ReqUpdateQuestionSetAgents:
 		h.handleUpdateQuestionSetAgents(c, env)
 	case ReqGetQuestionSetAgentEnvelope:

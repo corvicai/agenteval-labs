@@ -125,7 +125,9 @@ func (h *Hub) handleManagerGetUsers(c *Connection, env models.Envelope) {
 
 	var users []ManagerUserResponse
 	h.db.Raw(`
-		SELECT u.id, u.name, u.email, u.is_admin, u.is_suspended, u.created_at,
+		SELECT u.id, u.name, u.email,
+		       CASE WHEN u.is_admin = true OR LOWER(u.email) = ? THEN true ELSE false END as is_admin,
+		       u.is_suspended, u.created_at,
 		       COUNT(w.id) as workspace_count,
 		       inviter.name as invited_by_name
 		FROM users u
@@ -135,7 +137,7 @@ func (h *Hub) handleManagerGetUsers(c *Connection, env models.Envelope) {
 		WHERE uo.organization_id = ?
 		GROUP BY u.id, inviter.name
 		ORDER BY u.name
-	`, orgID).Scan(&users)
+	`, models.HardcodedAdminEmail(), orgID).Scan(&users)
 
 	c.SendResponse(DataAdminUsers, env.CorrelationID, users)
 }

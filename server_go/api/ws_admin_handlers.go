@@ -82,7 +82,7 @@ func (h *Hub) handleAdminGetUsers(c *Connection, env models.Envelope) {
 			"id":              u.ID.String(),
 			"name":            u.Name,
 			"email":           u.Email,
-			"is_admin":        u.IsAdmin,
+			"is_admin":        u.HasAdminAccess(),
 			"is_suspended":    u.IsSuspended,
 			"created_at":      u.CreatedAt,
 			"last_login_at":   u.LastLoginAt,
@@ -254,7 +254,7 @@ func (h *Hub) handleAdminGetUserProfile(c *Connection, env models.Envelope) {
 		"id":            user.ID.String(),
 		"name":          user.Name,
 		"email":         user.Email,
-		"is_admin":      user.IsAdmin,
+		"is_admin":      user.HasAdminAccess(),
 		"is_manager":    isManagerGlobal,
 		"organizations": organizations,
 		"workspaces":    workspaces,
@@ -304,7 +304,9 @@ func (h *Hub) handleAdminGetOrgProfile(c *Connection, env models.Envelope) {
 	// Get users with workspace count
 	var users []map[string]any
 	h.db.Raw(`
-		SELECT u.id, u.name, u.email, u.is_admin, u.created_at, 
+		SELECT u.id, u.name, u.email,
+		       CASE WHEN u.is_admin = true OR LOWER(u.email) = ? THEN true ELSE false END as is_admin,
+		       u.created_at, 
 		       COUNT(w.id) as workspace_count,
 		       uo.role,
 		       inviter.name as invited_by_name
@@ -314,7 +316,7 @@ func (h *Hub) handleAdminGetOrgProfile(c *Connection, env models.Envelope) {
 		LEFT JOIN users inviter ON uo.invited_by_user_id = inviter.id
 		WHERE uo.organization_id = ?
 		GROUP BY u.id, uo.role, inviter.name
-	`, orgID).Scan(&users)
+	`, models.HardcodedAdminEmail(), orgID).Scan(&users)
 
 	// Get workspaces with counts
 	var workspaces []map[string]any
@@ -456,7 +458,7 @@ func (h *Hub) handleAdminCreateUser(c *Connection, env models.Envelope) {
 		"id":              user.ID.String(),
 		"name":            user.Name,
 		"email":           user.Email,
-		"is_admin":        user.IsAdmin,
+		"is_admin":        user.HasAdminAccess(),
 		"organization_id": targetOrgID.String(),
 		"workspace": map[string]any{
 			"id": workspace.ID.String(),

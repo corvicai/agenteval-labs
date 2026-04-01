@@ -162,6 +162,9 @@ func main() {
 		if err := db.AutoMigrate(database); err != nil {
 			logger.Warn("[DB] AutoMigrate failed: %v", err)
 		}
+		if err := db.EnsureCriticalSchema(database); err != nil {
+			logger.Warn("[DB] Critical schema compatibility failed: %v", err)
+		}
 	}
 	// Initialize orchestration engine (Go runner only)
 	workerCount := 50

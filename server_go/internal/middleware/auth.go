@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -205,12 +206,19 @@ func OrganizationScopeMiddleware() echo.MiddlewareFunc {
 
 // GenerateToken generates a JWT token (orgID is kept for backward compatibility but should be empty)
 func GenerateToken(userID, workspaceID, orgID, email, secret string, impersonatorID string) (string, error) {
+	now := time.Now().UTC()
 	claims := &Claims{
 		UserID:         userID,
 		WorkspaceID:    workspaceID,
 		OrgID:          "", // Organizations removed - always empty
 		Email:          email,
 		ImpersonatorID: impersonatorID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   userID,
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(24 * time.Hour)),
+		},
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

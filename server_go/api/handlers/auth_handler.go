@@ -869,7 +869,7 @@ func (h *AuthHandler) CreateUserAdmin(c echo.Context) error {
 		ID:             user.ID.String(),
 		Name:           user.Name,
 		Email:          user.Email,
-		IsAdmin:        user.IsAdmin,
+		IsAdmin:        user.HasAdminAccess(),
 		OrganizationID: targetOrgID.String(),
 	})
 }
@@ -931,7 +931,7 @@ func (h *AuthHandler) UpdateUser(c echo.Context) error {
 		ID:      user.ID.String(),
 		Name:    user.Name,
 		Email:   user.Email,
-		IsAdmin: user.IsAdmin,
+		IsAdmin: user.HasAdminAccess(),
 	})
 }
 
@@ -973,7 +973,7 @@ func (h *AuthHandler) DeleteUser(c echo.Context) error {
 func (h *AuthHandler) BootstrapAdmin(c echo.Context) error {
 	// Check if any admin exists
 	var count int64
-	h.db.Model(&models.User{}).Where("is_admin = ?", true).Count(&count)
+	models.AdminScope(h.db.Model(&models.User{})).Count(&count)
 	if count > 0 {
 		return c.JSON(http.StatusForbidden, map[string]string{"error": "Admin already exists"})
 	}
@@ -1052,7 +1052,7 @@ func (h *AuthHandler) BootstrapAdmin(c echo.Context) error {
 // CheckAdminExists checks if any admin user exists
 func (h *AuthHandler) CheckAdminExists(c echo.Context) error {
 	var count int64
-	if err := h.db.Model(&models.User{}).Where("is_admin = ?", true).Count(&count).Error; err != nil {
+	if err := models.AdminScope(h.db.Model(&models.User{})).Count(&count).Error; err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to check admin status"})
 	}
 	return c.JSON(http.StatusOK, map[string]bool{"exists": count > 0})
@@ -1069,7 +1069,7 @@ func (h *AuthHandler) mapUserToResponse(u models.User) UserResponse {
 		ID:         u.ID.String(),
 		Name:       u.Name,
 		Email:      u.Email,
-		IsAdmin:    u.IsAdmin,
+		IsAdmin:    u.HasAdminAccess(),
 		Workspaces: workspaces,
 		CreatedAt:  u.CreatedAt,
 	}
@@ -1239,7 +1239,7 @@ func (h *AuthHandler) GetUserProfile(c echo.Context) error {
 		"id":              user.ID,
 		"name":            user.Name,
 		"email":           user.Email,
-		"is_admin":        user.IsAdmin,
+		"is_admin":        user.HasAdminAccess(),
 		"is_manager":      isManager,
 		"organization_id": orgIDStr,
 		"organization":    org,

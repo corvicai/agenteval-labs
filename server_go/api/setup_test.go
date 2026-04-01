@@ -54,6 +54,7 @@ func setup() {
 		&models.Client{},
 		&models.QuestionSet{},
 		&models.QuestionSetAgent{},
+		&models.QuestionSetShareLink{},
 		&models.Run{},
 		&models.RunResult{},
 		&models.Evaluation{},
@@ -134,6 +135,9 @@ func sendWSRequest(t *testing.T, token string, msgType string, payload any) *mod
 				}
 				if orgId, ok := claims["org_id"].(string); ok {
 					conn.OrgID, _ = uuid.Parse(orgId)
+				}
+				if workspaceID, ok := claims["workspace_id"].(string); ok {
+					conn.WorkspaceID, _ = uuid.Parse(workspaceID)
 				}
 				conn.IsAuthenticated = true
 			}

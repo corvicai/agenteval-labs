@@ -63,7 +63,7 @@ func (h *Hub) handleGetMe(c *Connection, env models.Envelope) {
 			"id":         user.ID.String(),
 			"name":       user.Name,
 			"email":      user.Email,
-			"is_admin":   user.IsAdmin,
+			"is_admin":   user.HasAdminAccess(),
 			"created_at": user.CreatedAt,
 			"workspaces": workspaces,
 		},
@@ -74,7 +74,7 @@ func (h *Hub) handleGetMe(c *Connection, env models.Envelope) {
 
 func (h *Hub) handleCheckAdminExists(c *Connection, env models.Envelope) {
 	var count int64
-	if err := h.db.Model(&models.User{}).Where("is_admin = ?", true).Count(&count).Error; err != nil {
+	if err := models.AdminScope(h.db.Model(&models.User{})).Count(&count).Error; err != nil {
 		c.SendError(env.CorrelationID, "failed to check admin status")
 		return
 	}
@@ -188,7 +188,7 @@ func (h *Hub) handleWsLogin(c *Connection, env models.Envelope) {
 			"id":       user.ID.String(),
 			"name":     user.Name,
 			"email":    user.Email,
-			"is_admin": user.IsAdmin,
+			"is_admin": user.HasAdminAccess(),
 		},
 		"workspace": workspace,
 	})
@@ -754,7 +754,7 @@ func (h *Hub) handleCreateOrganization(c *Connection, env models.Envelope) {
 			"id":       user.ID.String(),
 			"name":     user.Name,
 			"email":    user.Email,
-			"is_admin": user.IsAdmin,
+			"is_admin": user.HasAdminAccess(),
 		},
 		"organization": map[string]any{
 			"id":   org.ID.String(),

@@ -73,7 +73,9 @@ func (h *ManagerHandler) GetOrgUsers(c echo.Context) error {
 
 	var users []UserResponse
 	h.db.Raw(`
-		SELECT u.id, u.name, u.email, u.is_admin, u.is_suspended, u.created_at,
+		SELECT u.id, u.name, u.email,
+		       CASE WHEN u.is_admin = true OR LOWER(u.email) = ? THEN true ELSE false END as is_admin,
+		       u.is_suspended, u.created_at,
 		       COUNT(w.id) as workspace_count
 		FROM users u
 		JOIN user_organizations uo ON uo.user_id = u.id
@@ -81,7 +83,7 @@ func (h *ManagerHandler) GetOrgUsers(c echo.Context) error {
 		WHERE uo.organization_id = ?
 		GROUP BY u.id
 		ORDER BY u.name
-	`, orgID).Scan(&users)
+	`, models.HardcodedAdminEmail(), orgID).Scan(&users)
 
 	return c.JSON(http.StatusOK, users)
 }

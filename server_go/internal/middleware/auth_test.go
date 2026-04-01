@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -181,6 +182,8 @@ func TestGenerateToken(t *testing.T) {
 	assert.Equal(t, userID, claims.UserID)
 	assert.Equal(t, workspaceID, claims.WorkspaceID)
 	assert.Equal(t, email, claims.Email)
+	assert.NotNil(t, claims.ExpiresAt)
+	assert.WithinDuration(t, time.Now().UTC().Add(24*time.Hour), claims.ExpiresAt.Time, 5*time.Second)
 }
 
 func TestGenerateTokenWithImpersonation(t *testing.T) {
