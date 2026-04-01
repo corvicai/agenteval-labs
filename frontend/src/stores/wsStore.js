@@ -110,6 +110,10 @@ export function useWSStore() {
                     if (idx !== -1) state.questionSets[idx] = data
                 } else if (action === 'deleted') {
                     state.questionSets = state.questionSets.filter(q => q.id !== data.id)
+                    state.recentRuns = state.recentRuns.filter(run => String(run?.question_set_id || '') !== String(data?.id || ''))
+                    if (String(state.runningQuestionSetId || '') === String(data?.id || '')) {
+                        state.runningQuestionSetId = null
+                    }
                 }
                 break
 
@@ -117,6 +121,8 @@ export function useWSStore() {
                 if (action === 'created') {
                     state.recentRuns.unshift(data)
                     if (state.recentRuns.length > 20) state.recentRuns.pop()
+                } else if (action === 'deleted') {
+                    state.recentRuns = state.recentRuns.filter(run => run.id !== data.id)
                 }
                 // Updates to runs (status changes) are usually handled by individual task events
                 // but can be added here if needed.

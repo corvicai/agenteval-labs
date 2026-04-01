@@ -11,52 +11,22 @@
 
         <div v-if="error" class="error-message">{{ error }}</div>
 
-        <template v-if="mode === 'share'">
-          <div class="transfer-note">
-            The link is single-use. The recipient must log in, open the link, and choose one of their workspaces.
+        <div class="transfer-note">
+          The link is single-use. The recipient must log in and open the link to import the question set.
+        </div>
+
+        <div v-if="shareData" class="share-result">
+          <label class="form-label">Share Link</label>
+          <div class="share-link-row">
+            <input :value="shareData.url" type="text" readonly class="share-link-input" />
+            <button class="btn btn-secondary" @click="copyShareLink" :disabled="copied">
+              {{ copied ? 'Copied' : 'Copy' }}
+            </button>
           </div>
-
-          <div v-if="shareData" class="share-result">
-            <label class="form-label">Share Link</label>
-            <div class="share-link-row">
-              <input :value="shareData.url" type="text" readonly class="share-link-input" />
-              <button class="btn btn-secondary" @click="copyShareLink" :disabled="copied">
-                {{ copied ? 'Copied' : 'Copy' }}
-              </button>
-            </div>
-            <p class="share-meta">
-              Expires on {{ formatDateTime(shareData.expires_at) }}. The imported copy contains only questions, version and name.
-            </p>
-          </div>
-        </template>
-
-        <template v-else>
-          <div v-if="targetWorkspaces.length === 0" class="transfer-note">
-            No other workspaces available. Create another workspace first to use this action.
-          </div>
-
-          <template v-else>
-            <label class="form-label" for="transfer-target-workspace">Destination workspace</label>
-            <select
-              id="transfer-target-workspace"
-              v-model="targetWorkspaceId"
-              class="transfer-select"
-            >
-              <option disabled value="">Select a workspace</option>
-              <option v-for="workspace in targetWorkspaces" :key="workspace.id" :value="workspace.id">
-                {{ workspace.name }}
-              </option>
-            </select>
-
-            <div v-if="mode === 'copy'" class="transfer-note">
-              A new question set will be created in the destination workspace. Agents and run history are not copied.
-            </div>
-
-            <div v-if="mode === 'move'" class="transfer-note transfer-note-warning">
-              The question set will leave the current workspace and move to the selected workspace. Question-set agent bindings are cleared, and past runs follow the move so history keeps working.
-            </div>
-          </template>
-        </template>
+          <p class="share-meta">
+            Expires on {{ formatDateTime(shareData.expires_at) }}. The imported copy contains only questions, version and name.
+          </p>
+        </div>
       </div>
 
       <div class="modal-actions">
@@ -64,7 +34,7 @@
         <button
           class="btn btn-primary"
           @click="handlePrimaryAction"
-          :disabled="primaryDisabled"
+          :disabled="isWorking"
         >
           {{ primaryLabel }}
         </button>
@@ -78,68 +48,28 @@ import { computed, ref } from 'vue'
 import wsService from '../services/websocket.js'
 
 const props = defineProps({
-  mode: {
-    type: String,
-    required: true
-  },
   questionSet: {
     type: Object,
     required: true
-  },
-  workspaces: {
-    type: Array,
-    default: () => []
-  },
-  currentWorkspaceId: {
-    type: String,
-    default: ''
   }
 })
 
-const emit = defineEmits(['close', 'completed'])
+defineEmits(['close'])
 
 const isWorking = ref(false)
 const error = ref('')
 const copied = ref(false)
 const shareData = ref(null)
-const targetWorkspaceId = ref('')
 
-const targetWorkspaces = computed(() =>
-  (props.workspaces || []).filter((workspace) => String(workspace?.id || '') !== String(props.currentWorkspaceId || ''))
-)
-
-if (targetWorkspaces.value.length > 0) {
-  targetWorkspaceId.value = targetWorkspaces.value[0].id
-}
-
-const modalTitle = computed(() => {
-  if (props.mode === 'share') return 'Share Question Set'
-  if (props.mode === 'copy') return 'Copy To Workspace'
-  return 'Move To Workspace'
-})
+const modalTitle = computed(() => 'Share Question Set')
 
 const modalDescription = computed(() => {
-  if (props.mode === 'share') {
-    return `Create a one-time link for "${props.questionSet?.name || 'this question set'}".`
-  }
-  if (props.mode === 'copy') {
-    return `Copy "${props.questionSet?.name || 'this question set'}" into another workspace.`
-  }
-  return `Move "${props.questionSet?.name || 'this question set'}" into another workspace.`
+  return `Create a one-time link for "${props.questionSet?.name || 'this question set'}".`
 })
 
 const primaryLabel = computed(() => {
-  if (isWorking.value) return props.mode === 'share' ? 'Generating...' : 'Applying...'
-  if (props.mode === 'share') return shareData.value ? 'Generate New Link' : 'Generate Link'
-  if (props.mode === 'copy') return 'Copy Set'
-  return 'Move Set'
-})
-
-const primaryDisabled = computed(() => {
-  if (isWorking.value) return true
-  if (props.mode === 'share') return false
-  if (targetWorkspaces.value.length === 0) return true
-  return !targetWorkspaceId.value
+  if (isWorking.value) return 'Generating...'
+  return shareData.value ? 'Generate New Link' : 'Generate Link'
 })
 
 function formatDateTime(value) {
@@ -177,27 +107,15 @@ async function handlePrimaryAction() {
   copied.value = false
 
   try {
-    if (props.mode === 'share') {
-      const response = await wsService.createQuestionSetShareLink(props.questionSet.id)
-      const url = new URL(window.location.origin + window.location.pathname)
-      url.searchParams.set('share', response.token)
-      shareData.value = {
-        ...response,
-        url: url.toString()
-      }
-      return
+    const response = await wsService.createQuestionSetShareLink(props.questionSet.id)
+    const url = new URL(window.location.origin + window.location.pathname)
+    url.searchParams.set('share', response.token)
+    shareData.value = {
+      ...response,
+      url: url.toString()
     }
-
-    const result = props.mode === 'copy'
-      ? await wsService.copyQuestionSetToWorkspace(props.questionSet.id, targetWorkspaceId.value)
-      : await wsService.moveQuestionSetToWorkspace(props.questionSet.id, targetWorkspaceId.value)
-
-    emit('completed', {
-      mode: props.mode,
-      ...result
-    })
   } catch (err) {
-    error.value = err?.message || `Failed to ${props.mode} question set.`
+    error.value = err?.message || 'Failed to create share link.'
   } finally {
     isWorking.value = false
   }
@@ -227,13 +145,13 @@ async function handlePrimaryAction() {
   margin-bottom: 6px;
 }
 
-.transfer-select,
 .share-link-input {
   width: 100%;
   border: 1px solid #d1d5db;
   border-radius: 10px;
   padding: 10px 12px;
   font-size: 14px;
+  background: #f9fafb;
 }
 
 .transfer-note {
@@ -244,12 +162,6 @@ async function handlePrimaryAction() {
   font-size: 13px;
   line-height: 1.45;
   padding: 10px 12px;
-}
-
-.transfer-note-warning {
-  background: #fff7ed;
-  border-color: #fdba74;
-  color: #9a3412;
 }
 
 .share-result {
@@ -263,19 +175,30 @@ async function handlePrimaryAction() {
   gap: 10px;
 }
 
-.share-link-input {
-  background: #f9fafb;
-}
-
 .share-meta {
   margin: 0;
   color: #6b7280;
   font-size: 12px;
 }
 
+.modal-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 1rem 1.5rem 1.5rem;
+  border-top: 1px solid #f1f5f9;
+  background: #fff;
+}
+
 @media (max-width: 640px) {
   .share-link-row {
     flex-direction: column;
+  }
+
+  .modal-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
   }
 }
 </style>

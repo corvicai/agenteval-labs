@@ -531,18 +531,27 @@ watch(currentQuestionSet, async (newSet) => {
 
 
 watch(() => wsState.questionSets, (newSets) => {
-  if (!newSets || newSets.length === 0) return
+  const sets = Array.isArray(newSets) ? newSets : []
 
   if (!currentQuestionSet.value) {
-    console.log('[App] Question sets arrived via WebSocket, initializing...')
-    loadQuestionSets()
-  } else {
-    // Sync current selection with the new object in store (it might have been updated via broadcast)
-    const updated = newSets.find(s => s.id === currentQuestionSet.value.id)
-    if (updated && updated !== currentQuestionSet.value) {
-      console.log('[App] Syncing currentQuestionSet with store update')
-      currentQuestionSet.value = updated
+    if (sets.length > 0) {
+      console.log('[App] Question sets arrived via WebSocket, initializing...')
     }
+    loadQuestionSets()
+    return
+  }
+
+  // Sync current selection with the new object in store (it might have been updated via broadcast)
+  const updated = sets.find(s => s.id === currentQuestionSet.value.id)
+  if (updated && updated !== currentQuestionSet.value) {
+    console.log('[App] Syncing currentQuestionSet with store update')
+    currentQuestionSet.value = updated
+    return
+  }
+
+  if (!updated) {
+    console.log('[App] Current question set no longer exists, clearing selection')
+    loadQuestionSets()
   }
 }, { immediate: true, deep: true })
 

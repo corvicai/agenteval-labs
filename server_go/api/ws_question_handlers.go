@@ -270,6 +270,111 @@ func (h *Hub) handleCreateQuestionSet(c *Connection, env models.Envelope) {
 	c.SendResponse(DataResponse, env.CorrelationID, qs)
 }
 
+func (h *Hub) handleDeleteQuestionSet(c *Connection, env models.Envelope) {
+	if !c.IsAuthenticated {
+		c.SendError(env.CorrelationID, "not authenticated")
+		return
+	}
+
+	var payload struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		c.SendError(env.CorrelationID, "invalid payload")
+		return
+	}
+
+	qsID, err := uuid.Parse(payload.ID)
+	if err != nil {
+		c.SendError(env.CorrelationID, "invalid id")
+		return
+	}
+
+	var meta struct {
+		QuestionSetID uuid.UUID `json:"question_set_id"`
+		ClientID      uuid.UUID `json:"client_id"`
+		WorkspaceID   uuid.UUID `json:"workspace_id"`
+	}
+	if err := h.db.Table("question_sets").
+		Select("question_sets.id AS question_set_id, question_sets.client_id, clients.workspace_id").
+		Joins("JOIN clients ON clients.id = question_sets.client_id").
+		Where("question_sets.id = ?", qsID).
+		Scan(&meta).Error; err != nil {
+		c.SendErrorWithDetails(env.CorrelationID, "question set not found", err.Error())
+		return
+	}
+	if meta.QuestionSetID == uuid.Nil {
+		c.SendError(env.CorrelationID, "question set not found")
+		return
+	}
+	if meta.WorkspaceID != c.WorkspaceID {
+		c.SendError(env.CorrelationID, "workspace mismatch")
+		return
+	}
+
+	var runningCount int64
+	if err := h.db.Model(&models.Run{}).
+		Where("question_set_id = ? AND status = ?", qsID, "running").
+		Count(&runningCount).Error; err != nil {
+		c.SendErrorWithDetails(env.CorrelationID, "failed to validate question set delete", err.Error())
+		return
+	}
+	if runningCount > 0 {
+		c.SendError(env.CorrelationID, "cannot delete a question set with a running benchmark")
+		return
+	}
+
+	tx := h.db.Begin()
+	if err := tx.Exec(`
+		DELETE FROM evaluations
+		WHERE run_result_id IN (
+			SELECT id FROM run_results WHERE run_id IN (
+				SELECT id FROM runs WHERE question_set_id = ?
+			)
+		)
+	`, qsID).Error; err != nil {
+		tx.Rollback()
+		c.SendErrorWithDetails(env.CorrelationID, "failed to delete question set history", err.Error())
+		return
+	}
+	if err := tx.Where("run_id IN (?)", tx.Model(&models.Run{}).Select("id").Where("question_set_id = ?", qsID)).
+		Delete(&models.RunResult{}).Error; err != nil {
+		tx.Rollback()
+		c.SendErrorWithDetails(env.CorrelationID, "failed to delete question set history", err.Error())
+		return
+	}
+	if err := tx.Where("question_set_id = ?", qsID).Delete(&models.Run{}).Error; err != nil {
+		tx.Rollback()
+		c.SendErrorWithDetails(env.CorrelationID, "failed to delete question set history", err.Error())
+		return
+	}
+	if err := tx.Where("question_set_id = ?", qsID).Delete(&models.QuestionSetAgent{}).Error; err != nil {
+		tx.Rollback()
+		c.SendErrorWithDetails(env.CorrelationID, "failed to delete question set", err.Error())
+		return
+	}
+	if err := tx.Where("question_set_id = ?", qsID).Delete(&models.QuestionSetShareLink{}).Error; err != nil {
+		tx.Rollback()
+		c.SendErrorWithDetails(env.CorrelationID, "failed to delete question set", err.Error())
+		return
+	}
+	if err := tx.Delete(&models.QuestionSet{}, "id = ?", qsID).Error; err != nil {
+		tx.Rollback()
+		c.SendErrorWithDetails(env.CorrelationID, "failed to delete question set", err.Error())
+		return
+	}
+	if err := tx.Commit().Error; err != nil {
+		c.SendErrorWithDetails(env.CorrelationID, "failed to delete question set", err.Error())
+		return
+	}
+
+	h.BroadcastEvent(meta.WorkspaceID, "question_sets", "deleted", map[string]string{"id": qsID.String()})
+	c.SendResponse(DataResponse, env.CorrelationID, map[string]any{
+		"id":      qsID.String(),
+		"deleted": true,
+	})
+}
+
 func (h *Hub) handleUpdateQuestionSetAgents(c *Connection, env models.Envelope) {
 	if !c.IsAuthenticated {
 		c.SendError(env.CorrelationID, "not authenticated")

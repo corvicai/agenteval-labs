@@ -594,6 +594,10 @@ class WebSocketService {
         return this.request('REQ_CREATE_QUESTION_SET', { workspace_id: workspaceId, ...data })
     }
 
+    deleteQuestionSet(questionSetId) {
+        return this.request('REQ_DELETE_QUESTION_SET', { id: questionSetId })
+    }
+
     createQuestionSetShareLink(questionSetId, expiresInHours = null) {
         const payload = { question_set_id: questionSetId }
         if (expiresInHours != null) payload.expires_in_hours = expiresInHours
@@ -607,22 +611,6 @@ class WebSocketService {
     acceptQuestionSetShareLink(token, targetWorkspaceId) {
         return this.request('REQ_ACCEPT_QUESTION_SET_SHARE_LINK', {
             token,
-            target_workspace_id: targetWorkspaceId
-        })
-    }
-
-    copyQuestionSetToWorkspace(questionSetId, targetWorkspaceId, name = '') {
-        const payload = {
-            question_set_id: questionSetId,
-            target_workspace_id: targetWorkspaceId
-        }
-        if (name) payload.name = name
-        return this.request('REQ_COPY_QUESTION_SET_TO_WORKSPACE', payload)
-    }
-
-    moveQuestionSetToWorkspace(questionSetId, targetWorkspaceId) {
-        return this.request('REQ_MOVE_QUESTION_SET_TO_WORKSPACE', {
-            question_set_id: questionSetId,
             target_workspace_id: targetWorkspaceId
         })
     }

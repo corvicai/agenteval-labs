@@ -45,14 +45,15 @@
           <button class="btn btn-secondary btn-sm btn-full-width" @click="handleCloneQuestionSet" :disabled="!currentQuestionSet || !workspaceId">
             📄 Clone Set
           </button>
-          <button class="btn btn-secondary btn-sm btn-full-width" @click="openTransferModal('share')" :disabled="!currentQuestionSet">
+          <button class="btn btn-secondary btn-sm btn-full-width" @click="openTransferModal" :disabled="!currentQuestionSet">
             🔗 Share Link
           </button>
-          <button class="btn btn-secondary btn-sm btn-full-width" @click="openTransferModal('copy')" :disabled="!currentQuestionSet || availableTransferWorkspaces.length === 0">
-            📥 Copy To Workspace
-          </button>
-          <button class="btn btn-secondary btn-sm btn-full-width" @click="openTransferModal('move')" :disabled="!currentQuestionSet || availableTransferWorkspaces.length === 0">
-            📦 Move To Workspace
+          <button
+            class="btn btn-danger btn-sm btn-full-width"
+            @click="openDeleteQuestionSetConfirm"
+            :disabled="!currentQuestionSet || isDeletingQuestionSet || runningQuestionSetId === currentQuestionSet?.id"
+          >
+            🗑️ Delete Set
           </button>
           <button class="btn btn-primary btn-sm btn-full-width" @click="handleCreateQuestionSet">
             <span class="icon">➕</span> Add Validation Set
@@ -104,12 +105,18 @@
 
     <QuestionSetTransferModal
       v-if="showTransferModal && currentQuestionSet"
-      :mode="transferMode"
       :question-set="currentQuestionSet"
-      :workspaces="workspaces"
-      :current-workspace-id="workspaceId"
       @close="closeTransferModal"
-      @completed="handleTransferCompleted"
+    />
+
+    <ConfirmDialog
+      v-model:visible="showDeleteQuestionSetConfirm"
+      title="Delete Question Set"
+      :message="deleteQuestionSetMessage"
+      confirm-text="Delete Set"
+      cancel-text="Cancel"
+      variant="danger"
+      @confirm="confirmDeleteQuestionSet"
     />
   </div>
 </template>
@@ -118,6 +125,7 @@
 import { computed, ref } from 'vue'
 import QuestionEditorModal from './QuestionEditorModal.vue'
 import QuestionSetTransferModal from './QuestionSetTransferModal.vue'
+import ConfirmDialog from './ConfirmDialog.vue'
 import wsService from '../services/websocket.js'
 
 const props = defineProps({
@@ -130,10 +138,6 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
-  workspaces: {
-    type: Array,
-    default: () => []
-  },
   runningQuestionSetId: String,
   workspaceId: String
 })
@@ -143,18 +147,21 @@ const emit = defineEmits([
   'select-question-set',
   'view-history',
   'manage-agents',
-  'question-set-updated'
+  'question-set-updated',
+  'question-set-deleted'
 ])
 
 const activeTab = ref('questionSets')
 const showQuestionEditor = ref(false)
 const showTransferModal = ref(false)
 const previousQuestionSet = ref(null)
-const transferMode = ref('share')
+const showDeleteQuestionSetConfirm = ref(false)
+const isDeletingQuestionSet = ref(false)
 
-const availableTransferWorkspaces = computed(() =>
-  (props.workspaces || []).filter((workspace) => String(workspace?.id || '') !== String(props.workspaceId || ''))
-)
+const deleteQuestionSetMessage = computed(() => {
+  const name = props.currentQuestionSet?.name || 'this question set'
+  return `Delete "${name}" permanently? This also deletes its benchmark history, results, evaluations, agent bindings, and share links. This cannot be undone.`
+})
 
 function getQuestionCount(set) {
   if (!set || !set.data) return 0
@@ -243,9 +250,8 @@ async function handleCloneQuestionSet() {
   }
 }
 
-function openTransferModal(mode) {
+function openTransferModal() {
   if (!props.currentQuestionSet) return
-  transferMode.value = mode
   showTransferModal.value = true
 }
 
@@ -253,17 +259,24 @@ function closeTransferModal() {
   showTransferModal.value = false
 }
 
-function handleTransferCompleted(result) {
-  showTransferModal.value = false
+function openDeleteQuestionSetConfirm() {
+  if (!props.currentQuestionSet || isDeletingQuestionSet.value) return
+  showDeleteQuestionSetConfirm.value = true
+}
 
-  if (result?.mode === 'move') {
+async function confirmDeleteQuestionSet() {
+  if (!props.currentQuestionSet?.id || isDeletingQuestionSet.value) return
+
+  isDeletingQuestionSet.value = true
+  try {
+    const result = await wsService.deleteQuestionSet(props.currentQuestionSet.id)
+    emit('question-set-deleted', result)
     emit('select-question-set', null)
-    alert(`Question set moved to "${result.workspace_name}". Use the workspace selector in the header to open it.`)
-    return
-  }
-
-  if (result?.mode === 'copy') {
-    alert(`Question set copied to "${result.workspace_name}". Use the workspace selector in the header to open it.`)
+  } catch (error) {
+    console.error('Failed to delete question set:', error)
+    alert('Failed to delete set: ' + (error?.message || 'Unknown error'))
+  } finally {
+    isDeletingQuestionSet.value = false
   }
 }
 

@@ -46,13 +46,13 @@
       :question-sets="questionSets"
       :current-question-set="currentQuestionSet"
       :agents="mergedAgents"
-      :workspaces="workspaces"
       :running-question-set-id="wsState.runningQuestionSetId"
       :workspace-id="workspaceId"
       @create-question-set="createNewQuestionSet"
       @select-question-set="selectQuestionSet"
       @manage-agents="() => emit('manage-agents')"
       @question-set-updated="handleQuestionSetUpdated"
+      @question-set-deleted="handleQuestionSetDeleted"
     />
 
     <!-- Main Content Area -->
@@ -739,17 +739,23 @@ function maybeStopRunningWhenIdle() {
 
 // Init logic for Question Set
 watch(() => props.questionSets, (sets) => {
-  if (!sets || sets.length === 0) return
-  
+  const nextSets = Array.isArray(sets) ? sets : []
+
   if (!currentQuestionSet.value) {
-     initQuestionSet(sets)
-  } else {
-    // Sync current set with updated data from props
-    const updated = sets.find(s => s.id === currentQuestionSet.value.id)
-    if (updated) {
-      currentQuestionSet.value = mergeQuestionSetForUI(updated, currentQuestionSet.value)
+    if (nextSets.length > 0) {
+      initQuestionSet(nextSets)
     }
+    return
   }
+
+  // Sync current set with updated data from props
+  const updated = nextSets.find(s => s.id === currentQuestionSet.value.id)
+  if (updated) {
+    currentQuestionSet.value = mergeQuestionSetForUI(updated, currentQuestionSet.value)
+    return
+  }
+
+  currentQuestionSet.value = null
 }, { immediate: true, deep: true })
 
 // Watch for parent-driven selection changes
@@ -1655,6 +1661,26 @@ function createNewQuestionSet() {
 
 function handleQuestionSetUpdated(updated) {
   currentQuestionSet.value = mergeQuestionSetForUI(updated, currentQuestionSet.value)
+}
+
+function handleQuestionSetDeleted(deleted) {
+  const deletedId = String(deleted?.id || '')
+  if (!deletedId) return
+
+  questionSetStateCache.delete(deletedId)
+  if (String(activeRunQuestionSetId.value || '') === deletedId) {
+    activeRunQuestionSetId.value = null
+    wsStore.setRunningQuestionSetId(null)
+  }
+
+  if (String(currentQuestionSet.value?.id || '') === deletedId) {
+    currentRun.value = null
+    runResults.value = {}
+    taskProgress.value = {}
+    selectedQuestionId.value = ''
+    isRunning.value = false
+    currentQuestionSet.value = null
+  }
 }
 
 function selectQuestionForAnalysis(questionId, options = {}) {

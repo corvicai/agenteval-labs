@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	dbcompat "benchmarking-platform/internal/db"
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
@@ -117,6 +118,40 @@ func questionSetShareStatus(link models.QuestionSetShareLink) string {
 	return "ready"
 }
 
+func (h *Hub) createQuestionSetShareLinkCompat(link *models.QuestionSetShareLink) error {
+	if err := h.db.Create(link).Error; err != nil {
+		if !dbcompat.IsMissingQuestionSetShareLinksRelationError(err) {
+			return err
+		}
+		if ensureErr := dbcompat.EnsureQuestionSetShareLinkSchema(h.db); ensureErr != nil {
+			return ensureErr
+		}
+		return h.db.Create(link).Error
+	}
+	return nil
+}
+
+func (h *Hub) findQuestionSetShareLinkByTokenCompat(queryDB *gorm.DB, token string, lock bool, link *models.QuestionSetShareLink) error {
+	load := func(db *gorm.DB) error {
+		q := db
+		if lock {
+			q = q.Clauses(clause.Locking{Strength: "UPDATE"})
+		}
+		return q.Where("token = ?", token).First(link).Error
+	}
+
+	if err := load(queryDB); err != nil {
+		if !dbcompat.IsMissingQuestionSetShareLinksRelationError(err) {
+			return err
+		}
+		if ensureErr := dbcompat.EnsureQuestionSetShareLinkSchema(h.db); ensureErr != nil {
+			return ensureErr
+		}
+		return load(queryDB)
+	}
+	return nil
+}
+
 func (h *Hub) handleCreateQuestionSetShareLink(c *Connection, env models.Envelope) {
 	if !c.IsAuthenticated {
 		c.SendError(env.CorrelationID, "not authenticated")
@@ -169,7 +204,7 @@ func (h *Hub) handleCreateQuestionSetShareLink(c *Connection, env models.Envelop
 		CreatedByUserID: c.UserID,
 		ExpiresAt:       time.Now().UTC().Add(ttl),
 	}
-	if err := h.db.Create(&link).Error; err != nil {
+	if err := h.createQuestionSetShareLinkCompat(&link); err != nil {
 		c.SendErrorWithDetails(env.CorrelationID, "failed to create share link", err.Error())
 		return
 	}
@@ -206,10 +241,14 @@ func (h *Hub) handleGetQuestionSetShareLink(c *Connection, env models.Envelope) 
 	}
 
 	var link models.QuestionSetShareLink
-	if err := h.db.Where("token = ?", token).First(&link).Error; err != nil {
-		c.SendResponse(DataResponse, env.CorrelationID, map[string]any{
-			"status": "invalid",
-		})
+	if err := h.findQuestionSetShareLinkByTokenCompat(h.db, token, false, &link); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.SendResponse(DataResponse, env.CorrelationID, map[string]any{
+				"status": "invalid",
+			})
+			return
+		}
+		c.SendErrorWithDetails(env.CorrelationID, "failed to load share link", err.Error())
 		return
 	}
 
@@ -274,10 +313,12 @@ func (h *Hub) handleAcceptQuestionSetShareLink(c *Connection, env models.Envelop
 	tx := h.db.Begin()
 
 	var link models.QuestionSetShareLink
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("token = ?", strings.TrimSpace(payload.Token)).
-		First(&link).Error; err != nil {
+	if err := h.findQuestionSetShareLinkByTokenCompat(tx, strings.TrimSpace(payload.Token), true, &link); err != nil {
 		tx.Rollback()
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			c.SendErrorWithDetails(env.CorrelationID, "failed to accept share link", err.Error())
+			return
+		}
 		c.SendError(env.CorrelationID, "share link not found")
 		return
 	}
@@ -328,167 +369,5 @@ func (h *Hub) handleAcceptQuestionSetShareLink(c *Connection, env models.Envelop
 		"workspace_id":      targetWorkspace.ID.String(),
 		"workspace_name":    targetWorkspace.Name,
 		"accepted_via_link": true,
-	})
-}
-
-func (h *Hub) handleCopyQuestionSetToWorkspace(c *Connection, env models.Envelope) {
-	if !c.IsAuthenticated {
-		c.SendError(env.CorrelationID, "not authenticated")
-		return
-	}
-
-	var payload struct {
-		QuestionSetID     string `json:"question_set_id"`
-		TargetWorkspaceID string `json:"target_workspace_id"`
-		Name              string `json:"name,omitempty"`
-	}
-	if err := json.Unmarshal(env.Payload, &payload); err != nil {
-		c.SendError(env.CorrelationID, "invalid payload")
-		return
-	}
-
-	questionSetID, err := uuid.Parse(payload.QuestionSetID)
-	if err != nil {
-		c.SendError(env.CorrelationID, "invalid question_set_id")
-		return
-	}
-	targetWorkspaceID, err := uuid.Parse(payload.TargetWorkspaceID)
-	if err != nil {
-		c.SendError(env.CorrelationID, "invalid target_workspace_id")
-		return
-	}
-	if targetWorkspaceID == c.WorkspaceID {
-		c.SendError(env.CorrelationID, "target workspace must be different from current workspace")
-		return
-	}
-
-	targetWorkspace, err := h.loadOwnedWorkspace(h.db, c.UserID, targetWorkspaceID)
-	if err != nil {
-		c.SendError(env.CorrelationID, "target workspace not found or access denied")
-		return
-	}
-
-	sourceQuestionSet, _, sourceWorkspace, err := h.loadQuestionSetWithWorkspace(h.db, questionSetID)
-	if err != nil {
-		c.SendError(env.CorrelationID, "question set not found")
-		return
-	}
-	if sourceWorkspace.ID != c.WorkspaceID {
-		c.SendError(env.CorrelationID, "workspace mismatch")
-		return
-	}
-
-	tx := h.db.Begin()
-	cloned, err := h.cloneQuestionSetOnly(tx, sourceQuestionSet, targetWorkspaceID, payload.Name)
-	if err != nil {
-		tx.Rollback()
-		c.SendErrorWithDetails(env.CorrelationID, "failed to copy question set", err.Error())
-		return
-	}
-	if err := tx.Commit().Error; err != nil {
-		c.SendErrorWithDetails(env.CorrelationID, "failed to copy question set", err.Error())
-		return
-	}
-
-	h.BroadcastEvent(targetWorkspaceID, "question_sets", "created", cloned)
-	c.SendResponse(DataResponse, env.CorrelationID, map[string]any{
-		"question_set":   cloned,
-		"workspace_id":   targetWorkspace.ID.String(),
-		"workspace_name": targetWorkspace.Name,
-	})
-}
-
-func (h *Hub) handleMoveQuestionSetToWorkspace(c *Connection, env models.Envelope) {
-	if !c.IsAuthenticated {
-		c.SendError(env.CorrelationID, "not authenticated")
-		return
-	}
-
-	var payload struct {
-		QuestionSetID     string `json:"question_set_id"`
-		TargetWorkspaceID string `json:"target_workspace_id"`
-	}
-	if err := json.Unmarshal(env.Payload, &payload); err != nil {
-		c.SendError(env.CorrelationID, "invalid payload")
-		return
-	}
-
-	questionSetID, err := uuid.Parse(payload.QuestionSetID)
-	if err != nil {
-		c.SendError(env.CorrelationID, "invalid question_set_id")
-		return
-	}
-	targetWorkspaceID, err := uuid.Parse(payload.TargetWorkspaceID)
-	if err != nil {
-		c.SendError(env.CorrelationID, "invalid target_workspace_id")
-		return
-	}
-	if targetWorkspaceID == c.WorkspaceID {
-		c.SendError(env.CorrelationID, "target workspace must be different from current workspace")
-		return
-	}
-
-	targetWorkspace, err := h.loadOwnedWorkspace(h.db, c.UserID, targetWorkspaceID)
-	if err != nil {
-		c.SendError(env.CorrelationID, "target workspace not found or access denied")
-		return
-	}
-
-	sourceQuestionSet, _, sourceWorkspace, err := h.loadQuestionSetWithWorkspace(h.db, questionSetID)
-	if err != nil {
-		c.SendError(env.CorrelationID, "question set not found")
-		return
-	}
-	if sourceWorkspace.ID != c.WorkspaceID {
-		c.SendError(env.CorrelationID, "workspace mismatch")
-		return
-	}
-
-	tx := h.db.Begin()
-	targetClient, err := h.ensureWorkspaceClient(tx, targetWorkspaceID)
-	if err != nil {
-		tx.Rollback()
-		c.SendErrorWithDetails(env.CorrelationID, "failed to move question set", err.Error())
-		return
-	}
-
-	if err := tx.Where("question_set_id = ?", questionSetID).Delete(&models.QuestionSetAgent{}).Error; err != nil {
-		tx.Rollback()
-		c.SendErrorWithDetails(env.CorrelationID, "failed to clear question set agents", err.Error())
-		return
-	}
-	if err := tx.Model(&models.QuestionSet{}).
-		Where("id = ?", questionSetID).
-		Update("client_id", targetClient.ID).Error; err != nil {
-		tx.Rollback()
-		c.SendErrorWithDetails(env.CorrelationID, "failed to move question set", err.Error())
-		return
-	}
-	if err := tx.Model(&models.Run{}).
-		Where("question_set_id = ?", questionSetID).
-		Update("workspace_id", targetWorkspaceID).Error; err != nil {
-		tx.Rollback()
-		c.SendErrorWithDetails(env.CorrelationID, "failed to move question set history", err.Error())
-		return
-	}
-	if err := tx.Commit().Error; err != nil {
-		c.SendErrorWithDetails(env.CorrelationID, "failed to move question set", err.Error())
-		return
-	}
-
-	movedQuestionSet, _, _, err := h.loadQuestionSetWithWorkspace(h.db, questionSetID)
-	if err != nil {
-		c.SendErrorWithDetails(env.CorrelationID, "failed to load moved question set", err.Error())
-		return
-	}
-
-	h.BroadcastEvent(sourceWorkspace.ID, "question_sets", "deleted", map[string]string{"id": sourceQuestionSet.ID.String()})
-	h.BroadcastEvent(targetWorkspaceID, "question_sets", "created", movedQuestionSet)
-
-	c.SendResponse(DataResponse, env.CorrelationID, map[string]any{
-		"question_set":   movedQuestionSet,
-		"workspace_id":   targetWorkspace.ID.String(),
-		"workspace_name": targetWorkspace.Name,
-		"moved":          true,
 	})
 }

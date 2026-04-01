@@ -142,120 +142,52 @@ func TestQuestionSetShareLinkLifecycle(t *testing.T) {
 	assert.Equal(t, "share link already used", reuseErr["error"])
 }
 
-func TestCopyQuestionSetToWorkspaceCreatesPureCopy(t *testing.T) {
+func TestQuestionSetShareLinkLifecycleRepairsMissingTableOnDemand(t *testing.T) {
 	setup()
 
-	user, sourceWorkspace, _, questionSet, token := createQuestionSetTestFixture(t, "copy-owner")
+	_, sourceWorkspace, _, questionSet, sourceToken := createQuestionSetTestFixture(t, "source-repair")
+	_, destWorkspace, _, _, destToken := createQuestionSetTestFixture(t, "dest-repair")
 
-	targetWorkspace := models.Workspace{
-		ID:     uuid.New(),
-		UserID: user.ID,
-		Name:   "Target Workspace",
-	}
-	require.NoError(t, db.Create(&targetWorkspace).Error)
+	require.NoError(t, db.Migrator().DropTable(&models.QuestionSetShareLink{}))
 
-	agent := models.Agent{
-		ID:           uuid.New(),
-		WorkspaceID:  sourceWorkspace.ID,
-		Name:         "Primary Agent",
-		ProviderType: "mcp",
-		Config:       models.EncryptedJSON(`{"endpoint":"https://example.com","token":"secret"}`),
-		Enabled:      true,
-	}
-	require.NoError(t, db.Create(&agent).Error)
-	require.NoError(t, db.Create(&models.QuestionSetAgent{
-		QuestionSetID: questionSet.ID,
-		AgentID:       agent.ID,
-		Enabled:       true,
-		Position:      1,
-	}).Error)
-
-	copyResp := sendWSRequest(t, token, ReqCopyQuestionSetToWorkspace, map[string]any{
-		"question_set_id":     questionSet.ID.String(),
-		"target_workspace_id": targetWorkspace.ID.String(),
+	createResp := sendWSRequest(t, sourceToken, ReqCreateQuestionSetShareLink, map[string]any{
+		"question_set_id": questionSet.ID.String(),
 	})
-	assert.Equal(t, DataResponse, copyResp.Type)
+	assert.Equal(t, DataResponse, createResp.Type)
 
-	var copied struct {
-		QuestionSet models.QuestionSet `json:"question_set"`
+	var created struct {
+		Token string `json:"token"`
 	}
-	decodeWSResponsePayload(t, copyResp, &copied)
-	assert.NotEqual(t, questionSet.ID, copied.QuestionSet.ID)
-	assert.Equal(t, questionSet.Name, copied.QuestionSet.Name)
-	assert.JSONEq(t, string(questionSet.Data), string(copied.QuestionSet.Data))
+	decodeWSResponsePayload(t, createResp, &created)
+	require.NotEmpty(t, created.Token)
+	assert.True(t, db.Migrator().HasTable(&models.QuestionSetShareLink{}))
 
-	var copiedClient models.Client
-	require.NoError(t, db.First(&copiedClient, "id = ?", copied.QuestionSet.ClientID).Error)
-	assert.Equal(t, targetWorkspace.ID, copiedClient.WorkspaceID)
-
-	var copiedLinks int64
-	require.NoError(t, db.Model(&models.QuestionSetAgent{}).
-		Where("question_set_id = ?", copied.QuestionSet.ID).
-		Count(&copiedLinks).Error)
-	assert.Zero(t, copiedLinks)
-}
-
-func TestMoveQuestionSetToWorkspaceMovesHistoryAndClearsAgents(t *testing.T) {
-	setup()
-
-	user, sourceWorkspace, _, questionSet, token := createQuestionSetTestFixture(t, "move-owner")
-
-	targetWorkspace := models.Workspace{
-		ID:     uuid.New(),
-		UserID: user.ID,
-		Name:   "Archive Workspace",
-	}
-	require.NoError(t, db.Create(&targetWorkspace).Error)
-
-	agent := models.Agent{
-		ID:           uuid.New(),
-		WorkspaceID:  sourceWorkspace.ID,
-		Name:         "Runner Agent",
-		ProviderType: "mcp",
-		Config:       models.EncryptedJSON(`{"endpoint":"https://example.com","token":"secret"}`),
-		Enabled:      true,
-	}
-	require.NoError(t, db.Create(&agent).Error)
-	require.NoError(t, db.Create(&models.QuestionSetAgent{
-		QuestionSetID: questionSet.ID,
-		AgentID:       agent.ID,
-		Enabled:       true,
-		Position:      1,
-	}).Error)
-
-	run := models.Run{
-		ID:            uuid.New(),
-		WorkspaceID:   sourceWorkspace.ID,
-		QuestionSetID: questionSet.ID,
-		Status:        "completed",
-	}
-	require.NoError(t, db.Create(&run).Error)
-
-	moveResp := sendWSRequest(t, token, ReqMoveQuestionSetToWorkspace, map[string]any{
-		"question_set_id":     questionSet.ID.String(),
-		"target_workspace_id": targetWorkspace.ID.String(),
+	inspectResp := sendWSRequest(t, destToken, ReqGetQuestionSetShareLink, map[string]any{
+		"token": created.Token,
 	})
-	assert.Equal(t, DataResponse, moveResp.Type)
+	assert.Equal(t, DataResponse, inspectResp.Type)
 
-	var moved struct {
-		QuestionSet models.QuestionSet `json:"question_set"`
-		Moved       bool               `json:"moved"`
+	var preview struct {
+		Status string `json:"status"`
 	}
-	decodeWSResponsePayload(t, moveResp, &moved)
-	assert.True(t, moved.Moved)
-	assert.Equal(t, questionSet.ID, moved.QuestionSet.ID)
+	decodeWSResponsePayload(t, inspectResp, &preview)
+	assert.Equal(t, "ready", preview.Status)
 
-	var movedClient models.Client
-	require.NoError(t, db.First(&movedClient, "id = ?", moved.QuestionSet.ClientID).Error)
-	assert.Equal(t, targetWorkspace.ID, movedClient.WorkspaceID)
+	acceptResp := sendWSRequest(t, destToken, ReqAcceptQuestionSetShareLink, map[string]any{
+		"token":               created.Token,
+		"target_workspace_id": destWorkspace.ID.String(),
+	})
+	assert.Equal(t, DataResponse, acceptResp.Type)
 
-	var movedLinks int64
-	require.NoError(t, db.Model(&models.QuestionSetAgent{}).
-		Where("question_set_id = ?", questionSet.ID).
-		Count(&movedLinks).Error)
-	assert.Zero(t, movedLinks)
+	var accepted struct {
+		WorkspaceID string `json:"workspace_id"`
+	}
+	decodeWSResponsePayload(t, acceptResp, &accepted)
+	assert.Equal(t, destWorkspace.ID.String(), accepted.WorkspaceID)
 
-	var movedRun models.Run
-	require.NoError(t, db.First(&movedRun, "id = ?", run.ID).Error)
-	assert.Equal(t, targetWorkspace.ID, movedRun.WorkspaceID)
+	var repairedLink models.QuestionSetShareLink
+	require.NoError(t, db.Where("token = ?", created.Token).First(&repairedLink).Error)
+	assert.NotNil(t, repairedLink.UsedAt)
+	assert.Equal(t, questionSet.ID, repairedLink.QuestionSetID)
+	assert.Equal(t, sourceWorkspace.UserID, repairedLink.CreatedByUserID)
 }

@@ -159,6 +159,25 @@ func IsMissingRunsCreatedByColumnError(err error) bool {
 		strings.Contains(msg, `does not exist`)
 }
 
+func IsMissingQuestionSetShareLinksRelationError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+	return (strings.Contains(msg, `relation "question_set_share_links"`) &&
+		strings.Contains(msg, `does not exist`)) ||
+		strings.Contains(msg, `no such table: question_set_share_links`)
+}
+
+func EnsureQuestionSetShareLinkSchema(db *gorm.DB) error {
+	logger.Warn("[DB] question_set_share_links missing; attempting on-demand schema repair")
+	if err := db.AutoMigrate(&models.QuestionSetShareLink{}); err != nil {
+		return fmt.Errorf("ensure question_set_share_links schema: %w", err)
+	}
+	return nil
+}
+
 func CreateRunCompat(db *gorm.DB, run *models.Run) error {
 	if err := db.Create(run).Error; err != nil {
 		if !IsMissingRunsCreatedByColumnError(err) {

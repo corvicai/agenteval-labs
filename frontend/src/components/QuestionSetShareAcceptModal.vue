@@ -194,4 +194,21 @@ onMounted(() => {
   padding: 10px 12px;
   font-size: 14px;
 }
+
+.modal-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 1rem 1.5rem 1.5rem;
+  border-top: 1px solid #f1f5f9;
+  background: #fff;
+}
+
+@media (max-width: 640px) {
+  .modal-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+}
 </style>
