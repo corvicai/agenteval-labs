@@ -2,6 +2,38 @@ export function getQuestionSetAgents(questionSet) {
   return Array.isArray(questionSet?.agents) ? questionSet.agents : []
 }
 
+function stringifyForSyncSignature(value) {
+  try {
+    return JSON.stringify(value)
+  } catch (e) {
+    return ''
+  }
+}
+
+export function getQuestionSetSyncSignature(questionSet) {
+  if (!questionSet) return ''
+
+  const id = String(questionSet.id || '')
+  const updatedAt = String(
+    questionSet.updated_at ||
+    questionSet.updatedAt ||
+    questionSet.created_at ||
+    questionSet.createdAt ||
+    ''
+  )
+
+  if (updatedAt) {
+    return `${id}:${updatedAt}`
+  }
+
+  return `${id}:${stringifyForSyncSignature(questionSet)}`
+}
+
+export function getQuestionSetListSyncSignature(questionSets = []) {
+  if (!Array.isArray(questionSets)) return ''
+  return questionSets.map((questionSet) => getQuestionSetSyncSignature(questionSet)).join('|')
+}
+
 export function mergeQuestionSetForUI(nextSet, previousSet = null) {
   if (!nextSet) return null
   const nextAgents = getQuestionSetAgents(nextSet)

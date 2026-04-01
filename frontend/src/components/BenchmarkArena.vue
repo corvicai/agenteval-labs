@@ -493,7 +493,7 @@ import { useWSStore } from '../stores/wsStore'
 import { extractTextOnly } from '../utils/chatHelpers.js'
 import { processContent } from '../utils/markdown.js'
 import { isEvaluatorAgentObject, toAgentID, uniqueStringIDs, mergeAgentIDs } from '../utils/arena/agents.js'
-import { mergeQuestionSetForUI, getRunQuestionSetID } from '../utils/arena/questionSet.js'
+import { mergeQuestionSetForUI, getQuestionSetListSyncSignature, getQuestionSetSyncSignature, getRunQuestionSetID } from '../utils/arena/questionSet.js'
 import { extractScoreOutOfTen, truncatePreviewText, extractQuestionIdsFromQuestionSet, parseEvaluatorTaskQuestionID } from '../utils/arena/parsing.js'
 import { calculateStats, calculateAverageEvaluationScore, formatDuration } from '../utils/arena/stats.js'
 import { flattenQuestionSetQuestions, hasQuestionBeenRun as hasQuestionBeenRunUtil, getQuestionStatus as getQuestionStatusUtil, isQuestionLoading as isQuestionLoadingUtil, getQuestionStatusText as getQuestionStatusTextUtil, getQuestionStatusTooltip as getQuestionStatusTooltipUtil } from '../utils/arena/questions.js'
@@ -502,6 +502,7 @@ import { splitSelectedAgents as splitSelectedAgentsUtil, resolveRunAgentIds as r
 import { saveRunProgress as saveRunProgressUtil, loadRunProgress as loadRunProgressUtil, clearRunProgress as clearRunProgressUtil, hasLoadingResults as hasLoadingResultsUtil, waitForResultsToLoad as waitForResultsToLoadUtil } from '../utils/arena/progress.js'
 import { getAgentResults as getAgentResultsUtil } from '../utils/arena/results.js'
 import { registerArenaWsEvents } from '../utils/arena/wsBindings.js'
+import { getRecentRunsSyncSignature } from '../utils/arena/cache.js'
 import { useArenaRetryTracking } from '../composables/useArenaRetryTracking.js'
 import { useArenaEvaluatorRuns } from '../composables/useArenaEvaluatorRuns.js'
 import { useArenaRetryReconciliation } from '../composables/useArenaRetryReconciliation.js'
@@ -527,14 +528,6 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['update:currentQuestionSet', 'trigger-print', 'manage-agents'])
-
-watch(() => props.questionSets, (sets) => {
-  // Question sets updated
-}, { immediate: true })
-
-watch(() => props.agents, (agents) => {
-  // Agents updated
-}, { immediate: true })
 
 const wsStore = useWSStore()
 const { state: wsState } = wsStore
@@ -737,9 +730,12 @@ function maybeStopRunningWhenIdle() {
   wsStore.setRunningQuestionSetId(null)
 }
 
+const questionSetListSyncKey = computed(() => getQuestionSetListSyncSignature(props.questionSets))
+const recentRunsSyncKey = computed(() => getRecentRunsSyncSignature(wsState.recentRuns))
+
 // Init logic for Question Set
-watch(() => props.questionSets, (sets) => {
-  const nextSets = Array.isArray(sets) ? sets : []
+watch(questionSetListSyncKey, () => {
+  const nextSets = Array.isArray(props.questionSets) ? props.questionSets : []
 
   if (!currentQuestionSet.value) {
     if (nextSets.length > 0) {
@@ -751,12 +747,15 @@ watch(() => props.questionSets, (sets) => {
   // Sync current set with updated data from props
   const updated = nextSets.find(s => s.id === currentQuestionSet.value.id)
   if (updated) {
-    currentQuestionSet.value = mergeQuestionSetForUI(updated, currentQuestionSet.value)
+    const merged = mergeQuestionSetForUI(updated, currentQuestionSet.value)
+    if (getQuestionSetSyncSignature(merged) !== getQuestionSetSyncSignature(currentQuestionSet.value)) {
+      currentQuestionSet.value = merged
+    }
     return
   }
 
   currentQuestionSet.value = null
-}, { immediate: true, deep: true })
+}, { immediate: true })
 
 // Watch for parent-driven selection changes
 watch(() => props.initialQuestionSetId, (newId) => {
@@ -1768,7 +1767,7 @@ function ensureResultsLoaded() {
   }, 1000)
 }
 
-watch(() => wsState.recentRuns, () => {
+watch(recentRunsSyncKey, () => {
   if (currentQuestionSet.value && !isRunning.value && !currentRun.value) {
     const running = getRunningRunForCurrentQS()
     if (running?.id) {
@@ -1784,7 +1783,7 @@ watch(() => wsState.recentRuns, () => {
   if (latestId && cached?.runId !== latestId) {
     fetchLatestResultsForQS(qsId)
   }
-}, { deep: true })
+})
 
 function getAgentResults(agentId, includeAllQuestions = false) {
   return getAgentResultsUtil({
@@ -2012,8 +2011,14 @@ watch(() => wsState.isConnected, async (connected) => {
   if (activeRunId) {
     await restoreActiveRun(activeRunId)
   } else if (currentQuestionSet.value?.id && !isRunning.value) {
-    latestRunCache.delete(currentQuestionSet.value.id)
-    await fetchLatestResultsForQS(currentQuestionSet.value.id)
+    const questionSetId = String(currentQuestionSet.value.id)
+    const latestRunId = String(getRecentRunIdForQS(questionSetId) || '')
+    const currentRunId = String(currentRun.value?.id || '')
+
+    if (!currentRunId || (latestRunId && latestRunId !== currentRunId)) {
+      latestRunCache.delete(questionSetId)
+      await fetchLatestResultsForQS(questionSetId)
+    }
   }
   await reconcileRetriesFromServer()
 })

@@ -18,6 +18,48 @@ export function useArenaRunResultsLoader(options = {}) {
     getSelectedQuestionId
   } = options
 
+  function getResultSyncSignature(result = {}, agentId = '', questionId = '') {
+    const id = String(result?.id || '')
+    const status = result?.success === true ? 'success' : (result?.error ? 'error' : 'pending')
+    const contentHash = String(result?.content_hash || '')
+    return `${id}:${agentId}:${questionId}:${status}:${contentHash}`
+  }
+
+  function getCurrentRunLiteSignature() {
+    const runId = String(currentRun.value?.id || '')
+    if (!runId) return ''
+
+    const runStatus = String(currentRun.value?.status || '')
+    const total = String(totalTasks.value || '')
+    const resultSignatures = []
+    const agentResultsMap = runResults.value || {}
+
+    Object.keys(agentResultsMap).forEach((agentId) => {
+      const agentResults = agentResultsMap[agentId] || {}
+      Object.keys(agentResults).forEach((questionId) => {
+        resultSignatures.push(getResultSyncSignature(agentResults[questionId], agentId, questionId))
+      })
+    })
+
+    resultSignatures.sort()
+    return `${runId}:${runStatus}:${total}:${resultSignatures.join('|')}`
+  }
+
+  function getIncomingRunLiteSignature(data) {
+    const runId = String(data?.run?.id || '')
+    if (!runId) return ''
+
+    const runStatus = String(data?.run?.status || '')
+    const total = String(data?.run?.total_tasks || data?.run?.totalTasks || '')
+    const results = Array.isArray(data?.results) ? data.results : []
+    const resultSignatures = results.map((result) =>
+      getResultSyncSignature(result, result?.agent_id, String(result?.question_id))
+    )
+
+    resultSignatures.sort()
+    return `${runId}:${runStatus}:${total}:${resultSignatures.join('|')}`
+  }
+
   function getRecentRunIdForQS(qsId) {
     return getRecentRunIdForQuestionSet(wsState.recentRuns, qsId)
   }
@@ -38,6 +80,11 @@ export function useArenaRunResultsLoader(options = {}) {
   }
 
   function applyRunLiteData(data) {
+    const incomingSignature = getIncomingRunLiteSignature(data)
+    if (incomingSignature && incomingSignature === getCurrentRunLiteSignature()) {
+      return
+    }
+
     runResults.value = {}
     taskProgress.value = {}
     currentRun.value = null

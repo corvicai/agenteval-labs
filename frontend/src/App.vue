@@ -299,6 +299,7 @@ import { useWSStore } from './stores/wsStore'
 import { downloadManager } from './services/DownloadManager.js'
 import { contentCache } from './services/ContentCache.js'
 import { generateQuestionSetName } from './utils/nameGenerator.js'
+import { getQuestionSetListSyncSignature, getQuestionSetSyncSignature } from './utils/arena/questionSet.js'
 import { config } from './config'
 import './App.css'
 
@@ -528,10 +529,10 @@ watch(currentQuestionSet, async (newSet) => {
   }
 })
 
+const questionSetListSyncKey = computed(() => getQuestionSetListSyncSignature(wsState.questionSets))
 
-
-watch(() => wsState.questionSets, (newSets) => {
-  const sets = Array.isArray(newSets) ? newSets : []
+watch(questionSetListSyncKey, () => {
+  const sets = Array.isArray(wsState.questionSets) ? wsState.questionSets : []
 
   if (!currentQuestionSet.value) {
     if (sets.length > 0) {
@@ -543,7 +544,7 @@ watch(() => wsState.questionSets, (newSets) => {
 
   // Sync current selection with the new object in store (it might have been updated via broadcast)
   const updated = sets.find(s => s.id === currentQuestionSet.value.id)
-  if (updated && updated !== currentQuestionSet.value) {
+  if (updated && getQuestionSetSyncSignature(updated) !== getQuestionSetSyncSignature(currentQuestionSet.value)) {
     console.log('[App] Syncing currentQuestionSet with store update')
     currentQuestionSet.value = updated
     return
@@ -553,7 +554,7 @@ watch(() => wsState.questionSets, (newSets) => {
     console.log('[App] Current question set no longer exists, clearing selection')
     loadQuestionSets()
   }
-}, { immediate: true, deep: true })
+}, { immediate: true })
 
 watch(() => wsState.runningQuestionSetId, () => {
   // Reschedule the AFK timer whenever run state changes so it picks up the
@@ -922,9 +923,14 @@ async function loadQuestionSets(preferredId = null) {
         
         // We REMOVED the "uniqueSets[0]" and "uniqueSets[uniqueSets.length - 1]" fallbacks 
         // to ensure we only show a set if it actually matches our context.
-        currentQuestionSet.value = targetSet || null
+        const nextSelection = targetSet || null
+        if (getQuestionSetSyncSignature(nextSelection) !== getQuestionSetSyncSignature(currentQuestionSet.value)) {
+          currentQuestionSet.value = nextSelection
+        }
     } else {
-      currentQuestionSet.value = null
+      if (currentQuestionSet.value !== null) {
+        currentQuestionSet.value = null
+      }
     }
   } catch (e) {
     console.error('Failed to load question sets:', e)
