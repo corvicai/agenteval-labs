@@ -4,6 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -11,15 +12,36 @@ import (
 	"os"
 )
 
+// ParseEncryptionKey accepts raw AES keys (16/24/32 chars) and hex-encoded keys
+// (32/48/64 chars that decode to 16/24/32 bytes).
+func ParseEncryptionKey(raw string) ([]byte, string, error) {
+	if raw == "" {
+		return nil, "", errors.New("ENCRYPTION_KEY environment variable not set")
+	}
+
+	if len(raw) == 16 || len(raw) == 24 || len(raw) == 32 {
+		return []byte(raw), "raw", nil
+	}
+
+	switch len(raw) {
+	case 32, 48, 64:
+		decoded, err := hex.DecodeString(raw)
+		if err == nil {
+			switch len(decoded) {
+			case 16, 24, 32:
+				return decoded, "hex", nil
+			}
+		}
+	}
+
+	return nil, "", fmt.Errorf("invalid ENCRYPTION_KEY length: %d bytes (must be 16, 24, or 32)", len(raw))
+}
+
 // Encrypt string using AES-GCM
 func Encrypt(plaintext []byte) (string, error) {
-	key := []byte(os.Getenv("ENCRYPTION_KEY"))
-	if len(key) == 0 {
-		return "", errors.New("ENCRYPTION_KEY environment variable not set")
-	}
-	// Key must be 16, 24, or 32 bytes for AES-128, AES-192, or AES-256
-	if len(key) != 16 && len(key) != 24 && len(key) != 32 {
-		return "", fmt.Errorf("invalid ENCRYPTION_KEY length: %d bytes (must be 16, 24, or 32)", len(key))
+	key, _, err := ParseEncryptionKey(os.Getenv("ENCRYPTION_KEY"))
+	if err != nil {
+		return "", err
 	}
 
 	block, err := aes.NewCipher(key)
@@ -43,9 +65,9 @@ func Encrypt(plaintext []byte) (string, error) {
 
 // Decrypt string using AES-GCM
 func Decrypt(cryptoText string) ([]byte, error) {
-	key := []byte(os.Getenv("ENCRYPTION_KEY"))
-	if len(key) == 0 {
-		return nil, errors.New("ENCRYPTION_KEY environment variable not set")
+	key, _, err := ParseEncryptionKey(os.Getenv("ENCRYPTION_KEY"))
+	if err != nil {
+		return nil, err
 	}
 
 	ciphertext, err := base64.StdEncoding.DecodeString(cryptoText)

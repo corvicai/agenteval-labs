@@ -24,6 +24,7 @@ import (
 	"benchmarking-platform/internal/firebase"
 	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/middleware"
+	"benchmarking-platform/internal/security"
 	"benchmarking-platform/models"
 	"benchmarking-platform/orchestrator"
 )
@@ -232,16 +233,18 @@ func main() {
 		}
 		logger.Warn("[SECURITY] ENCRYPTION_KEY not set, using development fallback key")
 	} else {
-		keyLen := len(encryptionKey)
-		if keyLen != 16 && keyLen != 24 && keyLen != 32 {
+		key, format, err := security.ParseEncryptionKey(encryptionKey)
+		if err != nil {
 			if os.Getenv("APP_ENV") == "production" {
-				log.Fatalf("[SECURITY] FATAL: invalid ENCRYPTION_KEY length: %d bytes (must be 16, 24, or 32)", keyLen)
+				log.Fatalf("[SECURITY] FATAL: %v", err)
 			}
-			logger.Warn("[SECURITY] Invalid ENCRYPTION_KEY length (%d), using development fallback key", keyLen)
+			logger.Warn("[SECURITY] Invalid ENCRYPTION_KEY (%v), using development fallback key", err)
 			encryptionKey = "dev-temp-encryption-key-00000001"
 			if err := os.Setenv("ENCRYPTION_KEY", encryptionKey); err != nil {
 				log.Fatalf("[SECURITY] FATAL: Failed to set fallback ENCRYPTION_KEY: %v", err)
 			}
+		} else if format == "hex" {
+			logger.Warn("[SECURITY] ENCRYPTION_KEY loaded from hex-encoded secret (%d chars -> %d bytes)", len(encryptionKey), len(key))
 		}
 	}
 
