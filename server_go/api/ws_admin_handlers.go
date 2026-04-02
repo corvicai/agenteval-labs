@@ -12,6 +12,7 @@ import (
 
 	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/security"
+	"benchmarking-platform/internal/service"
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
@@ -1443,13 +1444,18 @@ func (h *Hub) handleAdminGetDebugInfo(c *Connection, env models.Envelope) {
 		return
 	}
 
+	encryptionKeyHealth, err := service.NewEncryptionKeyService(h.db).InspectCurrentKeyHealth()
+	if err != nil {
+		logger.Warn("[ADMIN] failed to inspect persisted encryption key state: %v", err)
+	}
+
 	response := models.AdminDebugResponse{
 		AppEnv:            strings.TrimSpace(os.Getenv("APP_ENV")),
 		GoVersion:         goruntime.Version(),
 		ServiceName:       strings.TrimSpace(os.Getenv("K_SERVICE")),
 		ServiceRevision:   strings.TrimSpace(os.Getenv("K_REVISION")),
 		Revision:          buildAdminDebugRevision(),
-		Key:               buildAdminDebugKeyStatus(),
+		Key:               buildAdminDebugKeyStatus(encryptionKeyHealth),
 		Agents:            analyzeAdminDebugAgents(agentRows),
 		QuestionSetAgents: analyzeAdminDebugQuestionSetAgents(questionSetAgentRows),
 		GeneratedAt:       time.Now().UTC(),
@@ -1609,17 +1615,25 @@ func buildAdminDebugRevision() models.AdminDebugRevision {
 	}
 }
 
-func buildAdminDebugKeyStatus() models.AdminDebugKeyStatus {
+func buildAdminDebugKeyStatus(health service.EncryptionKeyHealth) models.AdminDebugKeyStatus {
 	raw := os.Getenv("ENCRYPTION_KEY")
 	runtimeStatus := security.GetEncryptionKeyRuntimeStatus()
 	status := models.AdminDebugKeyStatus{
-		Status:       runtimeStatus.Status,
-		Source:       runtimeStatus.Source,
-		Summary:      runtimeStatus.Summary,
-		Present:      strings.TrimSpace(raw) != "",
-		CharLength:   len(raw),
-		Loaded:       runtimeStatus.Loaded,
-		UsedFallback: runtimeStatus.UsedFallback,
+		Status:                  runtimeStatus.Status,
+		Source:                  runtimeStatus.Source,
+		Summary:                 runtimeStatus.Summary,
+		Present:                 strings.TrimSpace(raw) != "",
+		CharLength:              len(raw),
+		Loaded:                  runtimeStatus.Loaded,
+		UsedFallback:            runtimeStatus.UsedFallback,
+		StatePresent:            health.StatePresent,
+		StateStatus:             health.StateStatus,
+		StateSummary:            health.StateSummary,
+		CipherVersion:           health.CipherVersion,
+		FingerprintPrefix:       health.ObservedFingerprintPrefix,
+		StoredFingerprintPrefix: health.StoredFingerprintPrefix,
+		LastSeenAt:              health.LastSeenAt,
+		LastMismatchAt:          health.LastMismatchAt,
 	}
 
 	if !status.Present {
@@ -1650,6 +1664,9 @@ func buildAdminDebugKeyStatus() models.AdminDebugKeyStatus {
 
 	status.Format = firstNonEmptyAdminDebug(runtimeStatus.Format, format)
 	status.ParsedBytes = maxAdminDebugInt(runtimeStatus.ParsedBytes, len(key))
+	if status.FingerprintPrefix == "" {
+		status.FingerprintPrefix = shortAdminDebugFingerprint(security.KeyFingerprint(key))
+	}
 	if status.Status == "" {
 		status.Status = "loaded"
 	}
@@ -1682,6 +1699,14 @@ func maxAdminDebugInt(current, fallback int) int {
 		return current
 	}
 	return fallback
+}
+
+func shortAdminDebugFingerprint(fingerprint string) string {
+	trimmed := strings.TrimSpace(fingerprint)
+	if len(trimmed) <= 12 {
+		return trimmed
+	}
+	return trimmed[:12]
 }
 
 func parseAdminRunTimestamp(raw string, fallback time.Time) time.Time {

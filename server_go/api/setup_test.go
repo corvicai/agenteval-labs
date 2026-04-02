@@ -55,6 +55,7 @@ func setup() {
 		&models.QuestionSet{},
 		&models.QuestionSetAgent{},
 		&models.QuestionSetShareLink{},
+		&models.EncryptionKeyState{},
 		&models.Run{},
 		&models.RunResult{},
 		&models.Evaluation{},

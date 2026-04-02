@@ -568,6 +568,14 @@
                   <dd>{{ debugInfo.key.source || '-' }}</dd>
                 </div>
                 <div>
+                  <dt>Fingerprint</dt>
+                  <dd>{{ debugInfo.key.fingerprint_prefix || '-' }}</dd>
+                </div>
+                <div>
+                  <dt>Stored Fingerprint</dt>
+                  <dd>{{ debugInfo.key.stored_fingerprint_prefix || '-' }}</dd>
+                </div>
+                <div>
                   <dt>Present</dt>
                   <dd>{{ debugInfo.key.present ? 'Yes' : 'No' }}</dd>
                 </div>
@@ -591,9 +599,33 @@
                   <dt>Used Fallback</dt>
                   <dd>{{ debugInfo.key.used_fallback ? 'Yes' : 'No' }}</dd>
                 </div>
+                <div>
+                  <dt>State Present</dt>
+                  <dd>{{ debugInfo.key.state_present ? 'Yes' : 'No' }}</dd>
+                </div>
+                <div>
+                  <dt>State Status</dt>
+                  <dd>{{ debugInfo.key.state_status || '-' }}</dd>
+                </div>
+                <div>
+                  <dt>Cipher Version</dt>
+                  <dd>{{ debugInfo.key.cipher_version || '-' }}</dd>
+                </div>
+                <div>
+                  <dt>Last Seen</dt>
+                  <dd>{{ formatDateTime(debugInfo.key.last_seen_at) }}</dd>
+                </div>
+                <div v-if="debugInfo.key.last_mismatch_at">
+                  <dt>Last Mismatch</dt>
+                  <dd>{{ formatDateTime(debugInfo.key.last_mismatch_at) }}</dd>
+                </div>
                 <div class="debug-kv-full">
                   <dt>Summary</dt>
                   <dd>{{ debugInfo.key.summary || '-' }}</dd>
+                </div>
+                <div class="debug-kv-full">
+                  <dt>State Summary</dt>
+                  <dd>{{ debugInfo.key.state_summary || '-' }}</dd>
                 </div>
                 <div v-if="debugInfo.key.error" class="debug-kv-full debug-kv-error">
                   <dt>Validation Error</dt>

@@ -25,6 +25,7 @@ import (
 	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/middleware"
 	"benchmarking-platform/internal/security"
+	"benchmarking-platform/internal/service"
 	"benchmarking-platform/models"
 	"benchmarking-platform/orchestrator"
 )
@@ -285,6 +286,18 @@ func main() {
 				CharLength:  len(encryptionKey),
 				ParsedBytes: len(key),
 			})
+		}
+	}
+
+	if database != nil {
+		encryptionKeyService := service.NewEncryptionKeyService(database)
+		health, err := encryptionKeyService.ReconcileCurrentKey()
+		if err != nil {
+			logger.Warn("[SECURITY] Failed to reconcile encryption key state: %v", err)
+		} else if health.StateStatus == "mismatch" || health.StateStatus == "sentinel_failed" {
+			logger.Warn("[SECURITY] %s", health.StateSummary)
+		} else {
+			logger.Info("[SECURITY] %s", health.StateSummary)
 		}
 	}
 

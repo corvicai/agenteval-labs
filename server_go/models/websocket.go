@@ -184,16 +184,24 @@ type AdminDebugRevision struct {
 }
 
 type AdminDebugKeyStatus struct {
-	Status       string `json:"status,omitempty"`
-	Source       string `json:"source,omitempty"`
-	Summary      string `json:"summary,omitempty"`
-	Present      bool   `json:"present"`
-	Format       string `json:"format,omitempty"`
-	CharLength   int    `json:"char_length"`
-	ParsedBytes  int    `json:"parsed_bytes"`
-	Loaded       bool   `json:"loaded"`
-	UsedFallback bool   `json:"used_fallback,omitempty"`
-	Error        string `json:"error,omitempty"`
+	Status                  string     `json:"status,omitempty"`
+	Source                  string     `json:"source,omitempty"`
+	Summary                 string     `json:"summary,omitempty"`
+	Present                 bool       `json:"present"`
+	Format                  string     `json:"format,omitempty"`
+	CharLength              int        `json:"char_length"`
+	ParsedBytes             int        `json:"parsed_bytes"`
+	Loaded                  bool       `json:"loaded"`
+	UsedFallback            bool       `json:"used_fallback,omitempty"`
+	FingerprintPrefix       string     `json:"fingerprint_prefix,omitempty"`
+	StatePresent            bool       `json:"state_present"`
+	StateStatus             string     `json:"state_status,omitempty"`
+	StateSummary            string     `json:"state_summary,omitempty"`
+	CipherVersion           string     `json:"cipher_version,omitempty"`
+	StoredFingerprintPrefix string     `json:"stored_fingerprint_prefix,omitempty"`
+	LastSeenAt              *time.Time `json:"last_seen_at,omitempty"`
+	LastMismatchAt          *time.Time `json:"last_mismatch_at,omitempty"`
+	Error                   string     `json:"error,omitempty"`
 }
 
 type AdminDebugConfigFailure struct {

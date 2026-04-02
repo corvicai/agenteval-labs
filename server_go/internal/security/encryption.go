@@ -4,6 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -67,13 +68,13 @@ func GetEncryptionKeyRuntimeStatus() EncryptionKeyRuntimeStatus {
 	return encryptionKeyRuntimeStatus
 }
 
-// Encrypt string using AES-GCM
-func Encrypt(plaintext []byte) (string, error) {
-	key, _, err := ParseEncryptionKey(os.Getenv("ENCRYPTION_KEY"))
-	if err != nil {
-		return "", err
-	}
+func KeyFingerprint(key []byte) string {
+	sum := sha256.Sum256(key)
+	return hex.EncodeToString(sum[:])
+}
 
+// EncryptWithKey encrypts bytes using AES-GCM and the provided parsed key.
+func EncryptWithKey(key []byte, plaintext []byte) (string, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", err
@@ -93,13 +94,18 @@ func Encrypt(plaintext []byte) (string, error) {
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
-// Decrypt string using AES-GCM
-func Decrypt(cryptoText string) ([]byte, error) {
+// Encrypt string using AES-GCM
+func Encrypt(plaintext []byte) (string, error) {
 	key, _, err := ParseEncryptionKey(os.Getenv("ENCRYPTION_KEY"))
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
+	return EncryptWithKey(key, plaintext)
+}
+
+// DecryptWithKey decrypts a base64 AES-GCM ciphertext with the provided parsed key.
+func DecryptWithKey(key []byte, cryptoText string) ([]byte, error) {
 	ciphertext, err := base64.StdEncoding.DecodeString(cryptoText)
 	if err != nil {
 		return nil, err
@@ -122,4 +128,14 @@ func Decrypt(cryptoText string) ([]byte, error) {
 
 	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
 	return gcm.Open(nil, nonce, ciphertext, nil)
+}
+
+// Decrypt string using AES-GCM
+func Decrypt(cryptoText string) ([]byte, error) {
+	key, _, err := ParseEncryptionKey(os.Getenv("ENCRYPTION_KEY"))
+	if err != nil {
+		return nil, err
+	}
+
+	return DecryptWithKey(key, cryptoText)
 }

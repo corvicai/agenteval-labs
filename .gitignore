@@ -42,6 +42,7 @@ ops/nginx/.htpasswd
 ops/nginx/.basic-auth-hosts.map
 *.sql
 *.sql.gz
+!server_go/migrations/*.sql
 
 *firebase-service-account.json
 .mutagen.yml
