@@ -138,7 +138,7 @@ All messages use a standard envelope: `{ "type": "REQ_*", "correlation_id": "...
 |----------|---------|-------------|
 | `DATABASE_URL` | — | PostgreSQL connection string |
 | `JWT_SECRET` | — | JWT signing secret (min 32 chars) |
-| `ENCRYPTION_KEY` | — | AES-256 key (32 chars) for encrypted agent configs |
+| `ENCRYPTION_KEY` | — | AES key for encrypted agent configs. Preferred: raw 32 chars. Compatibility: raw 16/24/32 chars or hex 32/48/64 chars |
 | `PORT` | `8080` | API port |
 | `APP_ENV` | `development` | `development` or `production` (disables dev features) |
 | `FIREBASE_SERVICE_ACCOUNT` | — | Path to Firebase Service Account JSON |
