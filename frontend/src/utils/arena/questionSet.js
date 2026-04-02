@@ -34,6 +34,39 @@ export function getQuestionSetListSyncSignature(questionSets = []) {
   return questionSets.map((questionSet) => getQuestionSetSyncSignature(questionSet)).join('|')
 }
 
+export function resolveQuestionSetSelection({
+  questionSets = [],
+  preferredId = '',
+  lastQuestionSetId = '',
+  currentQuestionSet = null
+} = {}) {
+  const sets = Array.isArray(questionSets) ? questionSets : []
+  const preferred = String(preferredId || '')
+  const lastSelected = String(lastQuestionSetId || '')
+  const currentId = String(currentQuestionSet?.id || '')
+
+  if (preferred) {
+    const preferredMatch = sets.find((questionSet) => String(questionSet?.id || '') === preferred)
+    if (preferredMatch) return preferredMatch
+
+    if (currentQuestionSet && currentId === preferred) {
+      return currentQuestionSet
+    }
+  }
+
+  if (lastSelected) {
+    const lastSelectedMatch = sets.find((questionSet) => String(questionSet?.id || '') === lastSelected)
+    if (lastSelectedMatch) return lastSelectedMatch
+  }
+
+  if (currentId) {
+    const currentMatch = sets.find((questionSet) => String(questionSet?.id || '') === currentId)
+    if (currentMatch) return currentMatch
+  }
+
+  return null
+}
+
 export function mergeQuestionSetForUI(nextSet, previousSet = null) {
   if (!nextSet) return null
   const nextAgents = getQuestionSetAgents(nextSet)

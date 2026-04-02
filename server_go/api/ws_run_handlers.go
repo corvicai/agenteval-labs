@@ -66,6 +66,14 @@ func normalizeResultsEvaluationsForDisplay(results []models.RunResult) {
 	}
 }
 
+func ensureAgentSyncConfigs(agents []models.Agent) {
+	for i := range agents {
+		if len(agents[i].Config) == 0 {
+			agents[i].Config = models.EncryptedJSON([]byte(`{}`))
+		}
+	}
+}
+
 func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 	var payload models.StartRunPayload
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
@@ -276,9 +284,22 @@ func (h *Hub) handleSyncState(c *Connection, env models.Envelope) {
 
 	// 1. Get Agents
 	if err := h.db.Where("workspace_id = ?", c.WorkspaceID).Order("created_at desc").Find(&payload.Agents).Error; err != nil {
-		logger.Error("[WS] SyncState error loading agents: %v", err)
-		c.SendError(env.CorrelationID, "failed to load agents: "+err.Error())
-		return
+		logger.Warn("[WS] SyncState full agent load failed, retrying without encrypted config: %v", err)
+		payload.Warnings = append(payload.Warnings, "Some agent configs could not be decrypted; returning agent metadata without config.")
+
+		if fallbackErr := h.db.Model(&models.Agent{}).
+			Select("id", "workspace_id", "name", "provider_type", "enabled", "position", "max_concurrency", "created_at").
+			Where("workspace_id = ?", c.WorkspaceID).
+			Order("created_at desc").
+			Find(&payload.Agents).Error; fallbackErr != nil {
+			logger.Error("[WS] SyncState fallback agent load failed: %v", fallbackErr)
+			c.SendError(env.CorrelationID, "failed to load agents: "+fallbackErr.Error())
+			return
+		}
+
+		ensureAgentSyncConfigs(payload.Agents)
+	} else {
+		ensureAgentSyncConfigs(payload.Agents)
 	}
 
 	// 2. Get Question Sets
@@ -289,9 +310,19 @@ func (h *Hub) handleSyncState(c *Connection, env models.Envelope) {
 		Preload("Agents").
 		Order("question_sets.created_at desc").
 		Find(&payload.QuestionSets).Error; err != nil {
-		logger.Error("[WS] SyncState error loading question sets: %v", err)
-		c.SendError(env.CorrelationID, "failed to load question sets: "+err.Error())
-		return
+		logger.Warn("[WS] SyncState full question set load failed, retrying without agent overrides: %v", err)
+		payload.Warnings = append(payload.Warnings, "Some question set agent overrides could not be decrypted; returning question sets without embedded agent overrides.")
+
+		if fallbackErr := h.db.Model(&models.QuestionSet{}).
+			Joins("JOIN clients ON clients.id = question_sets.client_id").
+			Where("clients.workspace_id = ?", c.WorkspaceID).
+			Preload("Client").
+			Order("question_sets.created_at desc").
+			Find(&payload.QuestionSets).Error; fallbackErr != nil {
+			logger.Error("[WS] SyncState fallback question set load failed: %v", fallbackErr)
+			c.SendError(env.CorrelationID, "failed to load question sets: "+fallbackErr.Error())
+			return
+		}
 	}
 
 	// 3. Get Recent Runs (last 10)

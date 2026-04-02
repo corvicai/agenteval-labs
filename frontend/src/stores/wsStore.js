@@ -65,6 +65,7 @@ export function useWSStore() {
                 const nextAgents = data.agents || []
                 const nextQuestionSets = data.question_sets || []
                 const nextRuns = data.recent_runs || []
+                const warnings = Array.isArray(data.warnings) ? data.warnings : []
 
                 if (shouldReplaceList(state.agents, nextAgents)) {
                     state.agents = nextAgents
@@ -74,6 +75,9 @@ export function useWSStore() {
                 }
                 if (shouldReplaceList(state.recentRuns, nextRuns)) {
                     state.recentRuns = nextRuns
+                }
+                if (warnings.length > 0) {
+                    console.warn('[WS Store] Sync completed with warnings:', warnings)
                 }
                 state.lastError = null
             } else {

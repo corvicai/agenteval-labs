@@ -299,7 +299,7 @@ import { useWSStore } from './stores/wsStore'
 import { downloadManager } from './services/DownloadManager.js'
 import { contentCache } from './services/ContentCache.js'
 import { generateQuestionSetName } from './utils/nameGenerator.js'
-import { getQuestionSetListSyncSignature, getQuestionSetSyncSignature } from './utils/arena/questionSet.js'
+import { getQuestionSetListSyncSignature, getQuestionSetSyncSignature, resolveQuestionSetSelection } from './utils/arena/questionSet.js'
 import { config } from './config'
 import './App.css'
 
@@ -816,8 +816,7 @@ async function loadWorkspaces() {
 
     if ((workspaces.value?.length || 0) === 0) {
       try {
-        const fallbackOwner = currentUserName.value || currentUserEmail.value || 'My'
-        const fallbackName = `${fallbackOwner} Workspace`
+        const fallbackName = 'main'
         console.warn('[App] No workspaces found; creating a default workspace:', fallbackName)
         const created = await wsService.createWorkspace(fallbackName)
         workspaces.value = created ? [created] : []
@@ -899,35 +898,26 @@ async function loadQuestionSets(preferredId = null) {
   if (!isAuthenticated.value || !currentWorkspace.value) return
   try {
     // Data is now managed by wsStore, but we need to handle selection logic
-    const uniqueSets = wsState.questionSets
+    const uniqueSets = Array.isArray(wsState.questionSets) ? wsState.questionSets : []
+    const targetSet = resolveQuestionSetSelection({
+      questionSets: uniqueSets,
+      preferredId,
+      lastQuestionSetId: localStorage.getItem('lastQuestionSetId'),
+      currentQuestionSet: currentQuestionSet.value
+    })
     
-    if (uniqueSets && uniqueSets.length > 0) {
-        // Preference logic: exact match > last selected
-        const lastQsId = localStorage.getItem('lastQuestionSetId')
-        let targetSet = null
-        
-        if (lastQsId) {
-          targetSet = uniqueSets.find(qs => qs.id === lastQsId)
-        }
-
-        if (!targetSet && preferredId) {
-          targetSet = uniqueSets.find(s => s.id === preferredId)
-        }
-        
-        // If still no target and we have a current selection, try to keep it if it exists in this workspace
-        if (!targetSet && currentQuestionSet.value) {
-           targetSet = uniqueSets.find(s => s.id === currentQuestionSet.value.id)
-        }
-        
+    if (uniqueSets.length > 0) {
         console.log('[App] loadQuestionSets: final targetSet:', targetSet?.name || 'none (defaulting to empty state)')
         
-        // We REMOVED the "uniqueSets[0]" and "uniqueSets[uniqueSets.length - 1]" fallbacks 
-        // to ensure we only show a set if it actually matches our context.
         const nextSelection = targetSet || null
         if (getQuestionSetSyncSignature(nextSelection) !== getQuestionSetSyncSignature(currentQuestionSet.value)) {
           currentQuestionSet.value = nextSelection
         }
     } else {
+      if (targetSet && getQuestionSetSyncSignature(targetSet) === getQuestionSetSyncSignature(currentQuestionSet.value)) {
+        console.log('[App] loadQuestionSets: preserving preferred selection while store sync catches up')
+        return
+      }
       if (currentQuestionSet.value !== null) {
         currentQuestionSet.value = null
       }

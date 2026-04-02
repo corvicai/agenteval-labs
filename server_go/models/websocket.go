@@ -130,6 +130,7 @@ type SyncStatePayload struct {
 	Agents       []Agent       `json:"agents"`
 	QuestionSets []QuestionSet `json:"question_sets"`
 	RecentRuns   []Run         `json:"recent_runs"`
+	Warnings     []string      `json:"warnings,omitempty"`
 }
 
 type AdminFilterPayload struct {
