@@ -796,6 +796,10 @@ class WebSocketService {
         return this.request('REQ_ADMIN_GET_LOGIN_LOGS', { limit })
     }
 
+    adminGetDebugInfo() {
+        return this.request('REQ_ADMIN_GET_DEBUG_INFO', {})
+    }
+
     // Manager Panel Methods
     managerGetWorkspaces() {
         return this.request('REQ_MANAGER_GET_WORKSPACES', {})

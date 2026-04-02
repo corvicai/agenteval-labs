@@ -110,6 +110,7 @@ const (
 	ReqAdminGenerateInvite    = "REQ_ADMIN_GENERATE_INVITE"
 	ReqAdminRemoveUserFromOrg = "REQ_ADMIN_REMOVE_USER_FROM_ORG"
 	ReqAdminGetLoginLogs      = "REQ_ADMIN_GET_LOGIN_LOGS"
+	ReqAdminGetDebugInfo      = "REQ_ADMIN_GET_DEBUG_INFO"
 	ReqChangePassword         = "REQ_CHANGE_PASSWORD"
 	ReqAcceptTerms            = "REQ_ACCEPT_TERMS"
 
@@ -164,6 +165,7 @@ const (
 	DataAdminOrgProfile    = "DATA_ADMIN_ORG_PROFILE"
 	DataAdminRuns          = "DATA_ADMIN_RUNS"
 	DataAdminLoginLogs     = "DATA_ADMIN_LOGIN_LOGS"
+	DataAdminDebugInfo     = "DATA_ADMIN_DEBUG_INFO"
 
 	// Manager Data types
 	DataManagerWorkspaces = "DATA_MANAGER_WORKSPACES"

@@ -2,18 +2,40 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
+	goruntime "runtime"
 	"strings"
 	"time"
 
 	"benchmarking-platform/internal/logger"
+	"benchmarking-platform/internal/security"
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
+
+const adminDebugFailureSampleLimit = 8
+const adminDebugRecentRecordLimit = 12
+
+type adminDebugAgentRow struct {
+	ID          uuid.UUID `gorm:"column:id"`
+	WorkspaceID uuid.UUID `gorm:"column:workspace_id"`
+	Name        string    `gorm:"column:name"`
+	Config      string    `gorm:"column:config"`
+	CreatedAt   time.Time `gorm:"column:created_at"`
+}
+
+type adminDebugQuestionSetAgentRow struct {
+	QuestionSetID uuid.UUID `gorm:"column:question_set_id"`
+	AgentID       uuid.UUID `gorm:"column:agent_id"`
+	Config        string    `gorm:"column:config"`
+	CreatedAt     time.Time `gorm:"column:created_at"`
+}
 
 func (h *Hub) handleAdminGetUsers(c *Connection, env models.Envelope) {
 	if !c.IsAuthenticated {
@@ -1392,6 +1414,274 @@ func (h *Hub) handleAdminGetRuns(c *Connection, env models.Envelope) {
 		Runs:        runs,
 		GeneratedAt: time.Now().UTC(),
 	})
+}
+
+func (h *Hub) handleAdminGetDebugInfo(c *Connection, env models.Envelope) {
+	if err := h.checkAdmin(c, env); err != nil {
+		return
+	}
+
+	var agentRows []adminDebugAgentRow
+	if err := h.db.Raw(`
+		SELECT id, workspace_id, name, COALESCE(config, '') AS config, created_at
+		FROM agents
+		ORDER BY created_at DESC
+	`).Scan(&agentRows).Error; err != nil {
+		logger.Error("[ADMIN] failed to inspect agent configs: %v", err)
+		c.SendError(env.CorrelationID, "failed to inspect agent configs: "+err.Error())
+		return
+	}
+
+	var questionSetAgentRows []adminDebugQuestionSetAgentRow
+	if err := h.db.Raw(`
+		SELECT question_set_id, agent_id, COALESCE(config, '') AS config, created_at
+		FROM question_set_agents
+		ORDER BY created_at DESC
+	`).Scan(&questionSetAgentRows).Error; err != nil {
+		logger.Error("[ADMIN] failed to inspect question set agent configs: %v", err)
+		c.SendError(env.CorrelationID, "failed to inspect question set agent configs: "+err.Error())
+		return
+	}
+
+	response := models.AdminDebugResponse{
+		AppEnv:            strings.TrimSpace(os.Getenv("APP_ENV")),
+		GoVersion:         goruntime.Version(),
+		ServiceName:       strings.TrimSpace(os.Getenv("K_SERVICE")),
+		ServiceRevision:   strings.TrimSpace(os.Getenv("K_REVISION")),
+		Revision:          buildAdminDebugRevision(),
+		Key:               buildAdminDebugKeyStatus(),
+		Agents:            analyzeAdminDebugAgents(agentRows),
+		QuestionSetAgents: analyzeAdminDebugQuestionSetAgents(questionSetAgentRows),
+		GeneratedAt:       time.Now().UTC(),
+	}
+
+	if response.AppEnv == "" {
+		response.AppEnv = "development"
+	}
+
+	c.SendResponse(DataAdminDebugInfo, env.CorrelationID, response)
+}
+
+func parseAdminDebugConfig(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "empty", nil
+	}
+
+	if (strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}")) ||
+		(strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]")) {
+		return "plaintext_json", nil
+	}
+
+	shape := "invalid_other"
+	if _, err := base64.StdEncoding.DecodeString(trimmed); err == nil {
+		shape = "encrypted_like"
+	}
+
+	_, err := security.Decrypt(trimmed)
+	return shape, err
+}
+
+func analyzeAdminDebugAgents(rows []adminDebugAgentRow) models.AdminDebugConfigStats {
+	stats := models.AdminDebugConfigStats{Total: int64(len(rows))}
+
+	for index, row := range rows {
+		shape, err := parseAdminDebugConfig(row.Config)
+		decryptStatus := adminDebugDecryptStatus(shape, err)
+		switch shape {
+		case "empty":
+			stats.Empty++
+		case "plaintext_json":
+			stats.PlaintextJSON++
+		case "encrypted_like":
+			stats.EncryptedLike++
+		default:
+			stats.InvalidOther++
+		}
+
+		if index < adminDebugRecentRecordLimit {
+			record := models.AdminDebugConfigRecord{
+				ID:            row.ID.String(),
+				WorkspaceID:   row.WorkspaceID.String(),
+				Name:          row.Name,
+				CreatedAt:     row.CreatedAt,
+				Shape:         shape,
+				DecryptStatus: decryptStatus,
+			}
+			if err != nil && decryptStatus == "failed" {
+				record.Error = err.Error()
+			}
+			stats.RecentRecords = append(stats.RecentRecords, record)
+		}
+
+		if err == nil || shape == "empty" || shape == "plaintext_json" {
+			if shape == "encrypted_like" {
+				stats.DecryptOK++
+			}
+			continue
+		}
+
+		stats.DecryptFailed++
+		if len(stats.SampleFailures) < adminDebugFailureSampleLimit {
+			stats.SampleFailures = append(stats.SampleFailures, models.AdminDebugConfigFailure{
+				ID:          row.ID.String(),
+				WorkspaceID: row.WorkspaceID.String(),
+				Name:        row.Name,
+				CreatedAt:   row.CreatedAt,
+				Shape:       shape,
+				Error:       err.Error(),
+			})
+		}
+	}
+
+	return stats
+}
+
+func analyzeAdminDebugQuestionSetAgents(rows []adminDebugQuestionSetAgentRow) models.AdminDebugConfigStats {
+	stats := models.AdminDebugConfigStats{Total: int64(len(rows))}
+
+	for index, row := range rows {
+		shape, err := parseAdminDebugConfig(row.Config)
+		decryptStatus := adminDebugDecryptStatus(shape, err)
+		switch shape {
+		case "empty":
+			stats.Empty++
+		case "plaintext_json":
+			stats.PlaintextJSON++
+		case "encrypted_like":
+			stats.EncryptedLike++
+		default:
+			stats.InvalidOther++
+		}
+
+		if index < adminDebugRecentRecordLimit {
+			record := models.AdminDebugConfigRecord{
+				QuestionSetID: row.QuestionSetID.String(),
+				AgentID:       row.AgentID.String(),
+				CreatedAt:     row.CreatedAt,
+				Shape:         shape,
+				DecryptStatus: decryptStatus,
+			}
+			if err != nil && decryptStatus == "failed" {
+				record.Error = err.Error()
+			}
+			stats.RecentRecords = append(stats.RecentRecords, record)
+		}
+
+		if err == nil || shape == "empty" || shape == "plaintext_json" {
+			if shape == "encrypted_like" {
+				stats.DecryptOK++
+			}
+			continue
+		}
+
+		stats.DecryptFailed++
+		if len(stats.SampleFailures) < adminDebugFailureSampleLimit {
+			stats.SampleFailures = append(stats.SampleFailures, models.AdminDebugConfigFailure{
+				AgentID:       row.AgentID.String(),
+				QuestionSetID: row.QuestionSetID.String(),
+				CreatedAt:     row.CreatedAt,
+				Shape:         shape,
+				Error:         err.Error(),
+			})
+		}
+	}
+
+	return stats
+}
+
+func adminDebugDecryptStatus(shape string, err error) string {
+	if err == nil {
+		if shape == "encrypted_like" {
+			return "ok"
+		}
+		return "not_applicable"
+	}
+	return "failed"
+}
+
+func buildAdminDebugRevision() models.AdminDebugRevision {
+	return models.AdminDebugRevision{
+		Commit:    firstNonEmptyAdminDebug(os.Getenv("APP_REVISION"), os.Getenv("GIT_COMMIT")),
+		Branch:    firstNonEmptyAdminDebug(os.Getenv("APP_REVISION_BRANCH")),
+		Dirty:     firstNonEmptyAdminDebug(os.Getenv("APP_REVISION_DIRTY")),
+		UpdatedAt: firstNonEmptyAdminDebug(os.Getenv("APP_REVISION_UPDATED_AT")),
+	}
+}
+
+func buildAdminDebugKeyStatus() models.AdminDebugKeyStatus {
+	raw := os.Getenv("ENCRYPTION_KEY")
+	runtimeStatus := security.GetEncryptionKeyRuntimeStatus()
+	status := models.AdminDebugKeyStatus{
+		Status:       runtimeStatus.Status,
+		Source:       runtimeStatus.Source,
+		Summary:      runtimeStatus.Summary,
+		Present:      strings.TrimSpace(raw) != "",
+		CharLength:   len(raw),
+		Loaded:       runtimeStatus.Loaded,
+		UsedFallback: runtimeStatus.UsedFallback,
+	}
+
+	if !status.Present {
+		if status.Status == "" {
+			status.Status = "missing"
+		}
+		if status.Summary == "" {
+			status.Summary = "ENCRYPTION_KEY is not set"
+		}
+		status.Error = "ENCRYPTION_KEY environment variable not set"
+		return status
+	}
+
+	key, format, err := security.ParseEncryptionKey(raw)
+	if err != nil {
+		if status.Status == "" {
+			status.Status = "invalid"
+		}
+		if status.Source == "" {
+			status.Source = "environment"
+		}
+		if status.Summary == "" {
+			status.Summary = "ENCRYPTION_KEY is present but invalid"
+		}
+		status.Error = err.Error()
+		return status
+	}
+
+	status.Format = firstNonEmptyAdminDebug(runtimeStatus.Format, format)
+	status.ParsedBytes = maxAdminDebugInt(runtimeStatus.ParsedBytes, len(key))
+	if status.Status == "" {
+		status.Status = "loaded"
+	}
+	if status.Source == "" {
+		status.Source = "environment"
+	}
+	if status.Summary == "" {
+		if status.Format == "hex" {
+			status.Summary = "ENCRYPTION_KEY loaded successfully from a hex-encoded environment value"
+		} else {
+			status.Summary = "ENCRYPTION_KEY loaded successfully from environment"
+		}
+	}
+	status.Loaded = true
+	return status
+}
+
+func firstNonEmptyAdminDebug(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func maxAdminDebugInt(current, fallback int) int {
+	if current > 0 {
+		return current
+	}
+	return fallback
 }
 
 func parseAdminRunTimestamp(raw string, fallback time.Time) time.Time {

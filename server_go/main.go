@@ -231,6 +231,16 @@ func main() {
 		if err := os.Setenv("ENCRYPTION_KEY", encryptionKey); err != nil {
 			log.Fatalf("[SECURITY] FATAL: Failed to set fallback ENCRYPTION_KEY: %v", err)
 		}
+		security.SetEncryptionKeyRuntimeStatus(security.EncryptionKeyRuntimeStatus{
+			Status:       "fallback",
+			Source:       "development_fallback",
+			Summary:      "Using development fallback because ENCRYPTION_KEY was not set",
+			Loaded:       true,
+			UsedFallback: true,
+			Format:       "raw",
+			CharLength:   len(encryptionKey),
+			ParsedBytes:  len(encryptionKey),
+		})
 		logger.Warn("[SECURITY] ENCRYPTION_KEY not set, using development fallback key")
 	} else {
 		key, format, err := security.ParseEncryptionKey(encryptionKey)
@@ -243,8 +253,38 @@ func main() {
 			if err := os.Setenv("ENCRYPTION_KEY", encryptionKey); err != nil {
 				log.Fatalf("[SECURITY] FATAL: Failed to set fallback ENCRYPTION_KEY: %v", err)
 			}
+			security.SetEncryptionKeyRuntimeStatus(security.EncryptionKeyRuntimeStatus{
+				Status:          "fallback",
+				Source:          "development_fallback",
+				Summary:         "Using development fallback because the provided ENCRYPTION_KEY was invalid",
+				Loaded:          true,
+				UsedFallback:    true,
+				Format:          "raw",
+				CharLength:      len(encryptionKey),
+				ParsedBytes:     len(encryptionKey),
+				ValidationError: err.Error(),
+			})
 		} else if format == "hex" {
+			security.SetEncryptionKeyRuntimeStatus(security.EncryptionKeyRuntimeStatus{
+				Status:      "loaded",
+				Source:      "environment",
+				Summary:     "ENCRYPTION_KEY loaded successfully from a hex-encoded environment value",
+				Loaded:      true,
+				Format:      format,
+				CharLength:  len(encryptionKey),
+				ParsedBytes: len(key),
+			})
 			logger.Warn("[SECURITY] ENCRYPTION_KEY loaded from hex-encoded secret (%d chars -> %d bytes)", len(encryptionKey), len(key))
+		} else {
+			security.SetEncryptionKeyRuntimeStatus(security.EncryptionKeyRuntimeStatus{
+				Status:      "loaded",
+				Source:      "environment",
+				Summary:     "ENCRYPTION_KEY loaded successfully from environment",
+				Loaded:      true,
+				Format:      format,
+				CharLength:  len(encryptionKey),
+				ParsedBytes: len(key),
+			})
 		}
 	}
 

@@ -2,6 +2,7 @@ package api
 
 import (
 	"benchmarking-platform/models"
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 	"time"
@@ -206,5 +207,105 @@ func TestAdminHandlers(t *testing.T) {
 
 		assert.Equal(t, completedRun.ID, payload.Runs[1].ID)
 		assert.Equal(t, "Workspace Owner", payload.Runs[1].StartedByName)
+	})
+
+	t.Run("GetDebugInfo", func(t *testing.T) {
+		_, adminToken := createTestUser(t, true)
+
+		owner := models.User{
+			ID:           uuid.New(),
+			Name:         "Debug Owner",
+			Email:        "debug_owner_" + uuid.New().String() + "@example.com",
+			PasswordHash: "hash",
+		}
+		require.NoError(t, db.Create(&owner).Error)
+
+		workspace := models.Workspace{
+			ID:     uuid.New(),
+			UserID: owner.ID,
+			Name:   "Debug Workspace",
+		}
+		require.NoError(t, db.Create(&workspace).Error)
+
+		client := models.Client{
+			ID:          uuid.New(),
+			WorkspaceID: workspace.ID,
+			Name:        "Debug Client",
+		}
+		require.NoError(t, db.Create(&client).Error)
+
+		questionSet := models.QuestionSet{
+			ID:       uuid.New(),
+			ClientID: client.ID,
+			Name:     "Debug Set",
+			Data:     []byte(`{"categories":[]}`),
+		}
+		require.NoError(t, db.Create(&questionSet).Error)
+
+		readableAgent := models.Agent{
+			ID:           uuid.New(),
+			WorkspaceID:  workspace.ID,
+			Name:         "Readable Agent",
+			ProviderType: "openai",
+			Config:       models.EncryptedJSON([]byte(`{"model":"gpt-4.1"}`)),
+			Enabled:      true,
+		}
+		require.NoError(t, db.Create(&readableAgent).Error)
+
+		plaintextAgentID := uuid.New()
+		require.NoError(t, db.Exec(`
+			INSERT INTO agents (id, workspace_id, name, provider_type, config, enabled, position, max_concurrency, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, plaintextAgentID.String(), workspace.ID.String(), "Plaintext Agent", "openai", `{"model":"legacy"}`, true, 0, 5, time.Now().UTC()).Error)
+
+		badAgentID := uuid.New()
+		require.NoError(t, db.Exec(`
+			INSERT INTO agents (id, workspace_id, name, provider_type, config, enabled, position, max_concurrency, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, badAgentID.String(), workspace.ID.String(), "Broken Agent", "openai", "not-base64-config", true, 0, 5, time.Now().UTC()).Error)
+
+		badOverride := base64.StdEncoding.EncodeToString([]byte("1234567890123456789012345678901234567890"))
+		require.NoError(t, db.Exec(`
+			INSERT INTO question_set_agents (question_set_id, agent_id, config, enabled, position, created_at)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`, questionSet.ID.String(), readableAgent.ID.String(), badOverride, true, 0, time.Now().UTC()).Error)
+
+		resp := sendWSRequest(t, adminToken, ReqAdminGetDebugInfo, map[string]any{})
+		assert.Equal(t, DataAdminDebugInfo, resp.Type)
+
+		var payload models.AdminDebugResponse
+		require.NoError(t, json.Unmarshal(resp.Payload, &payload))
+
+		assert.Equal(t, "loaded", payload.Key.Status)
+		assert.Equal(t, "environment", payload.Key.Source)
+		assert.Equal(t, "ENCRYPTION_KEY loaded successfully from environment", payload.Key.Summary)
+		assert.Equal(t, "raw", payload.Key.Format)
+		assert.EqualValues(t, 16, payload.Key.ParsedBytes)
+		assert.True(t, payload.Key.Present)
+		assert.True(t, payload.Key.Loaded)
+		assert.False(t, payload.Key.UsedFallback)
+
+		assert.EqualValues(t, 3, payload.Agents.Total)
+		assert.EqualValues(t, 1, payload.Agents.PlaintextJSON)
+		assert.EqualValues(t, 1, payload.Agents.DecryptOK)
+		assert.EqualValues(t, 1, payload.Agents.DecryptFailed)
+		require.Len(t, payload.Agents.RecentRecords, 3)
+		assert.Contains(t, []string{
+			payload.Agents.RecentRecords[0].DecryptStatus,
+			payload.Agents.RecentRecords[1].DecryptStatus,
+			payload.Agents.RecentRecords[2].DecryptStatus,
+		}, "failed")
+		require.Len(t, payload.Agents.SampleFailures, 1)
+		assert.Equal(t, badAgentID.String(), payload.Agents.SampleFailures[0].ID)
+		assert.Equal(t, "invalid_other", payload.Agents.SampleFailures[0].Shape)
+
+		assert.EqualValues(t, 1, payload.QuestionSetAgents.Total)
+		assert.EqualValues(t, 1, payload.QuestionSetAgents.EncryptedLike)
+		assert.EqualValues(t, 1, payload.QuestionSetAgents.DecryptFailed)
+		require.Len(t, payload.QuestionSetAgents.RecentRecords, 1)
+		assert.Equal(t, "failed", payload.QuestionSetAgents.RecentRecords[0].DecryptStatus)
+		require.Len(t, payload.QuestionSetAgents.SampleFailures, 1)
+		assert.Equal(t, readableAgent.ID.String(), payload.QuestionSetAgents.SampleFailures[0].AgentID)
+		assert.Equal(t, questionSet.ID.String(), payload.QuestionSetAgents.SampleFailures[0].QuestionSetID)
 	})
 }

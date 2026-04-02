@@ -25,6 +25,10 @@
           :class="{ active: currentTab === 'logs' }" 
           @click="currentTab = 'logs'"
         >📜 Login Logs</button>
+        <button 
+          :class="{ active: currentTab === 'debug' }" 
+          @click="currentTab = 'debug'"
+        >🧪 Debug</button>
       </div>
     </div>
 
@@ -481,6 +485,336 @@
         </div>
       </div>
 
+      <div v-else-if="currentTab === 'debug'" class="tab-view">
+        <div class="tab-actions">
+          <div>
+            <h3>Debug Snapshot</h3>
+            <p class="tab-caption">Admin-only runtime diagnostics for encryption health and unreadable config records.</p>
+          </div>
+          <div class="action-group">
+            <span v-if="debugInfo?.generated_at" class="date-badge">Updated {{ formatDateTime(debugInfo.generated_at) }}</span>
+            <button class="btn btn-secondary" @click="loadDebugInfo()" :disabled="isRefreshingDebug">
+              <span v-if="isRefreshingDebug" class="spinner-inline"></span>
+              <span v-else>🔄</span> Refresh
+            </button>
+          </div>
+        </div>
+
+        <div v-if="!debugInfo && isRefreshingDebug" class="debug-empty-state">
+          <div class="spinner"></div>
+          <p>Loading debug diagnostics...</p>
+        </div>
+
+        <template v-else-if="debugInfo">
+          <div class="runs-summary-grid">
+            <div class="summary-card summary-card--active">
+              <span class="summary-label">Encryption Key</span>
+              <strong class="summary-value">{{ debugInfo.key.parsed_bytes || 0 }}B</strong>
+              <span class="summary-note">{{ debugInfo.key.status || 'unknown' }}{{ debugInfo.key.present ? ` • ${debugInfo.key.format || 'invalid'} • ${debugInfo.key.char_length} chars` : '' }}</span>
+            </div>
+            <div class="summary-card" :class="{ 'summary-card--danger': debugInfo.agents.decrypt_failed > 0 }">
+              <span class="summary-label">Agent Config Failures</span>
+              <strong class="summary-value">{{ debugInfo.agents.decrypt_failed || 0 }}</strong>
+              <span class="summary-note">{{ debugInfo.agents.decrypt_ok || 0 }} encrypted records readable</span>
+            </div>
+            <div class="summary-card" :class="{ 'summary-card--danger': debugInfo.question_set_agents.decrypt_failed > 0 }">
+              <span class="summary-label">Override Failures</span>
+              <strong class="summary-value">{{ debugInfo.question_set_agents.decrypt_failed || 0 }}</strong>
+              <span class="summary-note">{{ debugInfo.question_set_agents.decrypt_ok || 0 }} encrypted overrides readable</span>
+            </div>
+            <div class="summary-card">
+              <span class="summary-label">Server Revision</span>
+              <strong class="summary-value debug-summary-value">{{ shortId(debugInfo.revision.commit || debugInfo.service_revision || 'unknown') }}</strong>
+              <span class="summary-note">{{ debugInfo.app_env || 'unknown' }}{{ debugInfo.service_name ? ` • ${debugInfo.service_name}` : '' }}</span>
+            </div>
+          </div>
+
+          <div class="debug-meta-grid">
+            <section class="debug-card">
+              <h4>Runtime</h4>
+              <dl class="debug-kv">
+                <div>
+                  <dt>Environment</dt>
+                  <dd>{{ debugInfo.app_env || 'unknown' }}</dd>
+                </div>
+                <div>
+                  <dt>Go</dt>
+                  <dd>{{ debugInfo.go_version || '-' }}</dd>
+                </div>
+                <div>
+                  <dt>Service</dt>
+                  <dd>{{ debugInfo.service_name || '-' }}</dd>
+                </div>
+                <div>
+                  <dt>Revision</dt>
+                  <dd>{{ debugInfo.service_revision || debugInfo.revision.commit || '-' }}</dd>
+                </div>
+                <div>
+                  <dt>Build Updated</dt>
+                  <dd>{{ debugInfo.revision.updated_at || '-' }}</dd>
+                </div>
+              </dl>
+            </section>
+
+            <section class="debug-card">
+              <h4>ENCRYPTION_KEY</h4>
+              <dl class="debug-kv">
+                <div>
+                  <dt>Status</dt>
+                  <dd>{{ debugInfo.key.status || '-' }}</dd>
+                </div>
+                <div>
+                  <dt>Source</dt>
+                  <dd>{{ debugInfo.key.source || '-' }}</dd>
+                </div>
+                <div>
+                  <dt>Present</dt>
+                  <dd>{{ debugInfo.key.present ? 'Yes' : 'No' }}</dd>
+                </div>
+                <div>
+                  <dt>Loaded</dt>
+                  <dd>{{ debugInfo.key.loaded ? 'Yes' : 'No' }}</dd>
+                </div>
+                <div>
+                  <dt>Format</dt>
+                  <dd>{{ debugInfo.key.format || '-' }}</dd>
+                </div>
+                <div>
+                  <dt>Char Length</dt>
+                  <dd>{{ debugInfo.key.char_length ?? '-' }}</dd>
+                </div>
+                <div>
+                  <dt>Parsed Bytes</dt>
+                  <dd>{{ debugInfo.key.parsed_bytes ?? '-' }}</dd>
+                </div>
+                <div>
+                  <dt>Used Fallback</dt>
+                  <dd>{{ debugInfo.key.used_fallback ? 'Yes' : 'No' }}</dd>
+                </div>
+                <div class="debug-kv-full">
+                  <dt>Summary</dt>
+                  <dd>{{ debugInfo.key.summary || '-' }}</dd>
+                </div>
+                <div v-if="debugInfo.key.error" class="debug-kv-full debug-kv-error">
+                  <dt>Validation Error</dt>
+                  <dd>{{ debugInfo.key.error }}</dd>
+                </div>
+              </dl>
+            </section>
+
+            <section class="debug-card">
+              <h4>Agents</h4>
+              <dl class="debug-kv">
+                <div>
+                  <dt>Total Rows</dt>
+                  <dd>{{ debugInfo.agents.total }}</dd>
+                </div>
+                <div>
+                  <dt>Empty</dt>
+                  <dd>{{ debugInfo.agents.empty }}</dd>
+                </div>
+                <div>
+                  <dt>Plain JSON</dt>
+                  <dd>{{ debugInfo.agents.plaintext_json }}</dd>
+                </div>
+                <div>
+                  <dt>Encrypted-like</dt>
+                  <dd>{{ debugInfo.agents.encrypted_like }}</dd>
+                </div>
+                <div>
+                  <dt>Invalid Other</dt>
+                  <dd>{{ debugInfo.agents.invalid_other }}</dd>
+                </div>
+                <div>
+                  <dt>Decrypt Failed</dt>
+                  <dd>{{ debugInfo.agents.decrypt_failed }}</dd>
+                </div>
+              </dl>
+            </section>
+
+            <section class="debug-card">
+              <h4>Question Set Overrides</h4>
+              <dl class="debug-kv">
+                <div>
+                  <dt>Total Rows</dt>
+                  <dd>{{ debugInfo.question_set_agents.total }}</dd>
+                </div>
+                <div>
+                  <dt>Empty</dt>
+                  <dd>{{ debugInfo.question_set_agents.empty }}</dd>
+                </div>
+                <div>
+                  <dt>Plain JSON</dt>
+                  <dd>{{ debugInfo.question_set_agents.plaintext_json }}</dd>
+                </div>
+                <div>
+                  <dt>Encrypted-like</dt>
+                  <dd>{{ debugInfo.question_set_agents.encrypted_like }}</dd>
+                </div>
+                <div>
+                  <dt>Invalid Other</dt>
+                  <dd>{{ debugInfo.question_set_agents.invalid_other }}</dd>
+                </div>
+                <div>
+                  <dt>Decrypt Failed</dt>
+                  <dd>{{ debugInfo.question_set_agents.decrypt_failed }}</dd>
+                </div>
+              </dl>
+            </section>
+          </div>
+
+          <div class="debug-failure-grid">
+            <section class="debug-card">
+              <div class="debug-card-header">
+                <h4>Unreadable Agent Configs</h4>
+                <span class="filter-count">Showing {{ debugInfo.agents.sample_failures?.length || 0 }}</span>
+              </div>
+              <div class="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Agent</th>
+                      <th>Workspace</th>
+                      <th>Shape</th>
+                      <th>Created</th>
+                      <th>Error</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(failure, index) in debugInfo.agents.sample_failures || []" :key="debugFailureKey(failure, index)">
+                      <td>
+                        <div class="user-info">
+                          <span class="user-name">{{ failure.name || 'Unnamed Agent' }}</span>
+                          <span class="user-email">{{ shortId(failure.id) }}</span>
+                        </div>
+                      </td>
+                      <td><span class="id-code">{{ shortId(failure.workspace_id) }}</span></td>
+                      <td><span class="role-badge">{{ formatShapeLabel(failure.shape) }}</span></td>
+                      <td><span class="date-badge">{{ formatDateTime(failure.created_at) }}</span></td>
+                      <td class="debug-error-cell">{{ failure.error }}</td>
+                    </tr>
+                    <tr v-if="!(debugInfo.agents.sample_failures || []).length">
+                      <td colspan="5" class="empty-cell">No unreadable agent configs detected</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="debug-card">
+              <div class="debug-card-header">
+                <h4>Recent Agent Config Rows</h4>
+                <span class="filter-count">Showing {{ debugInfo.agents.recent_records?.length || 0 }}</span>
+              </div>
+              <div class="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Agent</th>
+                      <th>Workspace</th>
+                      <th>Shape</th>
+                      <th>Decrypt</th>
+                      <th>Created</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(record, index) in debugInfo.agents.recent_records || []" :key="debugRecordKey(record, index)">
+                      <td>
+                        <div class="user-info">
+                          <span class="user-name">{{ record.name || 'Unnamed Agent' }}</span>
+                          <span class="user-email">{{ shortId(record.id) }}</span>
+                        </div>
+                      </td>
+                      <td><span class="id-code">{{ shortId(record.workspace_id) }}</span></td>
+                      <td><span class="role-badge">{{ formatShapeLabel(record.shape) }}</span></td>
+                      <td><span :class="['role-badge', debugStatusBadgeClass(record.decrypt_status)]">{{ formatDecryptStatus(record.decrypt_status) }}</span></td>
+                      <td>
+                        <div class="user-info">
+                          <span class="date-badge">{{ formatDateTime(record.created_at) }}</span>
+                          <span v-if="record.error" class="user-email debug-inline-error">{{ record.error }}</span>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr v-if="!(debugInfo.agents.recent_records || []).length">
+                      <td colspan="5" class="empty-cell">No agent config rows found</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="debug-card">
+              <div class="debug-card-header">
+                <h4>Unreadable Question Set Overrides</h4>
+                <span class="filter-count">Showing {{ debugInfo.question_set_agents.sample_failures?.length || 0 }}</span>
+              </div>
+              <div class="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Question Set</th>
+                      <th>Agent</th>
+                      <th>Shape</th>
+                      <th>Created</th>
+                      <th>Error</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(failure, index) in debugInfo.question_set_agents.sample_failures || []" :key="debugFailureKey(failure, index)">
+                      <td><span class="id-code">{{ shortId(failure.question_set_id) }}</span></td>
+                      <td><span class="id-code">{{ shortId(failure.agent_id) }}</span></td>
+                      <td><span class="role-badge">{{ formatShapeLabel(failure.shape) }}</span></td>
+                      <td><span class="date-badge">{{ formatDateTime(failure.created_at) }}</span></td>
+                      <td class="debug-error-cell">{{ failure.error }}</td>
+                    </tr>
+                    <tr v-if="!(debugInfo.question_set_agents.sample_failures || []).length">
+                      <td colspan="5" class="empty-cell">No unreadable overrides detected</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="debug-card">
+              <div class="debug-card-header">
+                <h4>Recent Question Set Override Rows</h4>
+                <span class="filter-count">Showing {{ debugInfo.question_set_agents.recent_records?.length || 0 }}</span>
+              </div>
+              <div class="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Question Set</th>
+                      <th>Agent</th>
+                      <th>Shape</th>
+                      <th>Decrypt</th>
+                      <th>Created</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(record, index) in debugInfo.question_set_agents.recent_records || []" :key="debugRecordKey(record, index)">
+                      <td><span class="id-code">{{ shortId(record.question_set_id) }}</span></td>
+                      <td><span class="id-code">{{ shortId(record.agent_id) }}</span></td>
+                      <td><span class="role-badge">{{ formatShapeLabel(record.shape) }}</span></td>
+                      <td><span :class="['role-badge', debugStatusBadgeClass(record.decrypt_status)]">{{ formatDecryptStatus(record.decrypt_status) }}</span></td>
+                      <td>
+                        <div class="user-info">
+                          <span class="date-badge">{{ formatDateTime(record.created_at) }}</span>
+                          <span v-if="record.error" class="user-email debug-inline-error">{{ record.error }}</span>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr v-if="!(debugInfo.question_set_agents.recent_records || []).length">
+                      <td colspan="5" class="empty-cell">No override rows found</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        </template>
+      </div>
+
     </div>
 
     <!-- Create/Edit User Modal -->
@@ -655,11 +989,13 @@ const loginLogs = ref([]);
 const adminRuns = ref([]);
 const adminRunsSummary = ref({ active_runs: 0, active_workspaces: 0, active_users: 0, pending_tasks: 0, recent_runs: 0 });
 const adminRunsGeneratedAt = ref(null);
+const debugInfo = ref(null)
 const loading = ref(true); // Changed to true initially
 const error = ref('')
 const isRefreshing = ref(false)
 const isRefreshingLogs = ref(false)
 const isRefreshingRuns = ref(false)
+const isRefreshingDebug = ref(false)
 
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
@@ -832,6 +1168,38 @@ function shortId(value) {
   return String(value).slice(0, 8)
 }
 
+function formatShapeLabel(shape) {
+  if (!shape) return 'Unknown'
+  return shape.replace(/_/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase())
+}
+
+function formatDecryptStatus(status) {
+  if (!status) return 'Unknown'
+  return status.replace(/_/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase())
+}
+
+function debugFailureKey(failure, index) {
+  return [
+    failure.id,
+    failure.question_set_id,
+    failure.agent_id,
+    failure.workspace_id,
+    failure.created_at,
+    index
+  ].filter(Boolean).join(':')
+}
+
+function debugRecordKey(record, index) {
+  return [
+    record.id,
+    record.question_set_id,
+    record.agent_id,
+    record.workspace_id,
+    record.created_at,
+    index
+  ].filter(Boolean).join(':')
+}
+
 function formatRunStatus(status) {
   if (status === 'completed_with_errors') return 'Completed With Errors'
   if (!status) return 'Unknown'
@@ -844,6 +1212,12 @@ function runStatusClass(status) {
   if (status === 'completed') return 'run-status-success'
   if (status === 'cancelled') return 'run-status-muted'
   return ''
+}
+
+function debugStatusBadgeClass(status) {
+  if (status === 'ok') return 'run-status-success'
+  if (status === 'failed') return 'run-status-warning'
+  return 'run-status-muted'
 }
 
 function runProgressClass(status, errorCount) {
@@ -883,6 +1257,9 @@ async function loadData() {
     if (currentTab.value === 'runs') {
       await loadRuns()
     }
+    if (currentTab.value === 'debug') {
+      await loadDebugInfo({ silent: true })
+    }
   } catch (e) {
     error.value = 'Failed to load administrative data: ' + e.message
   } finally {
@@ -898,6 +1275,10 @@ async function reloadData() {
   }
   if (currentTab.value === 'runs') {
     await loadRuns()
+    return
+  }
+  if (currentTab.value === 'debug') {
+    await loadDebugInfo()
     return
   }
   await loadData()
@@ -944,6 +1325,30 @@ async function loadRuns(options = {}) {
       loading.value = false
     }
     isRefreshingRuns.value = false
+  }
+}
+
+async function loadDebugInfo(options = {}) {
+  if (isRefreshingDebug.value) return
+
+  const { silent = false } = options
+  const shouldShowBlockingState = !silent && currentTab.value === 'debug' && !debugInfo.value
+
+  isRefreshingDebug.value = true
+  if (shouldShowBlockingState) {
+    error.value = ''
+  }
+
+  try {
+    debugInfo.value = await wsService.adminGetDebugInfo()
+  } catch (e) {
+    if (currentTab.value === 'debug' && !debugInfo.value) {
+      error.value = 'Failed to load debug diagnostics: ' + e.message
+    } else {
+      console.error('Failed to load debug diagnostics:', e)
+    }
+  } finally {
+    isRefreshingDebug.value = false
   }
 }
 
@@ -1173,6 +1578,9 @@ watch(currentTab, (newTab) => {
     startRunsAutoRefresh()
     return
   }
+  if (newTab === 'debug' && !debugInfo.value) {
+    loadDebugInfo()
+  }
   stopRunsAutoRefresh()
 })
 
@@ -1337,6 +1745,11 @@ watch(orgTimeFilter, () => {
   background: linear-gradient(180deg, #fffdf5 0%, #fff8df 100%);
 }
 
+.summary-card--danger {
+  border-color: #fecaca;
+  background: linear-gradient(180deg, #fff8f8 0%, #fff1f2 100%);
+}
+
 .summary-label {
   font-size: 0.78rem;
   font-weight: 700;
@@ -1354,6 +1767,106 @@ watch(orgTimeFilter, () => {
 .summary-note {
   font-size: 0.8rem;
   color: #64748b;
+}
+
+.debug-summary-value {
+  font-size: 1.4rem;
+  font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.debug-meta-grid,
+.debug-failure-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.debug-meta-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.debug-failure-grid {
+  grid-template-columns: 1fr;
+}
+
+.debug-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+}
+
+.debug-card h4 {
+  margin: 0;
+  font-size: 1rem;
+  color: #0f172a;
+}
+
+.debug-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.debug-kv {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+  margin: 0;
+}
+
+.debug-kv > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.debug-kv dt {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.debug-kv dd {
+  margin: 0;
+  color: #0f172a;
+  font-size: 0.9rem;
+  word-break: break-word;
+}
+
+.debug-kv-full {
+  grid-column: 1 / -1;
+}
+
+.debug-kv-error dd {
+  color: #b91c1c;
+}
+
+.debug-error-cell {
+  max-width: 320px;
+  font-size: 0.82rem;
+  color: #b91c1c;
+  word-break: break-word;
+}
+
+.debug-inline-error {
+  color: #b91c1c;
+  max-width: 280px;
+  word-break: break-word;
+}
+
+.debug-empty-state {
+  padding: 56px 24px;
+  text-align: center;
+  color: #64748b;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
 }
 
 /* Filter Bar Styles */
@@ -1941,6 +2454,10 @@ td {
   .runs-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .debug-meta-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 860px) {
@@ -1957,6 +2474,15 @@ td {
 
   .runs-summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .debug-kv {
+    grid-template-columns: 1fr;
+  }
+
+  .debug-card-header {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

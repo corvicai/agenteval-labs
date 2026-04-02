@@ -176,6 +176,73 @@ type AdminRunsResponse struct {
 	GeneratedAt time.Time        `json:"generated_at"`
 }
 
+type AdminDebugRevision struct {
+	Commit    string `json:"commit"`
+	Branch    string `json:"branch,omitempty"`
+	Dirty     string `json:"dirty,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+type AdminDebugKeyStatus struct {
+	Status       string `json:"status,omitempty"`
+	Source       string `json:"source,omitempty"`
+	Summary      string `json:"summary,omitempty"`
+	Present      bool   `json:"present"`
+	Format       string `json:"format,omitempty"`
+	CharLength   int    `json:"char_length"`
+	ParsedBytes  int    `json:"parsed_bytes"`
+	Loaded       bool   `json:"loaded"`
+	UsedFallback bool   `json:"used_fallback,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
+type AdminDebugConfigFailure struct {
+	ID            string    `json:"id,omitempty"`
+	AgentID       string    `json:"agent_id,omitempty"`
+	QuestionSetID string    `json:"question_set_id,omitempty"`
+	WorkspaceID   string    `json:"workspace_id,omitempty"`
+	Name          string    `json:"name,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	Shape         string    `json:"shape"`
+	Error         string    `json:"error"`
+}
+
+type AdminDebugConfigRecord struct {
+	ID            string    `json:"id,omitempty"`
+	AgentID       string    `json:"agent_id,omitempty"`
+	QuestionSetID string    `json:"question_set_id,omitempty"`
+	WorkspaceID   string    `json:"workspace_id,omitempty"`
+	Name          string    `json:"name,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	Shape         string    `json:"shape"`
+	DecryptStatus string    `json:"decrypt_status"`
+	Error         string    `json:"error,omitempty"`
+}
+
+type AdminDebugConfigStats struct {
+	Total          int64                     `json:"total"`
+	Empty          int64                     `json:"empty"`
+	PlaintextJSON  int64                     `json:"plaintext_json"`
+	EncryptedLike  int64                     `json:"encrypted_like"`
+	InvalidOther   int64                     `json:"invalid_other"`
+	DecryptOK      int64                     `json:"decrypt_ok"`
+	DecryptFailed  int64                     `json:"decrypt_failed"`
+	RecentRecords  []AdminDebugConfigRecord  `json:"recent_records,omitempty"`
+	SampleFailures []AdminDebugConfigFailure `json:"sample_failures,omitempty"`
+}
+
+type AdminDebugResponse struct {
+	AppEnv            string                `json:"app_env"`
+	GoVersion         string                `json:"go_version"`
+	ServiceName       string                `json:"service_name,omitempty"`
+	ServiceRevision   string                `json:"service_revision,omitempty"`
+	Revision          AdminDebugRevision    `json:"revision"`
+	Key               AdminDebugKeyStatus   `json:"key"`
+	Agents            AdminDebugConfigStats `json:"agents"`
+	QuestionSetAgents AdminDebugConfigStats `json:"question_set_agents"`
+	GeneratedAt       time.Time             `json:"generated_at"`
+}
+
 type AdminCreateUserPayload struct {
 	Name           string `json:"name"`
 	Email          string `json:"email"`

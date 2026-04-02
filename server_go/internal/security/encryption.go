@@ -4,12 +4,30 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"encoding/hex"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"sync"
+)
+
+type EncryptionKeyRuntimeStatus struct {
+	Status          string
+	Source          string
+	Summary         string
+	Loaded          bool
+	UsedFallback    bool
+	Format          string
+	CharLength      int
+	ParsedBytes     int
+	ValidationError string
+}
+
+var (
+	encryptionKeyRuntimeStatus EncryptionKeyRuntimeStatus
+	encryptionKeyRuntimeMu     sync.RWMutex
 )
 
 // ParseEncryptionKey accepts raw AES keys (16/24/32 chars) and hex-encoded keys
@@ -35,6 +53,18 @@ func ParseEncryptionKey(raw string) ([]byte, string, error) {
 	}
 
 	return nil, "", fmt.Errorf("invalid ENCRYPTION_KEY length: %d bytes (must be 16, 24, or 32)", len(raw))
+}
+
+func SetEncryptionKeyRuntimeStatus(status EncryptionKeyRuntimeStatus) {
+	encryptionKeyRuntimeMu.Lock()
+	defer encryptionKeyRuntimeMu.Unlock()
+	encryptionKeyRuntimeStatus = status
+}
+
+func GetEncryptionKeyRuntimeStatus() EncryptionKeyRuntimeStatus {
+	encryptionKeyRuntimeMu.RLock()
+	defer encryptionKeyRuntimeMu.RUnlock()
+	return encryptionKeyRuntimeStatus
 }
 
 // Encrypt string using AES-GCM
