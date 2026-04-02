@@ -291,6 +291,7 @@
                   <div class="response-label">
                     Expected Answer:
                     <button
+                      v-if="isQuestionSelected(entry.question.id)"
                       class="btn-expected-inline btn-expected-edit"
                       @click.stop="startExpectedAnswerEdit(entry.question)"
                     >
@@ -298,22 +299,35 @@
                     </button>
                   </div>
                   <div
+                    v-if="isQuestionSelected(entry.question.id)"
                     class="response-text"
                     v-html="formatResponseHtml(getQuestionExpectedAnswer(entry.question))"
                   ></div>
+                  <div
+                    v-else
+                    class="response-text response-text-preview"
+                  >
+                    {{ getQuestionExpectedAnswerPreview(entry.question) }}
+                  </div>
                 </div>
                 <button
-                  v-else
+                  v-else-if="isQuestionSelected(entry.question.id)"
                   class="btn-add-expected-inline"
                   @click.stop="startExpectedAnswerEdit(entry.question)"
                 >
                   + Expected Answer
                 </button>
-                <div v-if="getQuestionResponse(entry.question.id)" class="question-response">
+                <div v-if="getQuestionResponse(entry.question.id, false)" class="question-response">
                   <div class="response-label">Response:</div>
                   <div class="response-text">
+                    <div
+                      v-if="!isQuestionSelected(entry.question.id)"
+                      class="response-text-preview"
+                    >
+                      {{ getQuestionResponsePreview(entry.question.id) }}
+                    </div>
                     <div 
-                      v-if="!expandedResponses[entry.question.id]"
+                      v-else-if="!expandedResponses[entry.question.id]"
                       v-html="formatResponseHtml(getQuestionResponse(entry.question.id, true))"
                     ></div>
                     <div 
@@ -321,7 +335,7 @@
                       v-html="formatResponseHtml(getQuestionResponse(entry.question.id, false))"
                     ></div>
                     <button 
-                      v-if="isResponseLong(entry.question.id)"
+                      v-if="isQuestionSelected(entry.question.id) && isResponseLong(entry.question.id)"
                       class="btn-expand-response"
                       @click.stop="toggleResponse(entry.question.id)"
                     >
@@ -346,7 +360,13 @@
                   </div>
                   <div class="response-text">
                     <div
-                      v-if="!expandedEvaluations[entry.question.id]"
+                      v-if="!isQuestionSelected(entry.question.id)"
+                      class="response-text-preview"
+                    >
+                      {{ getQuestionEvaluationPreview(entry.question.id) }}
+                    </div>
+                    <div
+                      v-else-if="!expandedEvaluations[entry.question.id]"
                       v-html="formatResponseHtml(getQuestionEvaluation(entry.question.id, true))"
                     ></div>
                     <div
@@ -354,7 +374,7 @@
                       v-html="formatResponseHtml(getQuestionEvaluation(entry.question.id, false))"
                     ></div>
                     <button
-                      v-if="isEvaluationLong(entry.question.id)"
+                      v-if="isQuestionSelected(entry.question.id) && isEvaluationLong(entry.question.id)"
                       class="btn-expand-response"
                       @click.stop="toggleEvaluation(entry.question.id)"
                     >
@@ -491,7 +511,7 @@ import { downloadManager } from '../services/DownloadManager.js'
 import { contentCache } from '../services/ContentCache.js'
 import { useWSStore } from '../stores/wsStore'
 import { extractTextOnly } from '../utils/chatHelpers.js'
-import { processContent } from '../utils/markdown.js'
+import { getContentPreviewText, processContent } from '../utils/markdown.js'
 import { isEvaluatorAgentObject, toAgentID, uniqueStringIDs, mergeAgentIDs } from '../utils/arena/agents.js'
 import { mergeQuestionSetForUI, getQuestionSetListSyncSignature, getQuestionSetSyncSignature, getRunQuestionSetID } from '../utils/arena/questionSet.js'
 import { extractScoreOutOfTen, truncatePreviewText, extractQuestionIdsFromQuestionSet, parseEvaluatorTaskQuestionID } from '../utils/arena/parsing.js'
@@ -1518,6 +1538,22 @@ function getQuestionEvaluationScoreChipClass(questionId) {
 function getQuestionExpectedAnswer(question) {
   if (!question || typeof question !== 'object') return ''
   return question.expected || question.expected_answer || ''
+}
+
+function isQuestionSelected(questionId) {
+  return String(selectedQuestionId.value || '') === String(questionId || '')
+}
+
+function getQuestionExpectedAnswerPreview(question) {
+  return getContentPreviewText(getQuestionExpectedAnswer(question), 220)
+}
+
+function getQuestionResponsePreview(questionId) {
+  return getContentPreviewText(getQuestionResponse(questionId, false), 220)
+}
+
+function getQuestionEvaluationPreview(questionId) {
+  return getContentPreviewText(getQuestionEvaluation(questionId, false), 220)
 }
 
 function isEditingExpectedAnswer(questionId) {

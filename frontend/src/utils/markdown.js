@@ -30,6 +30,32 @@ const ALLOWED_URIS = /^(?:(?:https?|mailto|ftp|tel|file|blob|data):|[^a-z]|[a-z+
 const BASE64_IMAGE_SOURCE = '\\(data:image\\/(png|jpe?g|gif|webp|svg\\+xml);base64,([A-Za-z0-9+/=\\s]+)\\)'
 
 const base64ImageRegex = (flags = 'g') => new RegExp(BASE64_IMAGE_SOURCE, flags)
+const PROCESS_CONTENT_CACHE_LIMIT = 400
+const CONTENT_PREVIEW_CACHE_LIMIT = 600
+const processContentCache = new Map()
+const contentPreviewCache = new Map()
+
+function getCachedValue(cache, key) {
+  if (!cache.has(key)) return null
+  const value = cache.get(key)
+  cache.delete(key)
+  cache.set(key, value)
+  return value
+}
+
+function setCachedValue(cache, key, value, maxEntries) {
+  if (cache.has(key)) {
+    cache.delete(key)
+  }
+  cache.set(key, value)
+  if (cache.size <= maxEntries) return value
+
+  const oldestKey = cache.keys().next().value
+  if (oldestKey !== undefined) {
+    cache.delete(oldestKey)
+  }
+  return value
+}
 
 /**
  * Detects if string contains markdown formatting
@@ -133,6 +159,41 @@ export const renderMarkdown = (text) => {
   })
 }
 
+export const getContentPreviewText = (rawString, maxLen = 220) => {
+  if (!rawString || typeof rawString !== 'string') {
+    return ''
+  }
+
+  const cacheKey = `${maxLen}:${rawString}`
+  const cached = getCachedValue(contentPreviewCache, cacheKey)
+  if (cached != null) return cached
+
+  let preview = rawString.replace(/<<\d+>>/g, '')
+  preview = preview.replace(base64ImageRegex('gi'), ' [image] ')
+  preview = preview
+    .replace(/```[\s\S]*?```/g, ' [code block] ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[([^\]]*)\]\((.*?)\)/g, '$1 [image]')
+    .replace(/\[([^\]]+)\]\((.*?)\)/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/^\s*\d+\.\s+/gm, '')
+    .replace(/^>\s?/gm, '')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/__(.*?)__/g, '$1')
+    .replace(/\*(.*?)\*/g, '$1')
+    .replace(/_(.*?)_/g, '$1')
+    .replace(/\r?\n+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (preview.length > maxLen) {
+    preview = `${preview.slice(0, maxLen).trimEnd()}...`
+  }
+
+  return setCachedValue(contentPreviewCache, cacheKey, preview, CONTENT_PREVIEW_CACHE_LIMIT)
+}
+
 /**
  * Main processor: detects and converts markdown + images in runtime
  * Returns object with detected content types and rendered HTML
@@ -148,6 +209,9 @@ export const processContent = (rawString) => {
       plainText: rawString || ''
     }
   }
+
+  const cached = getCachedValue(processContentCache, rawString)
+  if (cached) return cached
 
   // Try to detect if the whole content is JSON (object or array) and
   // pretty-print it inside a markdown code block for better readability.
@@ -193,7 +257,7 @@ export const processContent = (rawString) => {
       .replace(/```[\s\S]*?```/g, '')
   }
 
-  return {
+  const processed = {
     raw: rawString,
     hasMarkdown: detectedMarkdown,
     hasImages: detectedImages,
@@ -201,4 +265,6 @@ export const processContent = (rawString) => {
     html,
     plainText: plainText.trim()
   }
+
+  return setCachedValue(processContentCache, rawString, processed, PROCESS_CONTENT_CACHE_LIMIT)
 }

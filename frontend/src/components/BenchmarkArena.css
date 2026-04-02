@@ -234,6 +234,11 @@
   word-wrap: break-word;
 }
 
+.questions-list-view .response-text-preview {
+  color: #64748b;
+  white-space: pre-wrap;
+}
+
 .questions-list-view .response-text :deep(p) {
   margin: 0 0 0.5rem 0;
 }
