@@ -146,6 +146,71 @@ All messages use a standard envelope: `{ "type": "REQ_*", "correlation_id": "...
 | `VITE_AFK_TIMEOUT_MS` | `180000` | Frontend idle timeout (ms) before WebSocket disconnect |
 | `VITE_HMR_HOST`, `VITE_HMR_CLIENT_PORT`, `VITE_HMR_PROTOCOL` | — | Optional HMR config for dev behind proxy |
 
+## Encryption Key Rotation
+
+The application currently encrypts only these database fields:
+
+- `agents.config`
+- `question_set_agents.config`
+
+Other user-facing records such as user names, emails, login logs, run answers, evaluations, and question set data are not protected by `ENCRYPTION_KEY`.
+
+### What Exists Today
+
+- The app accepts `ENCRYPTION_KEY` as raw AES key material (`16`, `24`, or `32` chars) or as hex (`32`, `48`, or `64` chars).
+- On startup, the backend stores a non-reversible fingerprint of the active key plus a sentinel ciphertext in `encryption_key_states`.
+- The Admin Debug view shows:
+  - current key status and detected format
+  - current fingerprint prefix
+  - stored fingerprint prefix
+  - whether the current key matches the persisted state
+  - whether sentinel verification succeeded
+
+This allows the system to detect future key changes or read/decrypt incompatibilities.
+
+### Safe Rotation Procedure
+
+Use this procedure when encrypted configs must be preserved.
+
+1. Confirm the current deployment is healthy in Admin Debug:
+   - key status is `loaded`
+   - key state status is `match`
+   - no unexpected decrypt failures in `agents.config` or `question_set_agents.config`
+2. Prepare both keys:
+   - old key: the key that was used to encrypt the existing records
+   - new key: the replacement key
+3. Run a one-off migration that:
+   - reads `agents.config` and `question_set_agents.config`
+   - decrypts each value with the old key
+   - re-encrypts each value with the new key
+   - validates that the migrated rows can be decrypted with the new key
+4. After the migration succeeds, deploy the app with the new `ENCRYPTION_KEY`.
+5. Verify again in Admin Debug:
+   - key state status is `match`
+   - sentinel verification succeeds
+   - encrypted config decrypt failures remain at zero (or expected baseline)
+
+### Important Constraint
+
+A live rotation is only possible if the rotation process has access to both the old key and the new key at the same time. Without both keys, existing encrypted configs cannot be re-encrypted safely.
+
+### Current Limitation
+
+This repository currently includes detection and verification for key drift, but it does not yet include an automatic dual-key live rotation command. If you need true zero-downtime rotation, the next step is to add a dedicated rotator that receives both keys, migrates the encrypted columns in place, and then updates the persisted key state.
+
+### Emergency Reset Procedure
+
+If encrypted agent configs do not need to be preserved, you can reset from the current point forward:
+
+1. Backup the database if the data matters.
+2. Replace or clear the affected encrypted fields:
+   - `agents.config`
+   - `question_set_agents.config`
+3. Set the desired `ENCRYPTION_KEY`.
+4. Reconfigure affected agents manually.
+
+This is destructive for encrypted config data, but it is the simplest recovery path when test data is disposable.
+
 ## Development
 
 ### Run Tests
