@@ -57,6 +57,7 @@
           <h4>JSON Format</h4>
           <p class="format-desc">Import questions organized by categories:</p>
           <pre class="format-example"><code>{
+  "notes": "Optional context for the final PDF report summary.",
   "categories": [
     {
       "name": "Category Name",

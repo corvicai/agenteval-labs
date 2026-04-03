@@ -23,6 +23,20 @@
             {{ error }}
           </div>
 
+          <div class="qe-notes-block">
+            <label for="question-set-notes" class="qe-notes-label">Notes</label>
+            <textarea
+              id="question-set-notes"
+              v-model="localNotes"
+              class="qe-notes-input"
+              rows="4"
+              placeholder="Add any important context, caveats, or goals for this question set..."
+            ></textarea>
+            <p class="qe-notes-hint">
+              Add any important context, caveats, or goals you want included in the final PDF report summary.
+            </p>
+          </div>
+
           <div v-for="(cat, catIdx) in localCategories" :key="catIdx" class="category-block">
             <div class="category-header">
               <input v-model="cat.name" placeholder="Category Name" class="category-name-input" />
@@ -98,6 +112,7 @@ const emit = defineEmits(['close', 'saved'])
 
 const localCategories = ref([])
 const localName = ref('')
+const localNotes = ref('')
 const loading = ref(true)
 const saving = ref(false)
 const error = ref(null)
@@ -144,8 +159,10 @@ const loadQuestions = () => {
       } else {
         localCategories.value = [{ name: 'General', questions: [] }]
       }
+      localNotes.value = typeof data?.notes === 'string' ? data.notes : ''
     } else {
       localName.value = generateQuestionSetName()
+      localNotes.value = ''
       localCategories.value = [{ name: 'General', questions: [{ question: '', expected: '' }] }]
     }
   } catch (err) {
@@ -182,6 +199,7 @@ const handleEditorImport = ({ data, mode }) => {
   
   if (mode === 'replace') {
     // Replace all with imported data
+    localNotes.value = typeof data?.notes === 'string' ? data.notes : ''
     localCategories.value = data.categories.map(cat => ({
       name: cat.name || 'Imported',
       questions: (cat.questions || []).map((q, idx) => ({
@@ -192,6 +210,10 @@ const handleEditorImport = ({ data, mode }) => {
     }))
   } else {
     // Append mode - merge by category name
+    const importedNotes = typeof data?.notes === 'string' ? data.notes.trim() : ''
+    if (!localNotes.value.trim() && importedNotes) {
+      localNotes.value = importedNotes
+    }
     const importedCategories = data.categories || []
     importedCategories.forEach(importCat => {
       const existingCat = localCategories.value.find(c => c.name === importCat.name)
@@ -220,8 +242,10 @@ const handleEditorImport = ({ data, mode }) => {
 
 const exportCurrentSet = () => {
   // Build export data from current local state
+  const notes = localNotes.value.trim()
   const exportData = {
     title: localName.value || 'Exported Questions',
+    ...(notes ? { notes } : {}),
     categories: localCategories.value.map(cat => ({
       name: cat.name,
       questions: (cat.questions || []).map(q => ({
@@ -261,6 +285,7 @@ const saveChanges = async () => {
       name: localName.value,
       version: props.questionSet?.version || '1.0',
       data: {
+        notes: localNotes.value.trim(),
         categories: cleanedCategories
       }
     }
@@ -367,6 +392,47 @@ onMounted(() => {
   flex: 1;
   overflow-y: auto;
   padding: 1.5rem;
+}
+
+.qe-notes-block {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.qe-notes-label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #334155;
+  margin-bottom: 0.5rem;
+}
+
+.qe-notes-input {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  font-family: inherit;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  resize: vertical;
+  background: #ffffff;
+}
+
+.qe-notes-input:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.qe-notes-hint {
+  margin: 0.6rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: #64748b;
 }
 
 .category-block {

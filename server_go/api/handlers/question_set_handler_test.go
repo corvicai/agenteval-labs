@@ -54,6 +54,7 @@ func TestQuestionSetHandler_Import(t *testing.T) {
 			Name:    "Q4 Benchmark",
 			Version: "1.0",
 			Data: QuestionData{
+				Notes: "Include pricing caveats in the final PDF summary.",
 				Categories: []Category{
 					{
 						Name: "General",
@@ -90,6 +91,8 @@ func TestQuestionSetHandler_Import(t *testing.T) {
 
 		var data QuestionData
 		json.Unmarshal(qs.Data, &data)
+
+		assert.Equal(t, "Include pricing caveats in the final PDF summary.", data.Notes)
 
 		// First question should have auto-generated ID (json numbers are float64)
 		assert.Equal(t, float64(0), data.Categories[0].Questions[0].ID)
@@ -146,6 +149,7 @@ func TestQuestionSetHandler_Export(t *testing.T) {
 
 	// Create a question set
 	qsData := QuestionData{
+		Notes: "Highlight the regression risk in the report summary.",
 		Categories: []Category{
 			{
 				Name: "Export Test",
@@ -181,6 +185,7 @@ func TestQuestionSetHandler_Export(t *testing.T) {
 		var exported QuestionData
 		json.Unmarshal(rec.Body.Bytes(), &exported)
 
+		assert.Equal(t, "Highlight the regression risk in the report summary.", exported.Notes)
 		assert.Len(t, exported.Categories, 1)
 		assert.Equal(t, "Export Test", exported.Categories[0].Name)
 		assert.Equal(t, "Test Q?", exported.Categories[0].Questions[0].Question)

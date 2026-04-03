@@ -40,6 +40,7 @@ func (h *QuestionSetHandler) ListClients(c echo.Context) error {
 
 // QuestionData represents the import/export format
 type QuestionData struct {
+	Notes      string     `json:"notes,omitempty"`
 	Categories []Category `json:"categories"`
 }
 

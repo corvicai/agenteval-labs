@@ -338,7 +338,8 @@ export default {
 
       const pData = exportResultsReport({
         agentsRef: agentsArray,
-        calculateStats: (results) => this.calculateStats(results)
+        calculateStats: (results) => this.calculateStats(results),
+        questionSetData: this.runData?.question_set?.data || null
       })
       
       this.$emit('trigger-print', {

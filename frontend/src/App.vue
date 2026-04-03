@@ -1193,12 +1193,14 @@ async function handleImported({ data, mode, target, title }) {
           try {
             existingData = JSON.parse(existingData)
           } catch (e) {
-            existingData = { categories: [] }
+            existingData = { notes: '', categories: [] }
           }
         }
         
         const existingCategories = existingData?.categories || []
         const importedCategories = data.categories || []
+        const existingNotes = typeof existingData?.notes === 'string' ? existingData.notes.trim() : ''
+        const importedNotes = typeof data?.notes === 'string' ? data.notes.trim() : ''
         
         // Merge categories by name
         const mergedCategories = [...existingCategories]
@@ -1211,7 +1213,12 @@ async function handleImported({ data, mode, target, title }) {
           }
         })
         
-        finalData = { categories: mergedCategories }
+        finalData = {
+          ...existingData,
+          ...data,
+          notes: existingNotes || importedNotes,
+          categories: mergedCategories
+        }
       }
       
       const updated = await wsService.updateQuestionSet(currentQuestionSet.value.id, {

@@ -10,6 +10,7 @@ type QuestionSetService struct {
 }
 
 type QuestionData struct {
+	Notes      string     `json:"notes,omitempty"`
 	Categories []Category `json:"categories"`
 }
 

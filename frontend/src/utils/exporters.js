@@ -60,13 +60,26 @@ export const exportResultsReport = ({
     agentsRef,
     extractText = extractAnswerText,
     extractMeta = extractAnswerMeta,
-    calculateStats
+    calculateStats,
+    questionSetData = null
 }) => {
     const agents = isRef(agentsRef) ? agentsRef.value : agentsRef
     if (!Array.isArray(agents) || agents.length === 0) {
         alert('No agents available to export.')
         return
     }
+
+    let parsedQuestionSetData = questionSetData
+    if (typeof parsedQuestionSetData === 'string') {
+        try {
+            parsedQuestionSetData = JSON.parse(parsedQuestionSetData)
+        } catch (e) {
+            parsedQuestionSetData = null
+        }
+    }
+    const reportNotes = typeof parsedQuestionSetData?.notes === 'string'
+        ? parsedQuestionSetData.notes.trim()
+        : ''
 
     const orderedAgents = [...agents].sort((a, b) => {
         const aEval = isEvaluatorAgent(a)
@@ -154,6 +167,7 @@ export const exportResultsReport = ({
             totalAgents: agentsArray.length,
             totalQuestions,
             completedQuestions,
+            notes: reportNotes,
             validationLegend: {
                 '👍 positive': 'Correct and complete answer',
                 '👎 negative': 'Incorrect answer',

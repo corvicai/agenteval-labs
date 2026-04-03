@@ -2184,7 +2184,8 @@ async function exportToPdf(scope = pdfExportScope.value) {
 
     const pData = exportResultsReport({
       agentsRef: agentsArray,
-      calculateStats: calculateStats
+      calculateStats: calculateStats,
+      questionSetData: currentQuestionSet.value?.data || null
     })
     
     if (!pData) {
