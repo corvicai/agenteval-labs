@@ -88,6 +88,23 @@ describe('posthog service', () => {
         }))
     })
 
+    it('initializes analytics in production with the built-in public fallback', async () => {
+        setWindowLocation('https://agenteval.corviclabs.ai/')
+        mockConfig.POSTHOG_KEY = 'phc_g5TY15YtOI4fvazYarJmuwTvqEAfl8KDyXh3HFjv0HV'
+        mockConfig.POSTHOG_HOST = 'https://us.i.posthog.com'
+        mockConfig.PROD = true
+        mockConfig.MODE = 'production'
+
+        const service = await loadService()
+
+        expect(service.isPostHogEnabled()).toBe(true)
+        expect(service.initPostHog()).toBe(true)
+        expect(posthogMock.init).toHaveBeenCalledWith(
+            'phc_g5TY15YtOI4fvazYarJmuwTvqEAfl8KDyXh3HFjv0HV',
+            expect.objectContaining({ api_host: 'https://us.i.posthog.com' })
+        )
+    })
+
     it('identifies the current user and workspace context', async () => {
         setWindowLocation('https://agenteval.corviclabs.ai/')
         mockConfig.POSTHOG_KEY = 'phc_test'
