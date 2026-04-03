@@ -1,6 +1,7 @@
 package security
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -11,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -104,6 +106,41 @@ func Encrypt(plaintext []byte) (string, error) {
 	return EncryptWithKey(key, plaintext)
 }
 
+// DecryptWithConfiguredKeys decrypts with ENCRYPTION_KEY first and, when configured,
+// falls back to ENCRYPTION_KEY_PREVIOUS.
+func DecryptWithConfiguredKeys(cryptoText string) ([]byte, string, error) {
+	currentRaw := os.Getenv("ENCRYPTION_KEY")
+	currentKey, _, err := ParseEncryptionKey(currentRaw)
+	if err != nil {
+		return nil, "", err
+	}
+
+	plaintext, currentErr := DecryptWithKey(currentKey, cryptoText)
+	if currentErr == nil {
+		return plaintext, "current", nil
+	}
+
+	previousRaw := strings.TrimSpace(os.Getenv("ENCRYPTION_KEY_PREVIOUS"))
+	if previousRaw == "" {
+		return nil, "", currentErr
+	}
+
+	previousKey, _, previousErr := ParseEncryptionKey(previousRaw)
+	if previousErr != nil {
+		return nil, "", fmt.Errorf("current key failed: %v; ENCRYPTION_KEY_PREVIOUS invalid: %v", currentErr, previousErr)
+	}
+	if bytes.Equal(previousKey, currentKey) {
+		return nil, "", currentErr
+	}
+
+	plaintext, previousDecryptErr := DecryptWithKey(previousKey, cryptoText)
+	if previousDecryptErr == nil {
+		return plaintext, "previous", nil
+	}
+
+	return nil, "", fmt.Errorf("current key failed: %v; previous key failed: %v", currentErr, previousDecryptErr)
+}
+
 // DecryptWithKey decrypts a base64 AES-GCM ciphertext with the provided parsed key.
 func DecryptWithKey(key []byte, cryptoText string) ([]byte, error) {
 	ciphertext, err := base64.StdEncoding.DecodeString(cryptoText)
@@ -132,10 +169,6 @@ func DecryptWithKey(key []byte, cryptoText string) ([]byte, error) {
 
 // Decrypt string using AES-GCM
 func Decrypt(cryptoText string) ([]byte, error) {
-	key, _, err := ParseEncryptionKey(os.Getenv("ENCRYPTION_KEY"))
-	if err != nil {
-		return nil, err
-	}
-
-	return DecryptWithKey(key, cryptoText)
+	plaintext, _, err := DecryptWithConfiguredKeys(cryptoText)
+	return plaintext, err
 }

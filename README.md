@@ -139,6 +139,8 @@ All messages use a standard envelope: `{ "type": "REQ_*", "correlation_id": "...
 | `DATABASE_URL` | — | PostgreSQL connection string |
 | `JWT_SECRET` | — | JWT signing secret (min 32 chars) |
 | `ENCRYPTION_KEY` | — | AES key for encrypted agent configs. Preferred: raw 32 chars. Compatibility: raw 16/24/32 chars or hex 32/48/64 chars |
+| `ENCRYPTION_KEY_PREVIOUS` | — | Previous AES key kept temporarily during rotation so existing encrypted configs can still be read and re-encrypted |
+| `ENCRYPTION_KEY_ROTATE_ON_START` | `false` | When `true`, the backend re-encrypts supported encrypted columns from `ENCRYPTION_KEY_PREVIOUS` to `ENCRYPTION_KEY` during startup |
 | `PORT` | `8080` | API port |
 | `APP_ENV` | `development` | `development` or `production` (disables dev features) |
 | `FIREBASE_SERVICE_ACCOUNT` | — | Path to Firebase Service Account JSON |
@@ -158,6 +160,12 @@ Other user-facing records such as user names, emails, login logs, run answers, e
 ### What Exists Today
 
 - The app accepts `ENCRYPTION_KEY` as raw AES key material (`16`, `24`, or `32` chars) or as hex (`32`, `48`, or `64` chars).
+- When `ENCRYPTION_KEY_PREVIOUS` is configured, decrypt reads try the active key first and then the previous key.
+- New writes always use `ENCRYPTION_KEY`.
+- When `ENCRYPTION_KEY_ROTATE_ON_START=true`, startup attempts an in-place re-encryption of:
+  - `agents.config`
+  - `question_set_agents.config`
+- The startup rotator uses a PostgreSQL advisory lock so only one instance performs the rewrite during a rollout.
 - On startup, the backend stores a non-reversible fingerprint of the active key plus a sentinel ciphertext in `encryption_key_states`.
 - The Admin Debug view shows:
   - current key status and detected format
@@ -170,25 +178,26 @@ This allows the system to detect future key changes or read/decrypt incompatibil
 
 ### Safe Rotation Procedure
 
-Use this procedure when encrypted configs must be preserved.
+Use this procedure when encrypted configs must be preserved and you want the deploy itself to perform the migration.
 
 1. Confirm the current deployment is healthy in Admin Debug:
    - key status is `loaded`
    - key state status is `match`
    - no unexpected decrypt failures in `agents.config` or `question_set_agents.config`
-2. Prepare both keys:
-   - old key: the key that was used to encrypt the existing records
-   - new key: the replacement key
-3. Run a one-off migration that:
+2. Deploy the new revision with:
+   - `ENCRYPTION_KEY` = new key
+   - `ENCRYPTION_KEY_PREVIOUS` = old key
+   - `ENCRYPTION_KEY_ROTATE_ON_START=true`
+3. Let startup perform the migration:
    - reads `agents.config` and `question_set_agents.config`
-   - decrypts each value with the old key
+   - decrypts each value with the old key when needed
    - re-encrypts each value with the new key
-   - validates that the migrated rows can be decrypted with the new key
-4. After the migration succeeds, deploy the app with the new `ENCRYPTION_KEY`.
-5. Verify again in Admin Debug:
+   - updates the persisted key fingerprint/sentinel state to the new active key
+4. Verify again in Admin Debug:
    - key state status is `match`
    - sentinel verification succeeds
    - encrypted config decrypt failures remain at zero (or expected baseline)
+5. Once the rollout is confirmed healthy, remove `ENCRYPTION_KEY_PREVIOUS` and set `ENCRYPTION_KEY_ROTATE_ON_START=false` in the next deploy.
 
 ### Important Constraint
 
@@ -196,7 +205,13 @@ A live rotation is only possible if the rotation process has access to both the 
 
 ### Current Limitation
 
-This repository currently includes detection and verification for key drift, but it does not yet include an automatic dual-key live rotation command. If you need true zero-downtime rotation, the next step is to add a dedicated rotator that receives both keys, migrates the encrypted columns in place, and then updates the persisted key state.
+The current implementation supports deploy-time rotation with one active key plus one previous key. It does not yet provide:
+
+- ciphertext-level `key_id` metadata
+- support for more than two simultaneous keys
+- a long-running background rotator with progressive batches
+
+The intended path today is: deploy with current + previous keys, let startup rotate in place, verify, then remove the previous key.
 
 ### Emergency Reset Procedure
 

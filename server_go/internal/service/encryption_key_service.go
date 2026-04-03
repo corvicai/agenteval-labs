@@ -47,7 +47,19 @@ func NewEncryptionKeyService(db *gorm.DB) *EncryptionKeyService {
 }
 
 func (s *EncryptionKeyService) ObserveCurrentKey() (*CurrentEncryptionKey, error) {
-	raw := os.Getenv("ENCRYPTION_KEY")
+	return observeEncryptionKeyFromRaw(os.Getenv("ENCRYPTION_KEY"))
+}
+
+func (s *EncryptionKeyService) ObservePreviousKey() (*CurrentEncryptionKey, error) {
+	raw := strings.TrimSpace(os.Getenv("ENCRYPTION_KEY_PREVIOUS"))
+	if raw == "" {
+		return nil, nil
+	}
+
+	return observeEncryptionKeyFromRaw(raw)
+}
+
+func observeEncryptionKeyFromRaw(raw string) (*CurrentEncryptionKey, error) {
 	key, format, err := security.ParseEncryptionKey(raw)
 	if err != nil {
 		return nil, err
@@ -61,6 +73,51 @@ func (s *EncryptionKeyService) ObserveCurrentKey() (*CurrentEncryptionKey, error
 		ParsedBytes: len(key),
 		Fingerprint: security.KeyFingerprint(key),
 	}, nil
+}
+
+func (s *EncryptionKeyService) PromoteCurrentKeyState(current *CurrentEncryptionKey) error {
+	if current == nil {
+		return errors.New("current encryption key unavailable")
+	}
+	if s.db == nil {
+		return errors.New("database unavailable")
+	}
+
+	state, err := s.loadState()
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	sentinel, err := security.EncryptWithKey(current.Key, []byte(encryptionSentinelPlaintextV1))
+	if err != nil {
+		return err
+	}
+
+	if state == nil {
+		state = &models.EncryptionKeyState{
+			ID:        models.EncryptionKeyStatePrimaryID,
+			CreatedAt: now,
+		}
+	}
+
+	state.CipherVersion = EncryptionCipherVersion
+	state.ActiveFingerprint = current.Fingerprint
+	state.ActiveFormat = current.Format
+	state.ActiveCharLength = current.CharLength
+	state.ActiveParsedBytes = current.ParsedBytes
+	state.SentinelCiphertext = sentinel
+	state.LastSeenFingerprint = current.Fingerprint
+	state.LastSeenAt = now
+	state.LastSeenStatus = "match"
+	state.LastError = ""
+	state.UpdatedAt = now
+
+	if state.CreatedAt.IsZero() {
+		state.CreatedAt = now
+	}
+
+	return s.db.Save(state).Error
 }
 
 func (s *EncryptionKeyService) ReconcileCurrentKey() (EncryptionKeyHealth, error) {

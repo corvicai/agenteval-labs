@@ -40,6 +40,20 @@ func TestEncryptDecryptWithHexEncodedKey(t *testing.T) {
 	require.Equal(t, `{"ok":true}`, string(decrypted))
 }
 
+func TestDecryptFallsBackToPreviousKey(t *testing.T) {
+	previousKey := []byte("12345678901234567890123456789012")
+	currentKey := []byte("abcdefghijklmnopqrstuvwxyz123456")
+	t.Setenv("ENCRYPTION_KEY", string(currentKey))
+	t.Setenv("ENCRYPTION_KEY_PREVIOUS", string(previousKey))
+
+	encrypted, err := EncryptWithKey(previousKey, []byte(`{"legacy":true}`))
+	require.NoError(t, err)
+
+	decrypted, err := Decrypt(encrypted)
+	require.NoError(t, err)
+	require.Equal(t, `{"legacy":true}`, string(decrypted))
+}
+
 func TestParseEncryptionKeyInvalidLength(t *testing.T) {
 	_, _, err := ParseEncryptionKey("1234567890123456789012345678901234567890123456789012345678901234zz")
 	require.Error(t, err)

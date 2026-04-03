@@ -299,6 +299,19 @@ func main() {
 		} else {
 			logger.Info("[SECURITY] %s", health.StateSummary)
 		}
+
+		rotationResult, rotationErr := service.NewEncryptionKeyRotationService(database).RotateOnStartIfConfigured()
+		if rotationErr != nil {
+			log.Fatalf("[SECURITY] FATAL: encryption key rotation failed: %v", rotationErr)
+		}
+		switch rotationResult.Status {
+		case "completed":
+			logger.Info("[SECURITY] Rotated encrypted configs to the active ENCRYPTION_KEY (%d agents, %d question set overrides)", rotationResult.AgentsRotated, rotationResult.QuestionSetAgentsRotated)
+		case "lock_busy":
+			logger.Warn("[SECURITY] Encryption key rotation is already running in another instance; this revision will continue with dual-key reads")
+		case "skipped_same_key":
+			logger.Info("[SECURITY] Encryption key rotation requested, but ENCRYPTION_KEY and ENCRYPTION_KEY_PREVIOUS resolve to the same key")
+		}
 	}
 
 	engine := orchestrator.NewEngine(database, workerCount)
