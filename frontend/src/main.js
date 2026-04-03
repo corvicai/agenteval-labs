@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 import App from './App.vue'
 import './style.css'
 import { config } from './config.js'
+import { capturePostHogAppLoaded, initPostHog } from './services/posthog.js'
 
 console.log('AgentEval Revision:', {
   commit: config.APP_REVISION || config.GIT_COMMIT || 'unknown',
@@ -9,5 +10,8 @@ console.log('AgentEval Revision:', {
   dirty: config.APP_REVISION_DIRTY || '',
   updated_at: config.APP_REVISION_UPDATED_AT || ''
 })
+
+initPostHog()
+capturePostHogAppLoaded()
 
 createApp(App).mount('#app')

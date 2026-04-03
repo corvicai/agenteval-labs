@@ -130,6 +130,7 @@ import { computed, ref } from 'vue'
 import QuestionEditorModal from './QuestionEditorModal.vue'
 import QuestionSetTransferModal from './QuestionSetTransferModal.vue'
 import ConfirmDialog from './ConfirmDialog.vue'
+import { capturePostHogEvent } from '../services/posthog.js'
 import wsService from '../services/websocket.js'
 
 const props = defineProps({
@@ -243,6 +244,13 @@ async function handleCloneQuestionSet() {
       name: clonedName,
       version: props.currentQuestionSet.version || '1.0',
       data: clonedData
+    })
+
+    capturePostHogEvent('question_set_cloned', {
+      source_question_set_id: props.currentQuestionSet.id,
+      question_set_id: created?.id || '',
+      workspace_id: props.workspaceId || '',
+      question_count: getQuestionCount(created)
     })
 
     // Clone includes only questions. Agent selection/config is intentionally not copied.

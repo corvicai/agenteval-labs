@@ -1,5 +1,6 @@
 import { isEvaluatorAgentObject } from '../utils/arena/agents.js'
 import { parseEvaluatorTaskQuestionID } from '../utils/arena/parsing.js'
+import { capturePostHogEvent } from '../services/posthog.js'
 
 const START_RUN_RECOVERY_MAX_ATTEMPTS = 3
 const START_RUN_RECOVERY_DELAY_MS = 1200
@@ -204,12 +205,27 @@ export function useArenaRunExecution(options = {}) {
         evaluatorAgentIds,
         result.total_tasks || result.totalTasks || 0
       )
+      capturePostHogEvent('benchmark_run_started', {
+        question_set_id: questionSetId,
+        run_id: result.run_id || result.id || '',
+        primary_agent_count: primaryAgentIds.length,
+        evaluator_agent_count: evaluatorAgentIds.length,
+        question_count: flatQuestions.length
+      })
     } catch (e) {
       console.error('Failed to start run:', e)
 
       if (isTransientStartRunError(e)) {
         const recovered = await tryRecoverStartedRun(questionSetId, primaryAgentIds, evaluatorAgentIds)
         if (recovered) {
+          capturePostHogEvent('benchmark_run_started', {
+            question_set_id: questionSetId,
+            run_id: currentRun.value?.id || '',
+            primary_agent_count: primaryAgentIds.length,
+            evaluator_agent_count: evaluatorAgentIds.length,
+            question_count: flatQuestions.length,
+            recovered_from_disconnect: true
+          })
           return
         }
       }
@@ -297,6 +313,10 @@ export function useArenaRunExecution(options = {}) {
       if (currentRun.value) {
         currentRun.value.status = 'completed'
       }
+      capturePostHogEvent('benchmark_run_completed', {
+        run_id: completedRunId,
+        question_set_id: resolveQuestionSetIdForRun(completedRunId) || currentQuestionSet.value?.id || ''
+      })
       if (activeRunQuestionSetId.value === currentQuestionSet.value?.id) {
         wsStore.setRunningQuestionSetId(null)
       }
@@ -313,6 +333,10 @@ export function useArenaRunExecution(options = {}) {
     if (!currentRun.value) return
     try {
       await wsService.cancelRun(currentRun.value.id)
+      capturePostHogEvent('benchmark_run_cancelled', {
+        run_id: currentRun.value.id,
+        question_set_id: currentQuestionSet.value?.id || ''
+      })
       isRunning.value = false
       currentRun.value.status = 'cancelled'
       wsStore.setRunningQuestionSetId(null)

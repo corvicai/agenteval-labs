@@ -300,6 +300,7 @@ import { downloadManager } from './services/DownloadManager.js'
 import { contentCache } from './services/ContentCache.js'
 import { generateQuestionSetName } from './utils/nameGenerator.js'
 import { getQuestionSetListSyncSignature, getQuestionSetSyncSignature, resolveQuestionSetSelection } from './utils/arena/questionSet.js'
+import { capturePostHogEvent, identifyPostHogUser, resetPostHogUser } from './services/posthog.js'
 import { config } from './config'
 import './App.css'
 
@@ -343,6 +344,29 @@ watch(isAdmin, (adminEnabled) => {
     viewMode.value = 'benchmarks'
   }
 }, { immediate: true })
+
+watch(
+  [
+    currentUserId,
+    currentUserEmail,
+    currentUserName,
+    isAdmin,
+    () => currentWorkspace.value?.id || '',
+    () => currentWorkspace.value?.name || ''
+  ],
+  () => {
+    if (!isAuthenticated.value || !currentUserId.value) return
+    identifyPostHogUser({
+      userId: currentUserId.value,
+      email: currentUserEmail.value,
+      name: currentUserName.value,
+      workspaceId: currentWorkspace.value?.id || '',
+      workspaceName: currentWorkspace.value?.name || '',
+      isAdmin: isAdmin.value
+    })
+  },
+  { immediate: true }
+)
 
 
 
@@ -588,6 +612,12 @@ const getArenaHistoryLabel = computed(() => {
   return '⚔️ Arena'
 })
 
+function countQuestionsFromQuestionSetData(data) {
+  if (!data) return 0
+  const categories = Array.isArray(data?.categories) ? data.categories : []
+  return categories.reduce((total, category) => total + (Array.isArray(category?.questions) ? category.questions.length : 0), 0)
+}
+
 function applyMeResponse(me) {
   if (!me) return
   const existingUser = currentUser.value || {}
@@ -643,6 +673,10 @@ function openAdminPanel() {
   if (!isAdmin.value) return
   closeAdminProfile()
   viewMode.value = 'admin'
+  capturePostHogEvent('admin_panel_opened', {
+    admin_tab: adminTab.value,
+    workspace_id: currentWorkspace.value?.id || ''
+  })
 }
 
 function closeAdminProfile() {
@@ -750,6 +784,11 @@ async function onLogin() {
       console.log('Could not fetch user profile:', e)
     }
 
+    capturePostHogEvent('login_succeeded', {
+      workspace_id: currentWorkspace.value?.id || '',
+      is_admin: isAdmin.value
+    })
+
     // Onboarding check removed - users don't need organizations
 
     } catch (err) {
@@ -770,6 +809,11 @@ function onOnboardingCompleted() {
 
 
 async function handleLogout() {
+  capturePostHogEvent('logout_clicked', {
+    workspace_id: currentWorkspace.value?.id || '',
+    is_admin: isAdmin.value,
+    is_impersonating: isImpersonating.value
+  })
   await api.logout()
   isAuthenticated.value = false
   currentUser.value = null
@@ -787,6 +831,7 @@ async function handleLogout() {
   // We just need to clear global state.
   isManager.value = false
   wsService.disconnect('logout')
+  resetPostHogUser()
   // Redirect to login page
   viewMode.value = 'benchmarks'
 }
@@ -880,6 +925,10 @@ async function selectWorkspace(ws) {
     await wsConnect(ws.id)
     // syncState is called automatically on 'connected' in wsStore
     await loadQuestionSets()
+    capturePostHogEvent('workspace_switched', {
+      workspace_id: currentWorkspace.value?.id || '',
+      workspace_name: currentWorkspace.value?.name || ''
+    })
   } catch (e) {
     console.error('Failed to switch workspace:', e)
   }
@@ -932,6 +981,14 @@ async function handleQuestionSetShareAccepted(result) {
   const importedQuestionSet = result?.question_set || null
 
   dismissPendingShareLink()
+
+  if (importedQuestionSet?.id) {
+    capturePostHogEvent('question_set_share_imported', {
+      question_set_id: importedQuestionSet.id,
+      workspace_id: targetWorkspaceId,
+      question_count: countQuestionsFromQuestionSetData(importedQuestionSet.data)
+    })
+  }
 
   if (targetWorkspaceId && currentWorkspace.value?.id === targetWorkspaceId && importedQuestionSet?.id) {
     currentQuestionSet.value = importedQuestionSet
@@ -1038,6 +1095,10 @@ async function createWorkspaceInline() {
     workspaces.value.push(newWs)
     isCreatingWorkspace.value = false
     await selectWorkspace(newWs)
+    capturePostHogEvent('workspace_created', {
+      workspace_id: newWs?.id || '',
+      workspace_name: newWs?.name || name
+    })
   } catch (e) {
     console.error('Failed to create workspace:', e)
     alert('Failed to create workspace: ' + (e.message || 'Unknown error'))
@@ -1067,13 +1128,19 @@ async function cloneWorkspaceInline() {
   
   cloningLoading.value = true
   try {
+    const sourceWorkspaceId = cloneSourceWorkspace.value.id
     const clonedWs = await wsService.cloneWorkspace(
-      cloneSourceWorkspace.value.id, 
+      sourceWorkspaceId, 
       cloneNewName.value.trim()
     )
     workspaces.value.push(clonedWs)
     cancelCloning()
     await selectWorkspace(clonedWs)
+    capturePostHogEvent('workspace_cloned', {
+      workspace_id: clonedWs?.id || '',
+      source_workspace_id: sourceWorkspaceId,
+      workspace_name: clonedWs?.name || ''
+    })
   } catch (e) {
     console.error('Failed to clone workspace:', e)
     alert('Failed to clone workspace: ' + (e.message || 'Unknown error'))
@@ -1097,6 +1164,8 @@ async function handleImported({ data, mode, target, title }) {
   try {
     // Use title from import, or generate one
     const setName = title || `Imported - ${generateQuestionSetName()}`
+    const categoryCount = Array.isArray(data?.categories) ? data.categories.length : 0
+    const questionCount = countQuestionsFromQuestionSetData(data)
     
     // If target is 'new' OR no current question set, create a new one
     if (target === 'new' || !currentQuestionSet.value) {
@@ -1106,6 +1175,13 @@ async function handleImported({ data, mode, target, title }) {
         data: data
       })
       currentQuestionSet.value = result
+      capturePostHogEvent('question_set_imported', {
+        action: 'created_new',
+        question_set_id: result?.id || '',
+        workspace_id: currentWorkspace.value?.id || '',
+        category_count: categoryCount,
+        question_count: questionCount
+      })
     } else {
       // Target is 'current' - update existing question set
       let finalData = data
@@ -1144,6 +1220,13 @@ async function handleImported({ data, mode, target, title }) {
         data: finalData
       })
       currentQuestionSet.value = updated
+      capturePostHogEvent('question_set_imported', {
+        action: mode === 'append' ? 'appended_current' : 'replaced_current',
+        question_set_id: updated?.id || '',
+        workspace_id: currentWorkspace.value?.id || '',
+        category_count: categoryCount,
+        question_count: questionCount
+      })
     }
     
     showImportModal.value = false

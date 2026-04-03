@@ -16,6 +16,7 @@
         "dompurify": "^3.3.3",
         "firebase": "^12.8.0",
         "marked": "^10.0.0",
+        "posthog-js": "^1.364.6",
         "vue": "^3.4.0"
     },
     "devDependencies": {

@@ -531,6 +531,7 @@
 <script setup>
 import { ref, watch, computed } from 'vue'
 
+import { capturePostHogEvent } from '../services/posthog.js'
 import { wsService } from '../services/websocket.js'
 import { generateAgentName } from '../utils/nameGenerator.js'
 
@@ -1117,6 +1118,11 @@ async function addAgentWithConfig(providerType, customConfig) {
 	      pendingCreateIds.value.add(newAgent.id)
 	    }
 	    localAgents.value.unshift(newAgentWithParsedConfig)
+        capturePostHogEvent('agent_created', {
+          agent_id: newAgent?.id || '',
+          workspace_id: props.workspaceId || '',
+          provider_type: providerType
+        })
 
 	    emit('update')
 	    showSaveStatus('saved', 'Agent created!')

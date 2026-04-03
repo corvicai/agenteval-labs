@@ -25,6 +25,10 @@ export const config = {
     // Feature Flags / UI Config
     ENABLE_LEGACY_AUTH: env.VITE_ENABLE_LEGACY_AUTH || import.meta.env.VITE_ENABLE_LEGACY_AUTH,
     AFK_TIMEOUT_MS: env.VITE_AFK_TIMEOUT_MS || import.meta.env.VITE_AFK_TIMEOUT_MS,
+    POSTHOG_KEY: env.VITE_POSTHOG_KEY || import.meta.env.VITE_POSTHOG_KEY,
+    POSTHOG_HOST: env.VITE_POSTHOG_HOST || import.meta.env.VITE_POSTHOG_HOST,
+    POSTHOG_ENABLED: env.VITE_POSTHOG_ENABLED || import.meta.env.VITE_POSTHOG_ENABLED,
+    POSTHOG_ENVIRONMENT: env.VITE_POSTHOG_ENVIRONMENT || import.meta.env.VITE_POSTHOG_ENVIRONMENT,
 
     // Meta
     APP_REVISION: env.VITE_APP_REVISION || env.APP_REVISION || import.meta.env.VITE_APP_REVISION || env.VITE_GIT_COMMIT || import.meta.env.VITE_GIT_COMMIT,

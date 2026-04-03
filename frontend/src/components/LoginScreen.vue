@@ -193,6 +193,7 @@ import * as api from '../services/api.js'
 import { webauthnService } from '../services/webauthn.js'
 import { fetchSignInMethodsForEmail } from 'firebase/auth'
 import { auth, loginWithGoogle, loginWithGithub, getIdToken, deleteCurrentUser } from '../services/firebase.js'
+import { capturePostHogEvent, identifyPostHogUser } from '../services/posthog.js'
 import { config } from '../config'
 
 const emit = defineEmits(['login'])
@@ -260,6 +261,20 @@ async function handleSocialLogin(provider) {
         if (result.user) localStorage.setItem('user', JSON.stringify(result.user))
         if (result.workspace) localStorage.setItem('workspace', JSON.stringify(result.workspace))
         if (result.token) localStorage.setItem('token', result.token) // Internal token for handshake consistency
+
+        identifyPostHogUser({
+          userId: result.user?.id || result.user?.ID,
+          email: result.user?.email,
+          name: result.user?.name,
+          workspaceId: result.workspace?.id,
+          workspaceName: result.workspace?.name,
+          isAdmin: result.user?.is_admin
+        })
+        capturePostHogEvent('login_succeeded', {
+          method: provider,
+          workspace_id: result.workspace?.id || '',
+          is_admin: Boolean(result.user?.is_admin)
+        })
         
         emit('login')
       }
@@ -325,6 +340,18 @@ async function handleSubmit() {
   try {
     if (isRegister.value) {
       const result = await api.register(form.value.name, form.value.email, form.value.password)
+      identifyPostHogUser({
+        userId: result.user?.id || result.user?.ID,
+        email: result.user?.email,
+        name: result.user?.name,
+        workspaceId: result.workspace?.id,
+        workspaceName: result.workspace?.name,
+        isAdmin: result.user?.is_admin
+      })
+      capturePostHogEvent('signup_completed', {
+        method: 'password',
+        workspace_id: result.workspace?.id || ''
+      })
       emit('login')
     } else {
       const result = await api.login(form.value.email, form.value.password)
@@ -335,6 +362,20 @@ async function handleSubmit() {
         showTermsModal.value = true
         return
       }
+
+      identifyPostHogUser({
+        userId: result.user?.id || result.user?.ID,
+        email: result.user?.email,
+        name: result.user?.name,
+        workspaceId: result.workspace?.id,
+        workspaceName: result.workspace?.name,
+        isAdmin: result.user?.is_admin
+      })
+      capturePostHogEvent('login_succeeded', {
+        method: 'password',
+        workspace_id: result.workspace?.id || '',
+        is_admin: Boolean(result.user?.is_admin)
+      })
       
       emit('login')
     }
@@ -386,6 +427,19 @@ async function handlePasskeyLogin() {
     const result = await api.webAuthnLoginFinish(form.value.email, assertion)
     
     // result.user, result.token, result.workspace are already saved in api.webAuthnLoginFinish
+    identifyPostHogUser({
+      userId: result.user?.id || result.user?.ID,
+      email: result.user?.email,
+      name: result.user?.name,
+      workspaceId: result.workspace?.id,
+      workspaceName: result.workspace?.name,
+      isAdmin: result.user?.is_admin
+    })
+    capturePostHogEvent('login_succeeded', {
+      method: 'passkey',
+      workspace_id: result.workspace?.id || '',
+      is_admin: Boolean(result.user?.is_admin)
+    })
     emit('login')
   } catch (e) {
     if (e.name === 'NotAllowedError') {

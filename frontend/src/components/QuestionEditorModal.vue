@@ -84,6 +84,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { capturePostHogEvent } from '../services/posthog.js'
 import { wsService } from '../services/websocket.js'
 import ImportQuestionsModal from './ImportQuestionsModal.vue'
 import { generateQuestionSetName } from '../utils/nameGenerator.js'
@@ -271,6 +272,14 @@ const saveChanges = async () => {
        if (!props.workspaceId) throw new Error('Workspace ID missing')
        updated = await wsService.createQuestionSet(props.workspaceId, payload)
     }
+
+    capturePostHogEvent('question_set_saved', {
+      action: props.questionSet?.id ? 'updated' : 'created',
+      question_set_id: updated?.id || props.questionSet?.id || '',
+      workspace_id: props.workspaceId || '',
+      category_count: cleanedCategories.length,
+      question_count: cleanedCategories.reduce((total, category) => total + (category.questions?.length || 0), 0)
+    })
     
     emit('saved', updated)
     emit('close')
