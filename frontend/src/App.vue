@@ -345,29 +345,6 @@ watch(isAdmin, (adminEnabled) => {
   }
 }, { immediate: true })
 
-watch(
-  [
-    currentUserId,
-    currentUserEmail,
-    currentUserName,
-    isAdmin,
-    () => currentWorkspace.value?.id || '',
-    () => currentWorkspace.value?.name || ''
-  ],
-  () => {
-    if (!isAuthenticated.value || !currentUserId.value) return
-    identifyPostHogUser({
-      userId: currentUserId.value,
-      email: currentUserEmail.value,
-      name: currentUserName.value,
-      workspaceId: currentWorkspace.value?.id || '',
-      workspaceName: currentWorkspace.value?.name || '',
-      isAdmin: isAdmin.value
-    })
-  },
-  { immediate: true }
-)
-
 
 
 // State
@@ -393,6 +370,29 @@ const isReconnectingFromAfk = ref(false)
 const reconnectOverlayMode = ref('afk')
 const reconnectOverlayGraceMs = 7000
 let reconnectOverlayTimer = null
+
+watch(
+  [
+    currentUserId,
+    currentUserEmail,
+    currentUserName,
+    isAdmin,
+    () => currentWorkspace.value?.id || '',
+    () => currentWorkspace.value?.name || ''
+  ],
+  () => {
+    if (!isAuthenticated.value || !currentUserId.value) return
+    identifyPostHogUser({
+      userId: currentUserId.value,
+      email: currentUserEmail.value,
+      name: currentUserName.value,
+      workspaceId: currentWorkspace.value?.id || '',
+      workspaceName: currentWorkspace.value?.name || '',
+      isAdmin: isAdmin.value
+    })
+  },
+  { immediate: true }
+)
 
 watch(
   [isAuthenticated, appReady, () => workspaces.value.length],
