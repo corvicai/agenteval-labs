@@ -3,6 +3,12 @@ FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
+# Build-time revision info (injected via --build-arg in CI)
+ARG BUILD_COMMIT=""
+ARG BUILD_BRANCH=""
+ARG BUILD_DIRTY=""
+ARG BUILD_UPDATED_AT=""
+
 # Install build dependencies
 RUN apk add --no-cache gcc musl-dev
 
@@ -15,8 +21,13 @@ RUN go mod tidy
 # Copy source code AFTER dependencies are cached
 COPY server_go/. .
 
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
+# Build the application — bake revision info into the binary
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
+    -ldflags="-X benchmarking-platform/internal/buildinfo.Commit=${BUILD_COMMIT} \
+              -X benchmarking-platform/internal/buildinfo.Branch=${BUILD_BRANCH} \
+              -X benchmarking-platform/internal/buildinfo.Dirty=${BUILD_DIRTY} \
+              -X benchmarking-platform/internal/buildinfo.UpdatedAt=${BUILD_UPDATED_AT}" \
+    -o main .
 
 # Final stage
 FROM alpine:3.19

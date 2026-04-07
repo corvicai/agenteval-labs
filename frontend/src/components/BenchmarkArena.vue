@@ -45,7 +45,7 @@
     <LeftSidebar
       :question-sets="questionSets"
       :current-question-set="currentQuestionSet"
-      :agents="mergedAgents"
+      :agents="props.agents"
       :running-question-set-id="wsState.runningQuestionSetId"
       :workspace-id="workspaceId"
       @create-question-set="createNewQuestionSet"

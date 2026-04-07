@@ -20,6 +20,7 @@ import (
 
 	"benchmarking-platform/api"
 	"benchmarking-platform/api/handlers"
+	"benchmarking-platform/internal/buildinfo"
 	"benchmarking-platform/internal/db"
 	"benchmarking-platform/internal/firebase"
 	"benchmarking-platform/internal/logger"
@@ -49,10 +50,10 @@ func firstNonEmpty(values ...string) string {
 
 func loadAppRevisionInfo() appRevisionInfo {
 	return appRevisionInfo{
-		Commit:    firstNonEmpty(os.Getenv("APP_REVISION"), os.Getenv("GIT_COMMIT")),
-		Branch:    firstNonEmpty(os.Getenv("APP_REVISION_BRANCH")),
-		Dirty:     firstNonEmpty(os.Getenv("APP_REVISION_DIRTY")),
-		UpdatedAt: firstNonEmpty(os.Getenv("APP_REVISION_UPDATED_AT")),
+		Commit:    firstNonEmpty(buildinfo.Commit, os.Getenv("APP_REVISION"), os.Getenv("GIT_COMMIT")),
+		Branch:    firstNonEmpty(buildinfo.Branch, os.Getenv("APP_REVISION_BRANCH")),
+		Dirty:     firstNonEmpty(buildinfo.Dirty, os.Getenv("APP_REVISION_DIRTY")),
+		UpdatedAt: firstNonEmpty(buildinfo.UpdatedAt, os.Getenv("APP_REVISION_UPDATED_AT")),
 	}
 }
 

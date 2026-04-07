@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"benchmarking-platform/internal/buildinfo"
 	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/security"
 	"benchmarking-platform/internal/service"
@@ -1608,10 +1609,10 @@ func adminDebugDecryptStatus(shape string, err error) string {
 
 func buildAdminDebugRevision() models.AdminDebugRevision {
 	return models.AdminDebugRevision{
-		Commit:    firstNonEmptyAdminDebug(os.Getenv("APP_REVISION"), os.Getenv("GIT_COMMIT")),
-		Branch:    firstNonEmptyAdminDebug(os.Getenv("APP_REVISION_BRANCH")),
-		Dirty:     firstNonEmptyAdminDebug(os.Getenv("APP_REVISION_DIRTY")),
-		UpdatedAt: firstNonEmptyAdminDebug(os.Getenv("APP_REVISION_UPDATED_AT")),
+		Commit:    firstNonEmptyAdminDebug(buildinfo.Commit, os.Getenv("APP_REVISION"), os.Getenv("GIT_COMMIT")),
+		Branch:    firstNonEmptyAdminDebug(buildinfo.Branch, os.Getenv("APP_REVISION_BRANCH")),
+		Dirty:     firstNonEmptyAdminDebug(buildinfo.Dirty, os.Getenv("APP_REVISION_DIRTY")),
+		UpdatedAt: firstNonEmptyAdminDebug(buildinfo.UpdatedAt, os.Getenv("APP_REVISION_UPDATED_AT")),
 	}
 }
 
