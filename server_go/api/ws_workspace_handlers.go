@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 
 	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/middleware"
@@ -171,8 +172,21 @@ func (h *Hub) handleUpdateAgent(c *Connection, env models.Envelope) {
 			c.SendError(env.CorrelationID, "agent not found")
 			return
 		}
-		c.SendErrorWithDetails(env.CorrelationID, "failed to find agent", err.Error())
+		c.SendErrorWithDetails(env.CorrelationID, "failed to load agent (check encryption config)", err.Error())
 		return
+	}
+
+	// Check for decryption-failed marker - warn but allow update if new config is provided
+	var configMap map[string]any
+	json.Unmarshal(agent.Config, &configMap)
+	if _, failed := configMap["_error"]; failed {
+		// If no new config is provided, block the update
+		if len(payload.Config) == 0 {
+			c.SendError(env.CorrelationID, "agent configuration is undecryptable; provide new credentials to fix")
+			return
+		}
+		// Otherwise proceed with update - new config will overwrite the corrupted one
+		logger.Info("[WS][UPDATE_AGENT] Overwriting undecryptable config for agent_id=%s", agentID)
 	}
 
 	agent.Name = payload.Name
@@ -247,9 +261,15 @@ func (h *Hub) handleCreateAgent(c *Connection, env models.Envelope) {
 			payload.ProviderType,
 			err,
 		)
-		c.SendErrorWithDetails(env.CorrelationID, "failed to create agent", err.Error())
+		errMsg := "failed to create agent"
+		if strings.Contains(err.Error(), "ENCRYPTION_KEY") {
+			errMsg = "encryption key not configured in production"
+		}
+		c.SendErrorWithDetails(env.CorrelationID, errMsg, err.Error())
 		return
 	}
+
+	logger.Info("[WS][CREATE_AGENT] agent created successfully agent_id=%s user_id=%s", agent.ID, c.UserID)
 
 	h.BroadcastEvent(wsID, "agents", "created", agent)
 	c.SendResponse(DataResponse, env.CorrelationID, agent)
@@ -262,7 +282,8 @@ func (h *Hub) handleDeleteAgent(c *Connection, env models.Envelope) {
 	}
 
 	var payload struct {
-		ID string `json:"id"`
+		ID    string `json:"id"`
+		Force bool   `json:"force"`
 	}
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
 		c.SendError(env.CorrelationID, "invalid payload")
@@ -275,6 +296,40 @@ func (h *Hub) handleDeleteAgent(c *Connection, env models.Envelope) {
 		return
 	}
 
+	// Force mode: delete without loading the agent (bypasses decryption errors)
+	if payload.Force {
+		tx := h.db.Begin()
+
+		// Get workspace_id before deletion for broadcasting
+		var workspaceID uuid.UUID
+		h.db.Raw("SELECT workspace_id FROM agents WHERE id = ?", agentID).Scan(&workspaceID)
+
+		if err := tx.Where("agent_id = ?", agentID).Delete(&models.QuestionSetAgent{}).Error; err != nil {
+			tx.Rollback()
+			c.SendErrorWithDetails(env.CorrelationID, "failed to delete agent mappings", err.Error())
+			return
+		}
+
+		// Use Exec for direct SQL delete to avoid GORM loading the model
+		if err := tx.Exec("DELETE FROM agents WHERE id = ?", agentID).Error; err != nil {
+			tx.Rollback()
+			c.SendErrorWithDetails(env.CorrelationID, "failed to delete agent", err.Error())
+			return
+		}
+
+		if err := tx.Commit().Error; err != nil {
+			c.SendErrorWithDetails(env.CorrelationID, "failed to delete agent", err.Error())
+			return
+		}
+
+		if workspaceID != uuid.Nil {
+			h.BroadcastEvent(workspaceID, "agents", "deleted", map[string]string{"id": agentID.String()})
+		}
+		c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "deleted_force"})
+		return
+	}
+
+	// Normal flow: load agent first (may fail if config is undecryptable)
 	var agent models.Agent
 	if err := h.db.First(&agent, "id = ?", agentID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -282,7 +337,7 @@ func (h *Hub) handleDeleteAgent(c *Connection, env models.Envelope) {
 			c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "already_deleted"})
 			return
 		}
-		c.SendErrorWithDetails(env.CorrelationID, "failed to find agent", err.Error())
+		c.SendErrorWithDetails(env.CorrelationID, "failed to load agent for deletion (check encryption config). Use force=true to delete anyway", err.Error())
 		return
 	}
 

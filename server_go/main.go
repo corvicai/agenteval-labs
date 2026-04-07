@@ -56,6 +56,24 @@ func loadAppRevisionInfo() appRevisionInfo {
 	}
 }
 
+// shouldBlockStartupForEncryptionHealth returns true (with reason) when production
+// should refuse to start due to an unrecoverable encryption key problem.
+//
+// "mismatch" (key fingerprint changed) is handled by auto-promoting the current key
+// in main, so it does NOT block here — the server starts with a loud warning.
+//
+// "sentinel_failed" means the stored fingerprint matches but the sentinel ciphertext
+// cannot be decrypted. This indicates key corruption or DB tampering and is always fatal.
+func shouldBlockStartupForEncryptionHealth(appEnv string, health service.EncryptionKeyHealth, rotation service.EncryptionKeyRotationResult) (bool, string) {
+	if strings.TrimSpace(appEnv) != "production" {
+		return false, ""
+	}
+	if health.StateStatus == "sentinel_failed" {
+		return true, health.StateSummary
+	}
+	return false, ""
+}
+
 func hostOnly(raw string) string {
 	value := strings.TrimSpace(raw)
 	if value == "" {
@@ -291,15 +309,6 @@ func main() {
 
 	if database != nil {
 		encryptionKeyService := service.NewEncryptionKeyService(database)
-		health, err := encryptionKeyService.ReconcileCurrentKey()
-		if err != nil {
-			logger.Warn("[SECURITY] Failed to reconcile encryption key state: %v", err)
-		} else if health.StateStatus == "mismatch" || health.StateStatus == "sentinel_failed" {
-			logger.Warn("[SECURITY] %s", health.StateSummary)
-		} else {
-			logger.Info("[SECURITY] %s", health.StateSummary)
-		}
-
 		rotationResult, rotationErr := service.NewEncryptionKeyRotationService(database).RotateOnStartIfConfigured()
 		if rotationErr != nil {
 			log.Fatalf("[SECURITY] FATAL: encryption key rotation failed: %v", rotationErr)
@@ -311,6 +320,27 @@ func main() {
 			logger.Warn("[SECURITY] Encryption key rotation is already running in another instance; this revision will continue with dual-key reads")
 		case "skipped_same_key":
 			logger.Info("[SECURITY] Encryption key rotation requested, but ENCRYPTION_KEY and ENCRYPTION_KEY_PREVIOUS resolve to the same key")
+		}
+
+		health, err := encryptionKeyService.ReconcileCurrentKey()
+		if err != nil {
+			logger.Warn("[SECURITY] Failed to reconcile encryption key state: %v", err)
+		} else if health.StateStatus == "mismatch" {
+			// Key fingerprint changed (e.g. rotation without ENCRYPTION_KEY_PREVIOUS, or key recovery).
+			// Auto-promote the current key so the server can start. Previously encrypted data
+			// that cannot be decrypted with the new key will surface as _error markers.
+			current, observeErr := encryptionKeyService.ObserveCurrentKey()
+			if observeErr != nil {
+				logger.Warn("[SECURITY] Key mismatch detected but cannot read current key for auto-promote: %v", observeErr)
+			} else if promoteErr := encryptionKeyService.PromoteCurrentKeyState(current); promoteErr != nil {
+				logger.Warn("[SECURITY] Key mismatch auto-promote failed: %v", promoteErr)
+			} else {
+				logger.Warn("[SECURITY] ENCRYPTION_KEY fingerprint mismatch — current key auto-promoted as active. Agents encrypted with the previous key will require re-entering credentials.")
+			}
+		} else if blocked, reason := shouldBlockStartupForEncryptionHealth(os.Getenv("APP_ENV"), health, rotationResult); blocked {
+			log.Fatalf("[SECURITY] FATAL: %s. The active ENCRYPTION_KEY cannot verify the stored sentinel — possible key corruption or DB tampering. Use ENCRYPTION_KEY_PREVIOUS + ENCRYPTION_KEY_ROTATE_ON_START for proper key rotation.", reason)
+		} else {
+			logger.Info("[SECURITY] %s", health.StateSummary)
 		}
 	}
 

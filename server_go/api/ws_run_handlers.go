@@ -66,12 +66,21 @@ func normalizeResultsEvaluationsForDisplay(results []models.RunResult) {
 	}
 }
 
-func ensureAgentSyncConfigs(agents []models.Agent) {
+func ensureAgentSyncConfigs(agents []models.Agent) (hadDecryptionErrors bool) {
 	for i := range agents {
 		if len(agents[i].Config) == 0 {
 			agents[i].Config = models.EncryptedJSON([]byte(`{}`))
+			continue
+		}
+		var m map[string]any
+		if json.Unmarshal(agents[i].Config, &m) == nil {
+			if _, bad := m["_error"]; bad {
+				agents[i].Config = models.EncryptedJSON([]byte(`{}`))
+				hadDecryptionErrors = true
+			}
 		}
 	}
+	return
 }
 
 func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
@@ -296,10 +305,11 @@ func (h *Hub) handleSyncState(c *Connection, env models.Envelope) {
 			c.SendError(env.CorrelationID, "failed to load agents: "+fallbackErr.Error())
 			return
 		}
-
 		ensureAgentSyncConfigs(payload.Agents)
 	} else {
-		ensureAgentSyncConfigs(payload.Agents)
+		if ensureAgentSyncConfigs(payload.Agents) {
+			payload.Warnings = append(payload.Warnings, "Some agent configs could not be decrypted; returning agent metadata without config.")
+		}
 	}
 
 	// 2. Get Question Sets
@@ -322,6 +332,26 @@ func (h *Hub) handleSyncState(c *Connection, env models.Envelope) {
 			logger.Error("[WS] SyncState fallback question set load failed: %v", fallbackErr)
 			c.SendError(env.CorrelationID, "failed to load question sets: "+fallbackErr.Error())
 			return
+		}
+	} else {
+		// Filter out QuestionSetAgent entries with undecryptable configs (_error marker)
+		var hadBadOverrides bool
+		for i := range payload.QuestionSets {
+			clean := payload.QuestionSets[i].Agents[:0]
+			for _, qsa := range payload.QuestionSets[i].Agents {
+				var m map[string]any
+				if json.Unmarshal(qsa.Config, &m) == nil {
+					if _, bad := m["_error"]; bad {
+						hadBadOverrides = true
+						continue
+					}
+				}
+				clean = append(clean, qsa)
+			}
+			payload.QuestionSets[i].Agents = clean
+		}
+		if hadBadOverrides {
+			payload.Warnings = append(payload.Warnings, "Some question set agent overrides could not be decrypted; returning question sets without embedded agent overrides.")
 		}
 	}
 

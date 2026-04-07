@@ -1362,20 +1362,30 @@ async function toggleAgent(agent) {
   }
 }
 
-async function deleteAgent(agent) {
+async function deleteAgent(agent, force = false) {
   if (!confirm(`Delete agent "${agent.name}"?`)) return
+
   try {
-    await wsService.deleteAgent(agent.id)
-    // Update local state immediately
+    await wsService.deleteAgent(agent.id, force)
     localAgents.value = localAgents.value.filter(a => a.id !== agent.id)
     dirtyAgentIds.value.delete(agent.id)
     pendingCreateIds.value.delete(agent.id)
     pendingChanges.value = dirtyAgentIds.value.size > 0
     emit('update')
-    showSaveStatus('saved', 'Agent deleted')
+    showSaveStatus('saved', force ? 'Agent force-deleted' : 'Agent deleted')
   } catch (e) {
     console.error('Failed to delete agent:', e)
-    showSaveStatus('error', e.message || 'Delete failed')
+    const errorMsg = e.message || ''
+    if (!force && (errorMsg.includes('encryption') || errorMsg.includes('failed to find') || errorMsg.includes('failed to load'))) {
+      const tryForce = confirm(
+        `Delete failed: ${errorMsg}\n\nThis agent has an unreadable configuration (encryption issue).\nDo you want to force-delete it directly from the database?`
+      )
+      if (tryForce) {
+        await deleteAgent(agent, true)
+        return
+      }
+    }
+    showSaveStatus('error', errorMsg || 'Delete failed')
   }
 }
 

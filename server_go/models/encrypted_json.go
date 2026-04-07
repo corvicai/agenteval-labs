@@ -50,7 +50,10 @@ func (j *EncryptedJSON) Scan(value interface{}) error {
 			*j = EncryptedJSON(s)
 			return nil
 		}
-		return fmt.Errorf("failed to decrypt field: %v", err)
+		// If decryption fails and it's not legacy JSON, return a marker so the record
+		// can still be loaded (and thus deleted) instead of failing the whole query.
+		*j = EncryptedJSON(`{"_error":"decryption_failed"}`)
+		return nil
 	}
 
 	*j = EncryptedJSON(decrypted)

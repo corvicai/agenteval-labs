@@ -627,8 +627,8 @@ class WebSocketService {
         return this.request('REQ_CREATE_AGENT', { workspace_id: workspaceId, ...data })
     }
 
-    deleteAgent(agentId) {
-        return this.request('REQ_DELETE_AGENT', { id: agentId })
+    deleteAgent(agentId, force = false) {
+        return this.request('REQ_DELETE_AGENT', { id: agentId, force })
     }
 
     // Manager API via WS

@@ -180,7 +180,12 @@ func (h *AgentHandler) Delete(c echo.Context) error {
 	}
 
 	var agent models.Agent
-	h.DB.First(&agent, "id = ?", id)
+	if err := h.DB.First(&agent, "id = ?", id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return c.JSON(http.StatusNoContent, nil) // Already deleted
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to load agent for deletion (check encryption config): " + err.Error()})
+	}
 	wsID := agent.WorkspaceID
 
 	if err := h.DB.Delete(&models.Agent{}, "id = ?", id).Error; err != nil {
