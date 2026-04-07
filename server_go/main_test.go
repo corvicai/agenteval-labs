@@ -13,7 +13,6 @@ func TestShouldBlockStartupForEncryptionHealth(t *testing.T) {
 		blocked, reason := shouldBlockStartupForEncryptionHealth(
 			"production",
 			service.EncryptionKeyHealth{StateStatus: "mismatch", StateSummary: "fingerprint mismatch"},
-			service.EncryptionKeyRotationResult{},
 		)
 		require.False(t, blocked)
 		require.Empty(t, reason)
@@ -23,7 +22,6 @@ func TestShouldBlockStartupForEncryptionHealth(t *testing.T) {
 		blocked, reason := shouldBlockStartupForEncryptionHealth(
 			"production",
 			service.EncryptionKeyHealth{StateStatus: "sentinel_failed", StateSummary: "sentinel failed"},
-			service.EncryptionKeyRotationResult{},
 		)
 		require.True(t, blocked)
 		require.Equal(t, "sentinel failed", reason)
@@ -33,7 +31,6 @@ func TestShouldBlockStartupForEncryptionHealth(t *testing.T) {
 		blocked, reason := shouldBlockStartupForEncryptionHealth(
 			"production",
 			service.EncryptionKeyHealth{StateStatus: "match"},
-			service.EncryptionKeyRotationResult{},
 		)
 		require.False(t, blocked)
 		require.Empty(t, reason)
@@ -43,7 +40,6 @@ func TestShouldBlockStartupForEncryptionHealth(t *testing.T) {
 		blocked, reason := shouldBlockStartupForEncryptionHealth(
 			"development",
 			service.EncryptionKeyHealth{StateStatus: "sentinel_failed", StateSummary: "sentinel failed"},
-			service.EncryptionKeyRotationResult{},
 		)
 		require.False(t, blocked)
 		require.Empty(t, reason)

@@ -10,34 +10,45 @@
         <div v-if="!hasEnabledAgents && localAgents.length > 0" class="alert alert-warning">
           ⚠️ <strong>Warning:</strong> No primary agents are enabled. You won't be able to run benchmarks.
         </div>
+
+        <div v-if="!editingAgentId" class="agent-tabs">
+          <button :class="['tab-btn', { active: activeTab === 'agents' }]" @click="activeTab = 'agents'">
+            Agents <span class="tab-count">{{ agentsTabCount }}</span>
+          </button>
+          <button :class="['tab-btn', { active: activeTab === 'evaluators' }]" @click="activeTab = 'evaluators'">
+            Evaluators <span class="tab-count">{{ evaluatorsTabCount }}</span>
+          </button>
+        </div>
+
+        <div v-if="editingAgentId" class="agent-breadcrumb">
+          <button class="btn-back" @click="closeAgentConfig">← Back</button>
+          <span class="breadcrumb-name">{{ editingAgent?.name }}</span>
+          <span class="agent-type-badge" :class="editingAgent?.provider_type">{{ getAgentTypeLabel(editingAgent) }}</span>
+        </div>
+
         <div class="agents-list">
-          <div v-for="(agent, index) in localAgents" :key="agent.id" class="agent-card" :class="{ 'disabled-card': !agent.enabled }">
-            <div class="agent-header">
-              <div class="agent-drag" @mousedown="startDrag(index)">⠿</div>
-              <input 
-                v-model="agent.name" 
-                class="agent-name-input"
-                @focus="startEditing"
-                @input="markPendingChanges(agent)"
-                @blur="saveAgent(agent); stopEditing()"
-              />
+          <div v-for="(agent, index) in visibleAgents" :key="agent.id" class="agent-card" :class="{ 'disabled-card': !agent.enabled, 'clickable': !editingAgentId }" @click="!editingAgentId && openAgentConfig(agent)">
+            <div class="agent-header" :class="{ 'no-mb': editingAgentId !== agent.id }">
+              <span class="agent-name-text">{{ agent.name }}</span>
               <span class="agent-type-badge" :class="agent.provider_type">
                 {{ getAgentTypeLabel(agent) }}
               </span>
               <div class="agent-actions">
-                <button class="btn-icon" @click="toggleAgent(agent)" :title="agent.enabled ? 'Disable' : 'Enable'">
+                <button class="btn-icon" @click.stop="toggleAgent(agent)" :title="agent.enabled ? 'Disable' : 'Enable'">
                   {{ agent.enabled ? '✅' : '⏸️' }}
                 </button>
-                <button class="btn-icon" @click="showSpyModal(agent)" title="Spy Payload">
-                  🔍
-                </button>
-                <button class="btn-icon btn-danger-icon" @click="deleteAgent(agent)" title="Delete">
-                  🗑️
-                </button>
+                <button class="btn-icon" @click.stop="showSpyModal(agent)" title="Spy Payload">🔍</button>
+                <button class="btn-icon btn-danger-icon" @click.stop="deleteAgent(agent)" title="Delete">🗑️</button>
               </div>
             </div>
             
-            <div class="agent-config">
+            <div v-if="editingAgentId === agent.id" class="agent-config">
+              <div class="config-fields">
+                <div class="field full-width">
+                  <label>Agent Name</label>
+                  <input v-model="agent.name" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" placeholder="Agent name..." />
+                </div>
+              </div>
               <div v-if="agent.provider_type === 'mcp'" class="config-fields-mcp">
                 <!-- Mode selection removed, defaulting to HTTP -->
                 <div class="field full-width">
@@ -433,8 +444,11 @@
 
       <div class="modal-footer">
         <div class="agent-config-actions">
-          <button class="btn btn-primary" @click="addAgent('mcp')">+ Corvic Agent</button>
-          <button class="btn btn-secondary" @click="openEvaluatorModeModal">+ Eval Agent</button>
+          <template v-if="!editingAgentId">
+            <button v-if="activeTab === 'agents'" class="btn btn-primary" @click="addAgent('mcp')">+ Corvic Agent</button>
+            <button v-if="activeTab === 'evaluators'" class="btn btn-secondary" @click="openEvaluatorModeModal">+ Eval Agent</button>
+          </template>
+          <button v-else class="btn btn-secondary" @click="closeAgentConfig">← Back to list</button>
         </div>
         <div class="footer-right">
           <span v-if="saveStatus" class="save-status" :class="saveStatus">{{ saveStatusText }}</span>
@@ -529,7 +543,7 @@
 </template>
 
 <script setup>
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, onMounted } from 'vue'
 
 import { capturePostHogEvent } from '../services/posthog.js'
 import { wsService } from '../services/websocket.js'
@@ -540,7 +554,8 @@ const isDev = import.meta.env.DEV
 const props = defineProps({
   agents: Array,
   workspaceId: String,
-  questionSet: Object // Pass the whole object to get preloaded agents mapping
+  questionSet: Object,
+  initialAgentId: String
 })
 
 const emit = defineEmits(['update', 'close'])
@@ -557,6 +572,29 @@ const dirtyAgentIds = ref(new Set())
 const pendingCreateIds = ref(new Set())
 const isEditing = ref(false) // Block watcher updates when editing
 const showEvaluatorModeModal = ref(false)
+
+const activeTab = ref('agents') // 'agents' | 'evaluators'
+const editingAgentId = ref(null)
+
+const editingAgent = computed(() =>
+  editingAgentId.value
+    ? localAgents.value.find(a => a.id === editingAgentId.value) ?? null
+    : null
+)
+
+const agentsTabCount = computed(() => localAgents.value.filter(a => a.provider_type !== 'evaluator').length)
+const evaluatorsTabCount = computed(() => localAgents.value.filter(a => a.provider_type === 'evaluator').length)
+
+const visibleAgents = computed(() => {
+  if (editingAgentId.value) {
+    return localAgents.value.filter(a => a.id === editingAgentId.value)
+  }
+  return localAgents.value.filter(a =>
+    activeTab.value === 'evaluators'
+      ? a.provider_type === 'evaluator'
+      : a.provider_type !== 'evaluator'
+  )
+})
 
 function normalizeConfig(rawConfig, providerType) {
   let config = rawConfig
@@ -956,6 +994,23 @@ function stopEditing() {
   }, 500)
 }
 
+function openAgentConfig(agent) {
+  editingAgentId.value = agent.id
+}
+
+function closeAgentConfig() {
+  editingAgentId.value = null
+}
+
+onMounted(() => {
+  if (!props.initialAgentId) return
+  const agent = localAgents.value.find(a => a.id === props.initialAgentId)
+  if (agent) {
+    editingAgentId.value = agent.id
+    activeTab.value = agent.provider_type === 'evaluator' ? 'evaluators' : 'agents'
+  }
+})
+
 async function addAgent(providerType) {
   if (!props.workspaceId) return
   
@@ -1118,6 +1173,8 @@ async function addAgentWithConfig(providerType, customConfig) {
 	      pendingCreateIds.value.add(newAgent.id)
 	    }
 	    localAgents.value.unshift(newAgentWithParsedConfig)
+        editingAgentId.value = newAgent.id
+        activeTab.value = providerType === 'evaluator' ? 'evaluators' : 'agents'
         capturePostHogEvent('agent_created', {
           agent_id: newAgent?.id || '',
           workspace_id: props.workspaceId || '',
@@ -1442,9 +1499,94 @@ function startDrag(index) {
   transition: all 0.2s ease;
 }
 
-.agent-card:hover {
+.agent-card.clickable {
+  cursor: pointer;
+}
+
+.agent-card.clickable:hover {
+  border-color: #93c5fd;
+  box-shadow: 0 4px 12px -1px rgba(59, 130, 246, 0.15);
+}
+
+.agent-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid #e2e8f0;
+  margin-bottom: 1rem;
+}
+
+.tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  padding: 0.5rem 1.25rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.tab-btn:hover {
+  color: #1e293b;
+}
+
+.tab-btn.active {
+  color: #3b82f6;
+  border-bottom-color: #3b82f6;
+}
+
+.tab-count {
+  background: #e2e8f0;
+  color: #64748b;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  min-width: 18px;
+  text-align: center;
+}
+
+.tab-btn.active .tab-count {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.agent-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-bottom: 1rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.btn-back {
+  background: none;
+  border: 1px solid #e2e8f0;
+  padding: 0.3rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  color: #64748b;
+  transition: all 0.15s;
+}
+
+.btn-back:hover {
+  background: #f1f5f9;
   border-color: #cbd5e1;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  color: #1e293b;
+}
+
+.breadcrumb-name {
+  font-weight: 600;
+  color: #1e293b;
+  font-size: 0.95rem;
+  flex: 1;
 }
 
 .agent-header {
@@ -1454,32 +1596,25 @@ function startDrag(index) {
   margin-bottom: 1rem;
 }
 
+.agent-header.no-mb {
+  margin-bottom: 0;
+}
+
 .agent-drag {
   cursor: grab;
   color: #94a3b8;
   font-size: 1.2rem;
 }
 
-.agent-name-input {
+.agent-name-text {
   flex: 1;
-  border: 1px solid transparent;
-  background: transparent;
   font-size: 1rem;
   font-weight: 600;
   color: #1e293b;
-  padding: 0.25rem 0.5rem;
-  border-radius: 4px;
-}
-
-.agent-name-input:hover {
-  border-color: #e2e8f0;
-}
-
-.agent-name-input:focus {
-  outline: none;
-  background: white;
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+  padding: 0.25rem 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .agent-type-badge {

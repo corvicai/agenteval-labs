@@ -64,7 +64,7 @@ func loadAppRevisionInfo() appRevisionInfo {
 //
 // "sentinel_failed" means the stored fingerprint matches but the sentinel ciphertext
 // cannot be decrypted. This indicates key corruption or DB tampering and is always fatal.
-func shouldBlockStartupForEncryptionHealth(appEnv string, health service.EncryptionKeyHealth, rotation service.EncryptionKeyRotationResult) (bool, string) {
+func shouldBlockStartupForEncryptionHealth(appEnv string, health service.EncryptionKeyHealth) (bool, string) {
 	if strings.TrimSpace(appEnv) != "production" {
 		return false, ""
 	}
@@ -337,7 +337,7 @@ func main() {
 			} else {
 				logger.Warn("[SECURITY] ENCRYPTION_KEY fingerprint mismatch — current key auto-promoted as active. Agents encrypted with the previous key will require re-entering credentials.")
 			}
-		} else if blocked, reason := shouldBlockStartupForEncryptionHealth(os.Getenv("APP_ENV"), health, rotationResult); blocked {
+		} else if blocked, reason := shouldBlockStartupForEncryptionHealth(os.Getenv("APP_ENV"), health); blocked {
 			log.Fatalf("[SECURITY] FATAL: %s. The active ENCRYPTION_KEY cannot verify the stored sentinel — possible key corruption or DB tampering. Use ENCRYPTION_KEY_PREVIOUS + ENCRYPTION_KEY_ROTATE_ON_START for proper key rotation.", reason)
 		} else {
 			logger.Info("[SECURITY] %s", health.StateSummary)

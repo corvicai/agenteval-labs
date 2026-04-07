@@ -192,7 +192,7 @@
                 @update:currentQuestionSet="val => currentQuestionSet = val"
                 @view-history="goToHistory"
                 @trigger-print="handleTriggerPrint"
-                @manage-agents="showConfig = true"
+                @manage-agents="(id) => { configInitialAgentId = id || null; showConfig = true }"
             />
           </KeepAlive>
           <!-- Workspace is automatically selected for each user -->
@@ -225,8 +225,9 @@
         :agents="agents"
         :workspace-id="currentWorkspace?.id"
         :question-set="currentQuestionSet"
+        :initial-agent-id="configInitialAgentId"
         @update="loadAgents"
-        @close="showConfig = false"
+        @close="showConfig = false; configInitialAgentId = null"
       />
 
       <QuestionSetShareAcceptModal
@@ -352,6 +353,7 @@ const showWorkspaceModal = ref(false)
 const showActionsModal = ref(false)
 const showImportModal = ref(false)
 const showConfig = ref(false)
+const configInitialAgentId = ref(null)
 const showSummary = ref(false)
 const showQuestionEditor = ref(false)
 const previousQuestionSet = ref(null) // Used to restore when canceling new set creation

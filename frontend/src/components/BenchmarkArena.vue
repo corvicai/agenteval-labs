@@ -50,7 +50,7 @@
       :workspace-id="workspaceId"
       @create-question-set="createNewQuestionSet"
       @select-question-set="selectQuestionSet"
-      @manage-agents="() => emit('manage-agents')"
+      @manage-agents="(agentId) => emit('manage-agents', agentId)"
       @question-set-updated="handleQuestionSetUpdated"
       @question-set-deleted="handleQuestionSetDeleted"
     />

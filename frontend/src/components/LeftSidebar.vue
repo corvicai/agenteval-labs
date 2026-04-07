@@ -70,8 +70,10 @@
             <div 
               v-for="agent in agents" 
               :key="agent.id" 
-              class="agent-item-sidebar"
+              class="agent-item-sidebar agent-item-clickable"
               :class="{ 'disabled': !agent.enabled }"
+              @click="$emit('manage-agents', agent.id)"
+              :title="'Configure ' + agent.name"
             >
               <div class="agent-item-header">
                 <span class="agent-name">{{ agent.name }}</span>
@@ -595,6 +597,16 @@ function onQuestionSetSaved(updated) {
 
 .agent-item-sidebar.disabled {
   opacity: 0.6;
+}
+
+.agent-item-clickable {
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.agent-item-clickable:hover {
+  border-color: #93c5fd;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.12);
 }
 
 .agent-item-header {
