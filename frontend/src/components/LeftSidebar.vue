@@ -21,14 +21,16 @@
       <!-- Question Sets Tab -->
       <div v-show="activeTab === 'questionSets'" class="tab-panel">
         <div class="tab-panel-body">
+          <!-- My Question Sets -->
+          <div v-if="questionSets.length > 0 || sharedQuestionSets.length > 0" class="qs-group-label">My Question Sets</div>
           <ul class="qs-list">
             <li v-if="questionSets.length === 0" class="empty-state">
               <p>No question sets yet</p>
             </li>
-            <li 
-              v-for="qs in questionSets" 
-              :key="qs.id" 
-              class="qs-item" 
+            <li
+              v-for="qs in questionSets"
+              :key="qs.id"
+              class="qs-item"
               :class="{ active: currentQuestionSet?.id === qs.id }"
               @click="$emit('select-question-set', qs)"
             >
@@ -37,22 +39,51 @@
               <span class="qs-meta">{{ getQuestionCount(qs) }} questions</span>
             </li>
           </ul>
+
+          <!-- Shared With Me -->
+          <template v-if="sharedQuestionSets.length > 0">
+            <div class="qs-group-label qs-group-shared">Shared with me</div>
+            <ul class="qs-list">
+              <li
+                v-for="qs in sharedQuestionSets"
+                :key="'shared-' + qs.id"
+                class="qs-item qs-item-shared"
+                :class="{ active: currentQuestionSet?.id === qs.id }"
+                @click="$emit('select-question-set', { ...qs, _shared: true })"
+              >
+                <span class="qs-name">{{ qs.name }}</span>
+                <span v-if="runningQuestionSetId === qs.id" class="running-indicator-dot"></span>
+                <span class="qs-owner-badge" :title="'Owned by ' + (qs.owner_name || 'another user')">
+                  {{ qs.owner_name || 'shared' }}
+                </span>
+                <span class="qs-meta">{{ getQuestionCount(qs) }} questions</span>
+              </li>
+            </ul>
+          </template>
         </div>
         <div class="tab-panel-footer">
           <div class="sidebar-action-grid">
-            <button class="btn btn-secondary btn-sm btn-full-width sidebar-action-btn" @click="handleEditQuestions" :disabled="!currentQuestionSet">
+            <button class="btn btn-secondary btn-sm btn-full-width sidebar-action-btn" @click="handleEditQuestions" :disabled="!currentQuestionSet || isCurrentQSShared">
               ✏️ Edit
             </button>
-            <button class="btn btn-secondary btn-sm btn-full-width sidebar-action-btn" @click="handleCloneQuestionSet" :disabled="!currentQuestionSet || !workspaceId">
+            <button class="btn btn-secondary btn-sm btn-full-width sidebar-action-btn" @click="handleCloneQuestionSet" :disabled="!currentQuestionSet || !workspaceId || isCurrentQSShared">
               📄 Clone
             </button>
-            <button class="btn btn-secondary btn-sm btn-full-width sidebar-action-btn" @click="openTransferModal" :disabled="!currentQuestionSet">
+            <button class="btn btn-secondary btn-sm btn-full-width sidebar-action-btn" @click="openTransferModal" :disabled="!currentQuestionSet || isCurrentQSShared">
               🔗 Share
+            </button>
+            <button
+              class="btn btn-secondary btn-sm btn-full-width sidebar-action-btn"
+              @click="openCollabInviteModal"
+              :disabled="!currentQuestionSet || isCurrentQSShared"
+              title="Invite collaborator to work on this question set together"
+            >
+              👥 Collab
             </button>
             <button
               class="btn btn-danger btn-sm btn-full-width sidebar-action-btn"
               @click="openDeleteQuestionSetConfirm"
-              :disabled="!currentQuestionSet || isDeletingQuestionSet || runningQuestionSetId === currentQuestionSet?.id"
+              :disabled="!currentQuestionSet || isDeletingQuestionSet || runningQuestionSetId === currentQuestionSet?.id || isCurrentQSShared"
             >
               🗑 Delete
             </button>
@@ -115,6 +146,13 @@
       @close="closeTransferModal"
     />
 
+    <QuestionSetCollabInviteModal
+      v-if="showCollabInviteModal && currentQuestionSet"
+      :question-set-id="currentQuestionSet.id"
+      :question-set-name="currentQuestionSet.name"
+      @close="showCollabInviteModal = false"
+    />
+
     <ConfirmDialog
       v-model:visible="showDeleteQuestionSetConfirm"
       title="Delete Question Set"
@@ -131,12 +169,17 @@
 import { computed, ref } from 'vue'
 import QuestionEditorModal from './QuestionEditorModal.vue'
 import QuestionSetTransferModal from './QuestionSetTransferModal.vue'
+import QuestionSetCollabInviteModal from './QuestionSetCollabInviteModal.vue'
 import ConfirmDialog from './ConfirmDialog.vue'
 import { capturePostHogEvent } from '../services/posthog.js'
 import wsService from '../services/websocket.js'
 
 const props = defineProps({
   questionSets: {
+    type: Array,
+    default: () => []
+  },
+  sharedQuestionSets: {
     type: Array,
     default: () => []
   },
