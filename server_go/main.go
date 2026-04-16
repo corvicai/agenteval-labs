@@ -174,16 +174,24 @@ func main() {
 	e := echo.New()
 
 	// Middleware
+	// Only trust X-Real-IP / X-Forwarded-For when running behind a trusted
+	// proxy (Cloud Run, IAP, reverse proxy). In development these headers
+	// are spoofable, so default to RemoteAddr unless explicitly enabled.
+	trustProxyHeaders := os.Getenv("TRUST_PROXY_HEADERS") == "true" ||
+		os.Getenv("APP_ENV") == "production"
 	e.IPExtractor = func(r *http.Request) string {
-		if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
-			return realIP
-		}
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			return strings.TrimSpace(strings.Split(xff, ",")[0])
+		if trustProxyHeaders {
+			if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
+				return realIP
+			}
+			if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+				return strings.TrimSpace(strings.Split(xff, ",")[0])
+			}
 		}
 		return strings.Split(r.RemoteAddr, ":")[0] // Simple fallback
 	}
-	e.Use(echoMiddleware.Logger())
+	// TODO: migrate to echoMiddleware.RequestLoggerWithConfig for structured logs.
+	e.Use(echoMiddleware.Logger()) //nolint:staticcheck // deprecated API, tracked in linter-backlog.md
 	e.Use(echoMiddleware.Recover())
 
 	// CORS Configuration
@@ -238,6 +246,9 @@ func main() {
 		}
 		logger.Warn("[SECURITY] JWT_SECRET not set, using insecure default for development")
 		jwtSecret = "dev-secret-change-in-production"
+	}
+	if os.Getenv("APP_ENV") == "production" && len(jwtSecret) < 32 {
+		log.Fatal("[SECURITY] FATAL: JWT_SECRET must be at least 32 characters in production")
 	}
 
 	// Encryption key initialization for encrypted JSON fields (agents config, etc.).
