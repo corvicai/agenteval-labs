@@ -238,6 +238,15 @@ func main() {
 		}
 	}
 
+	queueSize := 0
+	if qsStr := os.Getenv("ENGINE_QUEUE_SIZE"); qsStr != "" {
+		if qs, err := strconv.Atoi(qsStr); err == nil {
+			queueSize = qs
+		} else {
+			logger.Warn("[ENGINE] Invalid ENGINE_QUEUE_SIZE=%q, falling back to default: %v", qsStr, err)
+		}
+	}
+
 	// Auth secret initialization
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
@@ -356,7 +365,7 @@ func main() {
 		}
 	}
 
-	engine := orchestrator.NewEngine(database, workerCount)
+	engine := orchestrator.NewEngine(database, workerCount, queueSize)
 	if database != nil {
 		res := database.Model(&models.Run{}).Where("status = ?", "running").Update("status", "cancelled")
 		if res.Error != nil {

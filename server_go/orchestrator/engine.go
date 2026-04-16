@@ -31,7 +31,6 @@ type Engine struct {
 	agentSemaphores map[uuid.UUID]chan struct{} // Per-agent concurrency control
 	retryStates     map[string]retryState
 	mu              sync.RWMutex
-	wg              sync.WaitGroup
 	eventCallback   func(workspaceID uuid.UUID, eventType string, correlationID string, payload any)
 }
 
@@ -93,12 +92,17 @@ type ExecutionResponse struct {
 	Metadata  map[string]any `json:"metadata"`
 }
 
-func NewEngine(db *gorm.DB, workers int) *Engine {
+const defaultTaskQueueSize = 10000
+
+func NewEngine(db *gorm.DB, workers int, queueSize int) *Engine {
+	if queueSize <= 0 {
+		queueSize = defaultTaskQueueSize
+	}
 	return &Engine{
 		db:              db,
 		runner:          newRunner(),
 		workerCount:     workers,
-		taskQueue:       make(chan *Task, 10000),
+		taskQueue:       make(chan *Task, queueSize),
 		cancelledRuns:   make(map[uuid.UUID]bool),
 		runContexts:     make(map[uuid.UUID]context.Context),
 		runCancels:      make(map[uuid.UUID]context.CancelFunc),
@@ -1170,9 +1174,17 @@ func (e *Engine) queueEvaluatorTasksForResults(run models.Run, results []models.
 			availableAgents = append(availableAgents, id)
 		}
 
-		// Get target agent ID from evaluator config
+		// Get target agent ID from evaluator config; empty / invalid UUID
+		// means "no target", which is handled by the checks below.
 		targetAgentIDStr, _ := evalConfig["target_agent_id"].(string)
-		targetAgentID, _ := uuid.Parse(targetAgentIDStr)
+		var targetAgentID uuid.UUID
+		if targetAgentIDStr != "" {
+			if parsed, err := uuid.Parse(targetAgentIDStr); err == nil {
+				targetAgentID = parsed
+			} else {
+				logger.Warn("[EVAL] Evaluator %s has invalid target_agent_id %q: %v", evaluator.Name, targetAgentIDStr, err)
+			}
+		}
 		logger.Debug("[EVAL] Evaluator %s (%s) target_agent_id: %s. Available agents in run: %v", evaluator.ID, evaluator.Name, targetAgentIDStr, availableAgents)
 
 		if targetAgentID != uuid.Nil && !runAgents[targetAgentID] {
@@ -1557,7 +1569,10 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 	}
 
 	var agentConfig map[string]any
-	json.Unmarshal(agent.Config, &agentConfig)
+	if err := json.Unmarshal(agent.Config, &agentConfig); err != nil {
+		logger.Warn("[RERUN] Failed to parse agent %s config: %v", agent.ID, err)
+		agentConfig = map[string]any{}
+	}
 
 	// Prepare Task fields
 	taskQuestionText := questionText
@@ -1592,13 +1607,16 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 			}
 		}
 
-		// Fallback to config if target agent still unknown
+		// Fallback to config if target agent still unknown. Invalid or
+		// missing UUID leaves targetAgentID as Nil and the rerun is skipped.
 		if targetAgentID == uuid.Nil {
 			if cid, ok := agentConfig["target_agent_id"]; ok {
 				targetAgentIDStr := fmt.Sprintf("%v", cid)
-				targetAgentID, _ = uuid.Parse(targetAgentIDStr)
-				if targetAgentID != uuid.Nil {
+				if parsed, err := uuid.Parse(targetAgentIDStr); err == nil {
+					targetAgentID = parsed
 					logger.Debug("[RERUN] Using config target_agent_id: %s", targetAgentID)
+				} else if targetAgentIDStr != "" {
+					logger.Warn("[RERUN] Invalid target_agent_id %q in agent config: %v", targetAgentIDStr, err)
 				}
 			}
 		}
