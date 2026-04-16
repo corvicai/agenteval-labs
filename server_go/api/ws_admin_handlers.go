@@ -59,7 +59,9 @@ func (h *Hub) handleAdminGetUsers(c *Connection, env models.Envelope) {
 	// Parse filter if present
 	var filter models.AdminFilterPayload
 	if len(env.Payload) > 0 {
-		json.Unmarshal(env.Payload, &filter)
+		if err := json.Unmarshal(env.Payload, &filter); err != nil {
+			logger.Warn("[ADMIN] Failed to parse users filter payload: %v", err)
+		}
 	}
 
 	query := h.db.Model(&models.User{})
@@ -138,7 +140,9 @@ func (h *Hub) handleAdminGetOrganizations(c *Connection, env models.Envelope) {
 	// Parse filter if present
 	var filter models.AdminFilterPayload
 	if len(env.Payload) > 0 {
-		json.Unmarshal(env.Payload, &filter)
+		if err := json.Unmarshal(env.Payload, &filter); err != nil {
+			logger.Warn("[ADMIN] Failed to parse organizations filter payload: %v", err)
+		}
 	}
 
 	query := h.db.Model(&models.Organization{})
@@ -259,8 +263,7 @@ func (h *Hub) handleAdminGetUserProfile(c *Connection, env models.Envelope) {
 	var wsList []models.Workspace
 	h.db.Preload("User").Where("user_id = ?", userID).Find(&wsList)
 
-	var workspaces []map[string]any
-	workspaces = make([]map[string]any, len(wsList))
+	workspaces := make([]map[string]any, len(wsList))
 	for i, w := range wsList {
 		var cnt int64
 		h.db.Model(&models.Agent{}).Where("workspace_id = ?", w.ID).Count(&cnt)
@@ -423,7 +426,12 @@ func (h *Hub) handleAdminCreateUser(c *Connection, env models.Envelope) {
 		pass = "changeme"
 	}
 
-	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
+	if err != nil {
+		logger.Error("[ADMIN] Failed to hash password for new user %s: %v", req.Email, err)
+		c.SendError(env.CorrelationID, "failed to hash password")
+		return
+	}
 
 	user := models.User{
 		ID:           uuid.New(),
@@ -614,7 +622,11 @@ func (h *Hub) handleAdminUpdateUser(c *Connection, env models.Envelope) {
 
 	// If organization_id is provided, update or create link
 	if req.OrganizationID != "" {
-		orgID, _ := uuid.Parse(req.OrganizationID)
+		orgID, err := uuid.Parse(req.OrganizationID)
+		if err != nil {
+			c.SendError(env.CorrelationID, "invalid organization ID")
+			return
+		}
 		if orgID != uuid.Nil {
 			var userOrg models.UserOrganization
 			if err := h.db.Where("user_id = ?", targetUser.ID).First(&userOrg).Error; err == nil {
@@ -931,12 +943,19 @@ func (h *Hub) handleAdminUpdateOrg(c *Connection, env models.Envelope) {
 		}
 
 		// 3. Sync legacy ManagerID to the first one for backward compat
-		firstMid, _ := uuid.Parse(req.ManagerIDs[0])
-		org.ManagerID = &firstMid
+		if firstMid, err := uuid.Parse(req.ManagerIDs[0]); err == nil {
+			org.ManagerID = &firstMid
+		} else {
+			logger.Warn("[ADMIN] Invalid first ManagerID %q: %v", req.ManagerIDs[0], err)
+		}
 
 	} else if req.ManagerID != "" {
 		// Legacy single manager logic (frontend sending old payload or specific single set)
-		mID, _ := uuid.Parse(req.ManagerID)
+		mID, err := uuid.Parse(req.ManagerID)
+		if err != nil {
+			c.SendError(env.CorrelationID, "invalid manager ID")
+			return
+		}
 		if mID != uuid.Nil {
 			org.ManagerID = &mID
 
