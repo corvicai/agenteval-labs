@@ -618,6 +618,33 @@ class WebSocketService {
         })
     }
 
+    // ---- Collaborative Question Sets ----
+
+    createCollabInvite(questionSetId, invitedEmail = null, role = 'editor') {
+        const payload = { question_set_id: questionSetId, role }
+        if (invitedEmail) payload.invited_email = invitedEmail
+        return this.request('REQ_CREATE_QS_COLLAB_INVITE', payload)
+    }
+
+    getCollabInvite(token) {
+        return this.request('REQ_GET_QS_COLLAB_INVITE', { token })
+    }
+
+    acceptCollabInvite(token) {
+        return this.request('REQ_ACCEPT_QS_COLLAB_INVITE', { token })
+    }
+
+    listCollaborators(questionSetId) {
+        return this.request('REQ_LIST_QS_COLLABORATORS', { question_set_id: questionSetId })
+    }
+
+    revokeCollaborator(questionSetId, userId) {
+        return this.request('REQ_REVOKE_QS_COLLABORATOR', {
+            question_set_id: questionSetId,
+            user_id: userId
+        })
+    }
+
     updateQuestionSetAgents(questionSetId, agents) {
         return this.request('REQ_UPDATE_QUESTION_SET_AGENTS', { question_set_id: questionSetId, agents })
     }

@@ -4,6 +4,7 @@ import wsService from '../services/websocket'
 const state = reactive({
     agents: [],
     questionSets: [],
+    sharedQuestionSets: [],
     recentRuns: [],
     isConnected: false,
     // isSynced becomes true only after syncState() completes successfully;
@@ -57,6 +58,7 @@ export function useWSStore() {
         if (reason === 'logout' || reason === 'app-unmount') {
             state.agents = []
             state.questionSets = []
+            state.sharedQuestionSets = []
             state.recentRuns = []
             state.lastError = null
             state.onlineUsers = []
@@ -76,6 +78,7 @@ export function useWSStore() {
             if (data && (data.agents || data.question_sets)) {
                 const nextAgents = data.agents || []
                 const nextQuestionSets = data.question_sets || []
+                const nextSharedQuestionSets = data.shared_question_sets || []
                 const nextRuns = data.recent_runs || []
                 const warnings = Array.isArray(data.warnings) ? data.warnings : []
 
@@ -84,6 +87,9 @@ export function useWSStore() {
                 }
                 if (shouldReplaceList(state.questionSets, nextQuestionSets)) {
                     state.questionSets = nextQuestionSets
+                }
+                if (shouldReplaceList(state.sharedQuestionSets, nextSharedQuestionSets)) {
+                    state.sharedQuestionSets = nextSharedQuestionSets
                 }
                 if (shouldReplaceList(state.recentRuns, nextRuns)) {
                     state.recentRuns = nextRuns
@@ -170,6 +176,7 @@ export function useWSStore() {
             if (reason === 'logout' || reason === 'app-unmount') {
                 state.agents = []
                 state.questionSets = []
+                state.sharedQuestionSets = []
                 state.recentRuns = []
                 state.lastError = null
                 state.onlineUsers = []
@@ -178,6 +185,14 @@ export function useWSStore() {
         })
 
         wsService.on('EVT_DATA_CHANGED', handleDataChanged)
+
+        // Remove the revoked shared QS from the list immediately.
+        wsService.on('EVT_COLLABORATOR_REVOKED', (payload) => {
+            const qsId = payload?.question_set_id
+            if (!qsId) return
+            state.sharedQuestionSets = state.sharedQuestionSets.filter(q => q.id !== qsId)
+            console.log('[WS Store] Collaborator revoked — removed shared QS:', qsId)
+        })
 
         // Optional: handle specific run events for granular updates
         wsService.on('EVT_TASK_COMPLETED', (payload) => {
