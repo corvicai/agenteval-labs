@@ -8,7 +8,6 @@ class WebSocketService {
         this.listeners = new Map()
         this.pendingRequests = new Map() // correlationId -> { resolve, reject, timeout }
         this.reconnectAttempts = 0
-        this.maxReconnectAttempts = 5
         this.connectionPromise = null
         this.shouldReconnect = true
         this.suppressNextReconnect = false
@@ -347,12 +346,16 @@ class WebSocketService {
     }
 
     _attemptReconnect() {
-        if (this.reconnectAttempts < this.maxReconnectAttempts) {
-            this.reconnectAttempts++
-            const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000)
-            console.log(`[WS] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`)
-            setTimeout(() => this._establishConnection(), delay)
-        }
+        // Retry indefinitely while shouldReconnect is true (only stops on
+        // manual disconnect, logout, or session_expired). Exponential backoff
+        // capped at 30 s, plus up to 30% jitter to avoid thundering herd.
+        if (!this.shouldReconnect) return
+        this.reconnectAttempts++
+        const base = Math.min(1000 * Math.pow(2, Math.min(this.reconnectAttempts, 6)), 30000)
+        const jitter = Math.random() * 0.3 * base
+        const delay = Math.round(base + jitter)
+        console.log(`[WS] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`)
+        setTimeout(() => this._establishConnection(), delay)
     }
 
     disconnect(reason = 'manual') {
