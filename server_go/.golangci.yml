@@ -1,0 +1,63 @@
+run:
+  timeout: 5m
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - gosimple
+
+linters-settings:
+  errcheck:
+    check-blank: true
+    # Best-effort broadcast/notification/write paths: errors are either
+    # logged internally, non-recoverable for the caller, or structurally
+    # impossible for the argument types used. If reliability starts to
+    # matter for any specific call site, drop the exclusion there and
+    # handle the error in-place.
+    exclude-functions:
+      # Gorilla websocket: subsequent Write/flush will surface failures.
+      - (*github.com/gorilla/websocket.Conn).SetReadDeadline
+      - (*github.com/gorilla/websocket.Conn).SetWriteDeadline
+      - (*github.com/gorilla/websocket.Conn).WriteMessage
+      - (io.Writer).Write
+      # WS broadcast/response helpers (best-effort).
+      - (*benchmarking-platform/api.Connection).SendResponse
+      - (*benchmarking-platform/api.Connection).safeSend
+      - (*benchmarking-platform/api.Hub).BroadcastEvent
+      - (*benchmarking-platform/api.Hub).SendEvent
+      - (benchmarking-platform/api.HubInterface).BroadcastEvent
+      # json.Marshal of concrete in-memory structs never fails in practice.
+      - encoding/json.Marshal
+      # gorm soft helpers where zero-value result is acceptable.
+      - (*gorm.io/gorm.Association).Find
+
+issues:
+  exclude-rules:
+    # Test helpers commonly ignore teardown errors and assertion helpers.
+    - path: _test\.go
+      linters:
+        - errcheck
+        - unused
+
+    # Developer-only CLI tools. Noise here is acceptable; track cleanup separately.
+    - path: cmd/reset/
+      linters:
+        - errcheck
+        - staticcheck
+        - unused
+    - path: cmd/test_agents/
+      linters:
+        - errcheck
+        - staticcheck
+        - unused
+
+    # Placeholder `db any` fields waiting for *gorm.DB wiring — intentional.
+    - path: internal/service/(agent_service|question_service)\.go
+      text: "field `db` is unused"
+      linters:
+        - unused
