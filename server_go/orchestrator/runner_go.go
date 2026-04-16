@@ -220,7 +220,9 @@ func (r *goRunner) callMCP(ctx context.Context, endpoint, token, question string
 
 	rawResponse := map[string]any{}
 	if payload, err := json.Marshal(res); err == nil {
-		_ = json.Unmarshal(payload, &rawResponse)
+		if unmarshalErr := json.Unmarshal(payload, &rawResponse); unmarshalErr != nil {
+			logger.Debug("[MCP] Failed to re-unmarshal response for metadata: %v", unmarshalErr)
+		}
 	}
 
 	metadata := map[string]any{
@@ -968,11 +970,7 @@ func isEvaluatorPayload(payload map[string]any) bool {
 		}
 	}
 
-	if strings.TrimSpace(firstNonEmptyString(payload, "agent_answer")) != "" {
-		return true
-	}
-
-	return false
+	return strings.TrimSpace(firstNonEmptyString(payload, "agent_answer")) != ""
 }
 
 func isRateLimitError(err error) bool {
@@ -1173,14 +1171,6 @@ func callOpenAIResponsesWithModel(ctx context.Context, apiKey, projectID, model,
 	}
 
 	return callOpenAI(ctx, apiKey, projectID, "responses", body, parseOpenAIResponses)
-}
-
-func callOpenAIChat(ctx context.Context, apiKey, projectID string, messages []map[string]any) (string, map[string]any, error) {
-	body := map[string]any{
-		"model":    "gpt-4o-mini",
-		"messages": messages,
-	}
-	return callOpenAI(ctx, apiKey, projectID, "chat/completions", body, parseOpenAIChat)
 }
 
 type parseFn func(map[string]any) (string, error)

@@ -16,6 +16,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/middleware"
 	"benchmarking-platform/models"
 )
@@ -282,7 +283,8 @@ func (h *AuthHandler) Login(c echo.Context) error {
 			Name:        "Default Client",
 		}
 		if err := h.db.Create(&client).Error; err != nil {
-			// Non-fatal, continue
+			// Non-fatal, continue — workspace is already created
+			logger.Warn("[AUTH] Failed to create default client for workspace %s: %v", workspace.ID, err)
 		}
 	}
 
@@ -826,7 +828,11 @@ func (h *AuthHandler) CreateUserAdmin(c echo.Context) error {
 		pass = "changeme"
 	}
 
-	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
+	if err != nil {
+		logger.Error("[AUTH] Failed to hash password for admin-created user %s: %v", req.Email, err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to hash password"})
+	}
 
 	user := models.User{
 		ID:           uuid.New(),
@@ -921,7 +927,11 @@ func (h *AuthHandler) UpdateUser(c echo.Context) error {
 		user.IsAdmin = *req.IsAdmin
 	}
 	if req.Password != nil && *req.Password != "" {
-		hashed, _ := bcrypt.GenerateFromPassword([]byte(*req.Password), bcrypt.DefaultCost)
+		hashed, err := bcrypt.GenerateFromPassword([]byte(*req.Password), bcrypt.DefaultCost)
+		if err != nil {
+			logger.Error("[AUTH] Failed to hash password during user update %s: %v", user.ID, err)
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to hash password"})
+		}
 		user.PasswordHash = string(hashed)
 	}
 
@@ -1039,7 +1049,11 @@ func (h *AuthHandler) BootstrapAdmin(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to commit transaction"})
 	}
 
-	token, _ := middleware.GenerateToken(user.ID.String(), workspace.ID.String(), "", user.Email, h.jwtSecret, "")
+	token, err := middleware.GenerateToken(user.ID.String(), workspace.ID.String(), "", user.Email, h.jwtSecret, "")
+	if err != nil {
+		logger.Error("[AUTH] Failed to generate token after registration for user %s: %v", user.ID, err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to generate authentication token"})
+	}
 
 	return c.JSON(http.StatusCreated, AuthResponse{
 		Token:     token,
@@ -1318,7 +1332,10 @@ func (h *AuthHandler) WebAuthnLoginFinish(c echo.Context) error {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
 	}
 
-	fakeReq, _ := http.NewRequest("POST", "/", bytes.NewReader(req.Response))
+	fakeReq, err := http.NewRequest("POST", "/", bytes.NewReader(req.Response))
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to build WebAuthn request"})
+	}
 	fakeReq.Header.Set("Content-Type", "application/json")
 
 	credential, err := h.webauthn.FinishLogin(user, *sessionData, fakeReq)
@@ -1344,7 +1361,7 @@ func (h *AuthHandler) WebAuthnLoginFinish(c echo.Context) error {
 	var workspace models.Workspace
 	h.db.Preload("User").Where("user_id = ?", user.ID).First(&workspace)
 
-	token, _ := middleware.GenerateToken(
+	token, err := middleware.GenerateToken(
 		user.ID.String(),
 		workspace.ID.String(),
 		"", // No organization
@@ -1352,6 +1369,10 @@ func (h *AuthHandler) WebAuthnLoginFinish(c echo.Context) error {
 		h.jwtSecret,
 		"",
 	)
+	if err != nil {
+		logger.Error("[AUTH] Failed to generate token after passkey login for user %s: %v", user.ID, err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to generate authentication token"})
+	}
 
 	h.setTokenCookie(c, token)
 
@@ -1432,7 +1453,10 @@ func (h *AuthHandler) WebAuthnRegisterFinish(c echo.Context) error {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
 	}
 
-	fakeReq, _ := http.NewRequest("POST", "/", bytes.NewReader(req.Response))
+	fakeReq, err := http.NewRequest("POST", "/", bytes.NewReader(req.Response))
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to build WebAuthn request"})
+	}
 	fakeReq.Header.Set("Content-Type", "application/json")
 
 	credential, err := h.webauthn.FinishRegistration(user, *sessionData, fakeReq)

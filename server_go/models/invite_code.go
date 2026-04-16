@@ -67,8 +67,14 @@ const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456
 
 func generateRandomCode(n int) string {
 	b := make([]byte, n)
+	limit := big.NewInt(int64(len(letterBytes)))
 	for i := range b {
-		num, _ := rand.Int(rand.Reader, big.NewInt(int64(len(letterBytes))))
+		num, err := rand.Int(rand.Reader, limit)
+		if err != nil {
+			// crypto/rand should not fail on any supported platform; if it
+			// does, producing a weak code is strictly worse than panicking.
+			panic("invite_code: crypto/rand failed: " + err.Error())
+		}
 		b[i] = letterBytes[num.Int64()]
 	}
 	return string(b)

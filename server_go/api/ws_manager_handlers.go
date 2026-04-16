@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/middleware"
 	"benchmarking-platform/models"
 
@@ -155,7 +156,12 @@ func (h *Hub) handleManagerCreateUser(c *Connection, env models.Envelope) {
 		return
 	}
 
-	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		logger.Error("[MANAGER] Failed to hash password for new user %s: %v", req.Email, err)
+		c.SendError(env.CorrelationID, "failed to hash password")
+		return
+	}
 	user := models.User{
 		ID:           uuid.New(),
 		Name:         req.Name,

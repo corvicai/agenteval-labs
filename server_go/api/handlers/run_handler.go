@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm"
 
 	"benchmarking-platform/api"
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/middleware"
 	"benchmarking-platform/models"
 	"benchmarking-platform/orchestrator"
@@ -105,7 +106,9 @@ func (h *RunHandler) StartRun(c echo.Context) error {
 			} `json:"questions"`
 		} `json:"categories"`
 	}
-	json.Unmarshal(questionSet.Data, &qsData)
+	if err := json.Unmarshal(questionSet.Data, &qsData); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "failed to parse question set: " + err.Error()})
+	}
 
 	// Calculate Total Tasks
 	totalTasks := 0
@@ -136,7 +139,10 @@ func (h *RunHandler) StartRun(c echo.Context) error {
 	// Queue tasks for each agent + question
 	for _, agent := range agents {
 		var agentConfig map[string]any
-		json.Unmarshal(agent.Config, &agentConfig)
+		if err := json.Unmarshal(agent.Config, &agentConfig); err != nil {
+			logger.Warn("[RUN] Failed to parse agent %s config, using empty: %v", agent.ID, err)
+			agentConfig = map[string]any{}
+		}
 
 		for _, cat := range qsData.Categories {
 			for _, q := range cat.Questions {
@@ -313,7 +319,9 @@ func (h *RunHandler) RerunTask(c echo.Context) error {
 			} `json:"questions"`
 		} `json:"categories"`
 	}
-	json.Unmarshal(questionSet.Data, &qsData)
+	if err := json.Unmarshal(questionSet.Data, &qsData); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to parse question set: " + err.Error()})
+	}
 
 	// Find the question text
 	var questionText string
@@ -338,7 +346,10 @@ func (h *RunHandler) RerunTask(c echo.Context) error {
 	}
 
 	var agentConfig map[string]any
-	json.Unmarshal(agent.Config, &agentConfig)
+	if err := json.Unmarshal(agent.Config, &agentConfig); err != nil {
+		logger.Warn("[RUN] Failed to parse agent %s config, using empty: %v", agent.ID, err)
+		agentConfig = map[string]any{}
+	}
 
 	task := &orchestrator.Task{
 		RunID:        run.ID,

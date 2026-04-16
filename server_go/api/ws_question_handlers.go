@@ -166,7 +166,9 @@ func (h *Hub) handleExportQuestionSet(c *Connection, env models.Envelope) {
 	}
 
 	var data any
-	json.Unmarshal(qs.Data, &data)
+	if err := json.Unmarshal(qs.Data, &data); err != nil {
+		logger.Warn("[QS] Failed to parse question set %s data: %v", qs.ID, err)
+	}
 
 	c.SendResponse(DataResponse, env.CorrelationID, data)
 }

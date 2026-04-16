@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"benchmarking-platform/api"
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/models"
 )
 
@@ -250,7 +251,9 @@ func (h *AgentHandler) SpyPayload(c echo.Context) error {
 
 	// Redact sensitive fields
 	config := make(map[string]any)
-	json.Unmarshal(agent.Config, &config)
+	if err := json.Unmarshal(agent.Config, &config); err != nil {
+		logger.Warn("[AGENT] Failed to parse agent %s config for spy payload: %v", agent.ID, err)
+	}
 
 	sensitiveKeys := []string{"token", "api_key", "secret", "password", "key"}
 	redactedConfig := make(map[string]any)

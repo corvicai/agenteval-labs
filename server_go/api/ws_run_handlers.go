@@ -250,8 +250,16 @@ func (h *Hub) handleRerunTask(c *Connection, env models.Envelope) {
 		return
 	}
 
-	runID, _ := uuid.Parse(payload.RunID)
-	agentID, _ := uuid.Parse(payload.AgentID)
+	runID, err := uuid.Parse(payload.RunID)
+	if err != nil {
+		c.SendError(env.CorrelationID, "invalid run_id")
+		return
+	}
+	agentID, err := uuid.Parse(payload.AgentID)
+	if err != nil {
+		c.SendError(env.CorrelationID, "invalid agent_id")
+		return
+	}
 	retryID := uuid.NewString()
 
 	// Pass frontend-provided context to engine
@@ -281,7 +289,11 @@ func (h *Hub) handleCancelRun(c *Connection, env models.Envelope) {
 		return
 	}
 
-	runID, _ := uuid.Parse(payload.RunID)
+	runID, err := uuid.Parse(payload.RunID)
+	if err != nil {
+		c.SendError(env.CorrelationID, "invalid run_id")
+		return
+	}
 	h.engine.CancelRun(runID)
 	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "cancelled"})
 }

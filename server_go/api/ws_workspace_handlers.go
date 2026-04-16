@@ -178,7 +178,9 @@ func (h *Hub) handleUpdateAgent(c *Connection, env models.Envelope) {
 
 	// Check for decryption-failed marker - warn but allow update if new config is provided
 	var configMap map[string]any
-	json.Unmarshal(agent.Config, &configMap)
+	if err := json.Unmarshal(agent.Config, &configMap); err != nil {
+		logger.Warn("[WS][UPDATE_AGENT] Failed to parse agent %s config: %v", agentID, err)
+	}
 	if _, failed := configMap["_error"]; failed {
 		// If no new config is provided, block the update
 		if len(payload.Config) == 0 {

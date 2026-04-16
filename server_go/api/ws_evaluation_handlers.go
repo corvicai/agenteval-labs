@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
@@ -162,7 +163,9 @@ func (h *Hub) handleGetSpyPayload(c *Connection, env models.Envelope) {
 
 	// Redact sensitive fields (same logic as REST)
 	config := make(map[string]any)
-	json.Unmarshal(agent.Config, &config)
+	if err := json.Unmarshal(agent.Config, &config); err != nil {
+		logger.Warn("[EVAL] Failed to parse agent %s config for spy payload: %v", agent.ID, err)
+	}
 
 	sensitiveKeys := []string{"token", "api_key", "secret", "password", "key"}
 	redactedConfig := make(map[string]any)
