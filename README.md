@@ -145,7 +145,7 @@ All messages use a standard envelope: `{ "type": "REQ_*", "correlation_id": "...
 | `APP_ENV` | `development` | `development` or `production` (disables dev features) |
 | `FIREBASE_SERVICE_ACCOUNT` | — | Path to Firebase Service Account JSON |
 | `ALLOWED_ORIGINS` | — | Comma-separated CORS origins (production) |
-| `VITE_AFK_TIMEOUT_MS` | `180000` | Frontend idle timeout (ms) before WebSocket disconnect |
+| `VITE_AFK_TIMEOUT_MS` | `600000` | Frontend idle timeout (ms) before WebSocket disconnect (min: 60000; tripled during active runs) |
 | `VITE_HMR_HOST`, `VITE_HMR_CLIENT_PORT`, `VITE_HMR_PROTOCOL` | — | Optional HMR config for dev behind proxy |
 
 ## Encryption Key Rotation
