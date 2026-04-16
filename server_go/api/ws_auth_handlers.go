@@ -553,7 +553,14 @@ func (h *Hub) handleJoinOrganization(c *Connection, env models.Envelope) {
 	})
 }
 
-// handleWsChangePassword allows users to change their own password or admins to reset others
+// handleWsChangePassword allows users to change their own password or admins to reset others.
+//
+// TODO: This handler is currently not wired into the WS dispatcher — the
+// frontend sends REQ_CHANGE_PASSWORD but the server never invokes this
+// function. Password change is effectively broken end-to-end. Tracked in
+// docs/improvement-plans.md backlog.
+//
+//nolint:unused // see TODO above
 func (h *Hub) handleWsChangePassword(c *Connection, env models.Envelope) {
 	if !c.IsAuthenticated {
 		c.SendError(env.CorrelationID, "authentication required")
@@ -574,6 +581,7 @@ func (h *Hub) handleWsChangePassword(c *Connection, env models.Envelope) {
 		var currentUser models.User
 		h.db.First(&currentUser, "id = ?", c.UserID)
 		if !currentUser.IsAdmin {
+			logger.Warn("[SECURITY] Non-admin user %s attempted to change password for user %s", c.UserID, req.ID)
 			c.SendError(env.CorrelationID, "admin access required to change other users' passwords")
 			return
 		}
@@ -633,6 +641,10 @@ func (h *Hub) handleWsChangePassword(c *Connection, env models.Envelope) {
 	if err := h.db.Save(&user).Error; err != nil {
 		c.SendError(env.CorrelationID, "failed to update password")
 		return
+	}
+
+	if !isSelfChange {
+		logger.Info("[SECURITY] Admin %s changed password for user %s (%s)", c.UserID, targetUserID, user.Email)
 	}
 
 	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "password updated successfully"})
