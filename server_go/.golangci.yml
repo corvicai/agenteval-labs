@@ -44,18 +44,6 @@ issues:
         - errcheck
         - unused
 
-    # Developer-only CLI tools. Noise here is acceptable; track cleanup separately.
-    - path: cmd/reset/
-      linters:
-        - errcheck
-        - staticcheck
-        - unused
-    - path: cmd/test_agents/
-      linters:
-        - errcheck
-        - staticcheck
-        - unused
-
     # Placeholder `db any` fields waiting for *gorm.DB wiring — intentional.
     - path: internal/service/(agent_service|question_service)\.go
       text: "field `db` is unused"

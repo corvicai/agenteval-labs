@@ -95,6 +95,18 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 		h.handleGetQuestionSetShareLink(c, env)
 	case ReqAcceptQuestionSetShareLink:
 		h.handleAcceptQuestionSetShareLink(c, env)
+
+	// Collaborative Question Sets
+	case ReqCreateQuestionSetCollabInvite:
+		h.handleCreateQuestionSetCollabInvite(c, env)
+	case ReqGetQuestionSetCollabInvite:
+		h.handleGetQuestionSetCollabInvite(c, env)
+	case ReqAcceptQuestionSetCollabInvite:
+		h.handleAcceptQuestionSetCollabInvite(c, env)
+	case ReqListQuestionSetCollaborators:
+		h.handleListQuestionSetCollaborators(c, env)
+	case ReqRevokeQuestionSetCollaborator:
+		h.handleRevokeQuestionSetCollaborator(c, env)
 	case ReqUpdateQuestionSetAgents:
 		h.handleUpdateQuestionSetAgents(c, env)
 	case ReqGetQuestionSetAgentEnvelope:
@@ -107,6 +119,8 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 		h.handleWsRegister(c, env)
 	case ReqWsBootstrapAdmin:
 		h.handleWsBootstrapAdmin(c, env)
+	case ReqChangePassword:
+		h.handleWsChangePassword(c, env)
 
 	// WebAuthn handlers
 	case ReqWebAuthnRegisterBegin:

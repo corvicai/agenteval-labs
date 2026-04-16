@@ -90,6 +90,16 @@ func getOrgInitials(name string) string {
 	return initials
 }
 
+// titleASCII returns s with its first letter upper-cased and the rest lower-cased.
+// Replacement for the deprecated strings.Title — good enough for short ASCII
+// role names ("admin", "manager", "viewer") used in seed workspace naming.
+func titleASCII(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + strings.ToLower(s[1:])
+}
+
 var MOCK_ANSWERS = []string{
 	"The answer is correct according to the logic provided.",
 	"Tokyo is indeed the capital city of Japan.",
@@ -121,7 +131,6 @@ type WSClient struct {
 	mu             sync.Mutex // Protects responses map and other fields
 	writeMu        sync.Mutex // Protects WebSocket writes
 	done           chan struct{}
-	token          string
 	workspaceID    string
 	organizationID string
 }
@@ -222,7 +231,9 @@ func (c *WSClient) Send(msgType string, payload any) (json.RawMessage, error) {
 				Error   string `json:"error"`
 				Details any    `json:"details"`
 			}
-			json.Unmarshal(resp.Payload, &errPayload)
+			if err := json.Unmarshal(resp.Payload, &errPayload); err != nil {
+				return nil, fmt.Errorf("server returned EVT_ERROR with unparseable payload: %w", err)
+			}
 			if errPayload.Details != nil {
 				return nil, fmt.Errorf("%s (details: %v)", errPayload.Error, errPayload.Details)
 			}
@@ -353,7 +364,11 @@ func cleanupNamedContainers(containerNames ...string) {
 
 func findProjectRoot() string {
 	// Try to find docker-compose.yml by walking up directories
-	dir, _ := os.Getwd()
+	dir, err := os.Getwd()
+	if err != nil {
+		log.Printf("  ⚠ os.Getwd failed while searching for project root: %v", err)
+		return ""
+	}
 	for i := 0; i < 5; i++ {
 		if _, err := os.Stat(filepath.Join(dir, "docker-compose.yml")); err == nil {
 			return dir
@@ -376,14 +391,15 @@ func main() {
 	projectDir := flag.String("project-dir", "", "Project directory containing docker-compose.yml")
 	flag.Parse()
 
-	rand.Seed(time.Now().UnixNano())
-
 	log.Println("🚀 Go Reset & Seeder Started")
 
 	// Resolve config path to absolute BEFORE changing directories
 	absConfigPath := *configPath
 	if !filepath.IsAbs(absConfigPath) {
-		cwd, _ := os.Getwd()
+		cwd, err := os.Getwd()
+		if err != nil {
+			log.Fatalf("  ❌ Failed to resolve current working directory: %v", err)
+		}
 		absConfigPath = filepath.Join(cwd, absConfigPath)
 	}
 
@@ -394,8 +410,9 @@ func main() {
 	}
 
 	if projDir != "" {
-		os.Chdir(projDir)
-		// Ensure public network exists
+		if err := os.Chdir(projDir); err != nil {
+			log.Fatalf("  ❌ Failed to chdir to project dir %q: %v", projDir, err)
+		}
 		if err := ensureDockerNetwork("benchmarking-public"); err != nil {
 			log.Printf("  ⚠ Failed to ensure docker network: %v", err)
 		}
@@ -439,7 +456,9 @@ func main() {
 				var loginResult struct {
 					Success bool `json:"success"`
 				}
-				json.Unmarshal(resp, &loginResult)
+				if jerr := json.Unmarshal(resp, &loginResult); jerr != nil {
+					log.Printf("  ⚠ Failed to parse pre-login response: %v", jerr)
+				}
 
 				if loginResult.Success {
 					log.Println("  ✓ Logged in. Sending Maintenance Signal...")
@@ -582,7 +601,9 @@ func main() {
 			log.Fatalf("  ❌ Cannot find docker-compose.yml. Use --project-dir flag.")
 		}
 
-		os.Chdir(projDir)
+		if err := os.Chdir(projDir); err != nil {
+			log.Fatalf("  ❌ Failed to chdir to project dir %q: %v", projDir, err)
+		}
 		log.Printf("  📁 Project dir: %s", projDir)
 
 		log.Println("  ⏳ Stopping db and go-api containers...")
@@ -636,7 +657,9 @@ func main() {
 	var adminCheck struct {
 		Exists bool `json:"exists"`
 	}
-	json.Unmarshal(resp, &adminCheck)
+	if err := json.Unmarshal(resp, &adminCheck); err != nil {
+		log.Fatalf("  ❌ Failed to parse admin-check response: %v", err)
+	}
 
 	if !adminCheck.Exists {
 		// 3. Bootstrap Admin
@@ -667,7 +690,9 @@ func main() {
 		var perf struct {
 			Duration int64 `json:"duration_ms"`
 		}
-		json.Unmarshal(perfResp, &perf)
+		if jerr := json.Unmarshal(perfResp, &perf); jerr != nil {
+			log.Printf("  ⚠ Failed to parse DB perf response: %v", jerr)
+		}
 		log.Printf("  ✓ DB Latency: %dms", perf.Duration)
 		if perf.Duration > 500 {
 			log.Println("  ⚠ WARNING: Database is extremely slow (>500ms). Seeding may timeout.")
@@ -696,7 +721,9 @@ func main() {
 			ID string `json:"id"`
 		} `json:"organization"`
 	}
-	json.Unmarshal(resp, &loginResult)
+	if err := json.Unmarshal(resp, &loginResult); err != nil {
+		log.Fatalf("  ❌ Failed to parse login response: %v", err)
+	}
 
 	if !loginResult.Success {
 		log.Fatalf("  ❌ Login failed: token not returned")
@@ -739,7 +766,10 @@ func main() {
 		var orgResult struct {
 			ID string `json:"id"`
 		}
-		json.Unmarshal(resp, &orgResult)
+		if err := json.Unmarshal(resp, &orgResult); err != nil {
+			log.Printf("  ⚠ Failed to parse org-create response for %s: %v", orgName, err)
+			return ""
+		}
 
 		orgCache[orgName] = orgResult.ID
 		log.Printf("  ✓ Created Org: %s (%s)", orgName, orgResult.ID)
@@ -771,7 +801,7 @@ func main() {
 				}
 			}
 
-			wsName := getOrgInitials(user.OrgName) + " - " + strings.Title(user.Role) + " Space"
+			wsName := getOrgInitials(user.OrgName) + " - " + titleASCII(user.Role) + " Space"
 			resp, err := client.SendWithRetry("REQ_ADMIN_CREATE_USER", map[string]any{
 				"name":            user.Name,
 				"email":           user.Email,
@@ -792,7 +822,10 @@ func main() {
 					ID string `json:"id"`
 				} `json:"workspace"`
 			}
-			json.Unmarshal(resp, &userResult)
+			if err := json.Unmarshal(resp, &userResult); err != nil {
+				log.Printf("    ⚠ Failed to parse user-create response for %s: %v", user.Email, err)
+				return
+			}
 
 			if userResult.Workspace.ID != "" {
 				workspaceMu.Lock()
@@ -872,7 +905,7 @@ func main() {
 						role = "manager"
 					}
 
-					wsName := getOrgInitials(theme.Name) + " - " + strings.Title(role) + " Space"
+					wsName := getOrgInitials(theme.Name) + " - " + titleASCII(role) + " Space"
 					resp, err := client.SendWithRetry("REQ_ADMIN_CREATE_USER", map[string]any{
 						"name":  fullName,
 						"email": email,
@@ -898,7 +931,10 @@ func main() {
 							ID string `json:"id"`
 						} `json:"workspace"`
 					}
-					json.Unmarshal(resp, &userResult)
+					if err := json.Unmarshal(resp, &userResult); err != nil {
+						log.Printf("    ⚠ Failed to parse user-create response for %s: %v", email, err)
+						continue
+					}
 
 					if userResult.Workspace.ID != "" {
 						workspaceMu.Lock()
@@ -915,11 +951,14 @@ func main() {
 					// Update org manager_id if it's the first user
 					if i == 0 {
 						log.Printf("    ⏳ Setting %s as manager for org %s...", fullName, theme.Name)
-						client.Send("REQ_ADMIN_UPDATE_ORG", map[string]any{
+						if _, err := client.Send("REQ_ADMIN_UPDATE_ORG", map[string]any{
 							"id":         orgID,
 							"manager_id": userResult.ID,
-						})
-						log.Printf("    ✅ %s is now Manager of %s", fullName, theme.Name)
+						}); err != nil {
+							log.Printf("    ⚠ Failed to set %s as manager of %s: %v", fullName, theme.Name, err)
+						} else {
+							log.Printf("    ✅ %s is now Manager of %s", fullName, theme.Name)
+						}
 					} else {
 						log.Printf("    ✓ %s (%s)", fullName, email)
 					}
@@ -964,7 +1003,10 @@ func main() {
 				var agentResult struct {
 					ID string `json:"id"`
 				}
-				json.Unmarshal(resp, &agentResult)
+				if jerr := json.Unmarshal(resp, &agentResult); jerr != nil {
+					log.Printf("    ⚠ Failed to parse agent-create response for %s in %s: %v", agent.Name, ws.Name, jerr)
+					continue
+				}
 				ws.AgentIDs = append(ws.AgentIDs, agentResult.ID)
 			}
 
@@ -986,7 +1028,10 @@ func main() {
 				var qsResult struct {
 					ID string `json:"id"`
 				}
-				json.Unmarshal(resp, &qsResult)
+				if jerr := json.Unmarshal(resp, &qsResult); jerr != nil {
+					log.Printf("    ⚠ Failed to parse question-set-create response for %s in %s: %v", qs.Name, ws.Name, jerr)
+					continue
+				}
 				ws.QuestionSets = append(ws.QuestionSets, qsResult.ID)
 
 				// LINK AGENTS TO QUESTION SET WITH POSITIONS

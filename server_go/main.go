@@ -190,8 +190,26 @@ func main() {
 		}
 		return strings.Split(r.RemoteAddr, ":")[0] // Simple fallback
 	}
-	// TODO: migrate to echoMiddleware.RequestLoggerWithConfig for structured logs.
-	e.Use(echoMiddleware.Logger()) //nolint:staticcheck // deprecated API, tracked in linter-backlog.md
+	// Structured HTTP request logging via our internal logger. Replaces the
+	// deprecated echoMiddleware.Logger() which printed to stdout directly.
+	e.Use(echoMiddleware.RequestLoggerWithConfig(echoMiddleware.RequestLoggerConfig{
+		LogStatus:   true,
+		LogURI:      true,
+		LogMethod:   true,
+		LogLatency:  true,
+		LogError:    true,
+		HandleError: true,
+		LogValuesFunc: func(c echo.Context, v echoMiddleware.RequestLoggerValues) error {
+			if v.Error != nil {
+				logger.Error("[HTTP] %s %s status=%d latency=%s err=%v",
+					v.Method, v.URI, v.Status, v.Latency, v.Error)
+			} else {
+				logger.Info("[HTTP] %s %s status=%d latency=%s",
+					v.Method, v.URI, v.Status, v.Latency)
+			}
+			return nil
+		},
+	}))
 	e.Use(echoMiddleware.Recover())
 
 	// CORS Configuration
@@ -507,9 +525,23 @@ func main() {
 
 			if err == nil && token.Valid {
 				claims, _ := token.Claims.(*middleware.Claims)
-				userID, _ = uuid.Parse(claims.UserID)
-				orgID, _ = uuid.Parse(claims.OrgID)
-				isAuthenticated = true
+				// Strict parse: a token with a malformed UserID claim must not
+				// be treated as authenticated. OrgID is optional (users can be
+				// logged in without an organization context).
+				parsedUserID, userErr := uuid.Parse(claims.UserID)
+				if userErr != nil {
+					logger.Warn("[WS] Token has invalid UserID claim %q: %v", claims.UserID, userErr)
+				} else {
+					userID = parsedUserID
+					isAuthenticated = true
+					if claims.OrgID != "" {
+						if parsedOrgID, orgErr := uuid.Parse(claims.OrgID); orgErr == nil {
+							orgID = parsedOrgID
+						} else {
+							logger.Warn("[WS] Token has invalid OrgID claim %q: %v", claims.OrgID, orgErr)
+						}
+					}
+				}
 			}
 		}
 
@@ -527,7 +559,11 @@ func main() {
 
 		workspaceIDStr := c.QueryParam("workspace_id")
 		if workspaceIDStr != "" {
-			workspaceID, _ = uuid.Parse(workspaceIDStr)
+			if parsed, perr := uuid.Parse(workspaceIDStr); perr == nil {
+				workspaceID = parsed
+			} else {
+				logger.Warn("[WS] Ignoring invalid workspace_id query param %q: %v", workspaceIDStr, perr)
+			}
 		}
 
 		conn := api.NewConnection(

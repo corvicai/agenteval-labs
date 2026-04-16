@@ -170,7 +170,7 @@ func (h *Hub) handleWsLogin(c *Connection, env models.Envelope) {
 	c.IsAuthenticated = true
 
 	// Generate token for persistence (no organization)
-	token, _ := middleware.GenerateToken(
+	token, err := middleware.GenerateToken(
 		user.ID.String(),
 		workspace.ID.String(),
 		"", // No organization
@@ -178,6 +178,12 @@ func (h *Hub) handleWsLogin(c *Connection, env models.Envelope) {
 		h.jwtSecret,
 		"",
 	)
+	if err != nil {
+		logger.Error("[AUTH] Failed to generate token for user %s: %v", user.ID, err)
+		recordLog(&user.ID, "failed", "token_generation_error", nil)
+		c.SendError(env.CorrelationID, "failed to generate authentication token")
+		return
+	}
 
 	recordLog(&user.ID, "success", "", nil)
 
@@ -245,7 +251,12 @@ func (h *Hub) handleWsRegister(c *Connection, env models.Envelope) {
 		return
 	}
 
-	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		logger.Error("[AUTH] Failed to hash password during registration for %s: %v", req.Email, err)
+		c.SendError(env.CorrelationID, "failed to hash password")
+		return
+	}
 	user := models.User{
 		ID:           uuid.New(),
 		Name:         req.Name,
@@ -390,7 +401,12 @@ func (h *Hub) handleWsBootstrapAdmin(c *Connection, env models.Envelope) {
 		return
 	}
 
-	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		logger.Error("[AUTH] Failed to hash password during bootstrap admin: %v", err)
+		c.SendError(env.CorrelationID, "failed to hash password")
+		return
+	}
 	user := models.User{
 		ID:           uuid.New(),
 		Name:         req.Name,
@@ -553,14 +569,8 @@ func (h *Hub) handleJoinOrganization(c *Connection, env models.Envelope) {
 	})
 }
 
-// handleWsChangePassword allows users to change their own password or admins to reset others.
-//
-// TODO: This handler is currently not wired into the WS dispatcher — the
-// frontend sends REQ_CHANGE_PASSWORD but the server never invokes this
-// function. Password change is effectively broken end-to-end. Tracked in
-// docs/improvement-plans.md backlog.
-//
-//nolint:unused // see TODO above
+// handleWsChangePassword allows users to change their own password or admins
+// to reset others. Admin actions are recorded via logger.Info for audit.
 func (h *Hub) handleWsChangePassword(c *Connection, env models.Envelope) {
 	if !c.IsAuthenticated {
 		c.SendError(env.CorrelationID, "authentication required")
@@ -636,7 +646,12 @@ func (h *Hub) handleWsChangePassword(c *Connection, env models.Envelope) {
 	}
 
 	// 3. Hash and Save
-	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
+	if err != nil {
+		logger.Error("[SECURITY] Failed to hash new password for user %s: %v", targetUserID, err)
+		c.SendError(env.CorrelationID, "failed to hash password")
+		return
+	}
 	user.PasswordHash = string(hashedPassword)
 	if err := h.db.Save(&user).Error; err != nil {
 		c.SendError(env.CorrelationID, "failed to update password")
@@ -750,7 +765,7 @@ func (h *Hub) handleCreateOrganization(c *Connection, env models.Envelope) {
 	// 5. Generate Full Token
 	var user models.User
 	h.db.First(&user, c.UserID)
-	token, _ := middleware.GenerateToken(
+	token, err := middleware.GenerateToken(
 		user.ID.String(),
 		ws.ID.String(),
 		org.ID.String(),
@@ -758,6 +773,11 @@ func (h *Hub) handleCreateOrganization(c *Connection, env models.Envelope) {
 		h.jwtSecret,
 		"",
 	)
+	if err != nil {
+		logger.Error("[AUTH] Failed to generate token after org select for user %s: %v", user.ID, err)
+		c.SendError(env.CorrelationID, "failed to generate authentication token")
+		return
+	}
 
 	c.SendResponse(DataWsLoginResult, env.CorrelationID, map[string]any{
 		"success": true,
