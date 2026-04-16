@@ -178,6 +178,25 @@ func EnsureQuestionSetShareLinkSchema(db *gorm.DB) error {
 	return nil
 }
 
+func IsMissingQuestionSetCollaboratorsRelationError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+	return (strings.Contains(msg, `relation "question_set_collaborators"`) ||
+		strings.Contains(msg, `relation "question_set_collab_invites"`)) &&
+		strings.Contains(msg, `does not exist`)
+}
+
+func EnsureQuestionSetCollaboratorSchema(db *gorm.DB) error {
+	logger.Warn("[DB] question_set_collaborators missing; attempting on-demand schema repair")
+	if err := db.AutoMigrate(&models.QuestionSetCollaborator{}, &models.QuestionSetCollabInvite{}); err != nil {
+		return fmt.Errorf("ensure question_set_collaborators schema: %w", err)
+	}
+	return nil
+}
+
 func CreateRunCompat(db *gorm.DB, run *models.Run) error {
 	if err := db.Create(run).Error; err != nil {
 		if !IsMissingRunsCreatedByColumnError(err) {

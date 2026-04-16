@@ -367,6 +367,68 @@ func (h *Hub) handleSyncState(c *Connection, env models.Envelope) {
 		}
 	}
 
+	// 2b. Get Shared Question Sets (QSs owned by other users where current user is an active collaborator)
+	type sharedQSRow struct {
+		// question_sets columns
+		ID       string `gorm:"column:id"`
+		ClientID string `gorm:"column:client_id"`
+		Name     string `gorm:"column:name"`
+		Version  string `gorm:"column:version"`
+		// owner info
+		OwnerUserID      string `gorm:"column:owner_user_id"`
+		OwnerName        string `gorm:"column:owner_name"`
+		OwnerWorkspaceID string `gorm:"column:owner_workspace_id"`
+		// collaborator info
+		Role       string     `gorm:"column:role"`
+		AcceptedAt *time.Time `gorm:"column:accepted_at"`
+	}
+	var sharedRows []sharedQSRow
+	sharedErr := h.db.Raw(`
+		SELECT
+			qs.id, qs.client_id, qs.name, qs.version,
+			w.user_id AS owner_user_id,
+			u.name AS owner_name,
+			w.id AS owner_workspace_id,
+			c.role, c.accepted_at
+		FROM question_set_collaborators c
+		JOIN question_sets qs ON qs.id = c.question_set_id
+		JOIN clients cl ON cl.id = qs.client_id
+		JOIN workspaces w ON w.id = cl.workspace_id
+		JOIN users u ON u.id = w.user_id
+		WHERE c.user_id = ? AND c.accepted_at IS NOT NULL AND c.revoked_at IS NULL
+		ORDER BY c.accepted_at DESC
+	`, c.UserID).Scan(&sharedRows).Error
+
+	if sharedErr == nil && len(sharedRows) > 0 {
+		payload.SharedQuestionSets = make([]models.SharedQuestionSet, 0, len(sharedRows))
+		for _, row := range sharedRows {
+			qsID, _ := uuid.Parse(row.ID)
+			ownerUserID, _ := uuid.Parse(row.OwnerUserID)
+			ownerWsID, _ := uuid.Parse(row.OwnerWorkspaceID)
+			// Load the full QS (with Client + Agents)
+			var fullQS models.QuestionSet
+			if loadErr := h.db.Preload("Client").Preload("Agents").First(&fullQS, "id = ?", qsID).Error; loadErr != nil {
+				logger.Warn("[WS] SyncState: could not load shared QS %s: %v", qsID, loadErr)
+				continue
+			}
+			at := time.Time{}
+			if row.AcceptedAt != nil {
+				at = *row.AcceptedAt
+			}
+			payload.SharedQuestionSets = append(payload.SharedQuestionSets, models.SharedQuestionSet{
+				QuestionSet:      fullQS,
+				OwnerUserID:      ownerUserID,
+				OwnerName:        row.OwnerName,
+				OwnerWorkspaceID: ownerWsID,
+				Role:             row.Role,
+				AcceptedAt:       at,
+			})
+		}
+	} else if sharedErr != nil {
+		// If the table doesn't exist yet, silently ignore (schema not migrated).
+		logger.Debug("[WS] SyncState: could not load shared question sets (may not be migrated): %v", sharedErr)
+	}
+
 	// 3. Get Recent Runs (last 10)
 	if err := h.db.Raw(`
 		SELECT r.*, qs.name as question_set_name
@@ -379,6 +441,32 @@ func (h *Hub) handleSyncState(c *Connection, env models.Envelope) {
 		logger.Error("[WS] SyncState error loading recent runs: %v", err)
 		c.SendError(env.CorrelationID, "failed to load recent runs: "+err.Error())
 		return
+	}
+
+	// 4. Hydrate active run results so the frontend can restore in-progress UI
+	// state after an AFK/network reconnect without a separate REQ_GET_RUN_DETAILS.
+	// Pick the most recent run that is still running or pending.
+	for _, run := range payload.RecentRuns {
+		if run.Status != "running" && run.Status != "pending" {
+			continue
+		}
+		var results []models.RunResult
+		if err := h.db.Where("run_id = ?", run.ID).
+			Order("created_at asc").
+			Limit(500).
+			Find(&results).Error; err != nil {
+			logger.Warn("[WS] SyncState: failed to hydrate active run %s results: %v", run.ID, err)
+			payload.Warnings = append(payload.Warnings, "active run results could not be loaded")
+			break
+		}
+		payload.ActiveRunHydration = &models.ActiveRunHydration{
+			RunID:         run.ID,
+			TotalExpected: run.TotalTasks,
+			Results:       results,
+		}
+		logger.Debug("[WS] SyncState: hydrated active run %s with %d results (total_expected=%d)",
+			run.ID, len(results), run.TotalTasks)
+		break // only hydrate the most recent active run
 	}
 
 	logger.Debug("[WS] SyncState completed for workspace: %s (Agents: %d, Sets: %d, Runs: %d)",

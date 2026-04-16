@@ -403,7 +403,7 @@ watch(
   }
 )
 
-const DEFAULT_AFK_TIMEOUT_MS = 300000
+const DEFAULT_AFK_TIMEOUT_MS = 600000
 const MIN_AFK_TIMEOUT_MS = 60000
 const afkForegroundHeartbeatMs = 15000
 let afkForegroundHeartbeat = null
@@ -1416,8 +1416,12 @@ function startAfkForegroundHeartbeat() {
   if (afkForegroundHeartbeat) return
   afkForegroundHeartbeat = setInterval(() => {
     if (!canTrackAfk()) return
+    // Only gate by visibility, not by document.hasFocus(). hasFocus() returns
+    // false for legitimate active users on tiling window managers, VDI
+    // (Citrix/Parallels), dual-monitor setups where the browser window is
+    // visible but not the foreground window, or anytime an IDE/terminal is
+    // overlapping the tab — causing spurious AFK disconnects.
     if (document.visibilityState !== 'visible') return
-    if (!document.hasFocus()) return
     afkDebug.value = {
       ...afkDebug.value,
       heartbeatCount: afkDebug.value.heartbeatCount + 1

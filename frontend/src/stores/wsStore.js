@@ -6,12 +6,20 @@ const state = reactive({
     questionSets: [],
     recentRuns: [],
     isConnected: false,
+    // isSynced becomes true only after syncState() completes successfully;
+    // resets to false on disconnect. Components that need fresh store data
+    // (e.g. run restoration) should watch isSynced, not isConnected, so they
+    // never read stale recentRuns.
+    isSynced: false,
     isSyncing: false,
     lastError: null,
     onlineUsers: [],
     onlineCount: 0,
     isMaintenance: false,
-    runningQuestionSetId: null
+    runningQuestionSetId: null,
+    // Populated by syncState when the workspace has an active run; allows
+    // BenchmarkArena to restore run results inline without a second request.
+    activeRunHydration: null
 })
 
 const listSignature = (items = []) => {
@@ -44,6 +52,8 @@ export function useWSStore() {
     const disconnect = (reason = 'manual') => {
         wsService.disconnect(reason)
         state.isConnected = false
+        state.isSynced = false
+        state.activeRunHydration = null
         if (reason === 'logout' || reason === 'app-unmount') {
             state.agents = []
             state.questionSets = []
@@ -57,6 +67,8 @@ export function useWSStore() {
     const syncState = async () => {
         if (!state.isConnected) return
 
+        state.isSynced = false
+        state.activeRunHydration = null
         state.isSyncing = true
         try {
             const data = await wsService.request('REQ_SYNC_STATE', {})
@@ -76,6 +88,11 @@ export function useWSStore() {
                 if (shouldReplaceList(state.recentRuns, nextRuns)) {
                     state.recentRuns = nextRuns
                 }
+                if (data.active_run_hydration?.run_id) {
+                    state.activeRunHydration = data.active_run_hydration
+                    console.log('[WS Store] Active run hydration received for run:', data.active_run_hydration.run_id,
+                        '— results:', data.active_run_hydration.results?.length ?? 0)
+                }
                 if (warnings.length > 0) {
                     console.warn('[WS Store] Sync completed with warnings:', warnings)
                 }
@@ -83,9 +100,13 @@ export function useWSStore() {
             } else {
                 console.warn('[WS Store] Sync returned empty or invalid data, keeping current state')
             }
+            // Signal that all store data is fresh and ready to consume.
+            state.isSynced = true
         } catch (err) {
             console.error('[WS Store] Sync failed:', err)
             state.lastError = err.message
+            // isSynced stays false — components should not restore state from
+            // a potentially stale store.
         } finally {
             state.isSyncing = false
         }
@@ -143,6 +164,8 @@ export function useWSStore() {
 
         wsService.on('disconnected', (payload) => {
             state.isConnected = false
+            state.isSynced = false
+            state.activeRunHydration = null
             const reason = payload?.disconnectReason || 'unknown'
             if (reason === 'logout' || reason === 'app-unmount') {
                 state.agents = []

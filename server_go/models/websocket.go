@@ -125,12 +125,34 @@ type UserResponse struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
+// ActiveRunHydration carries the run_results of the most recent active run in
+// the workspace so the frontend can restore in-progress state after reconnect
+// without requiring a separate full REQ_GET_RUN_DETAILS call.
+type ActiveRunHydration struct {
+	RunID         uuid.UUID   `json:"run_id"`
+	TotalExpected int         `json:"total_expected"`
+	Results       []RunResult `json:"results"`
+}
+
+// SharedQuestionSet is a QuestionSet owned by another user that the current
+// user has been granted collaboration access to.
+type SharedQuestionSet struct {
+	QuestionSet
+	OwnerUserID      uuid.UUID `json:"owner_user_id"`
+	OwnerName        string    `json:"owner_name"`
+	OwnerWorkspaceID uuid.UUID `json:"owner_workspace_id"`
+	Role             string    `json:"role"`
+	AcceptedAt       time.Time `json:"accepted_at"`
+}
+
 // SyncStatePayload response payload
 type SyncStatePayload struct {
-	Agents       []Agent       `json:"agents"`
-	QuestionSets []QuestionSet `json:"question_sets"`
-	RecentRuns   []Run         `json:"recent_runs"`
-	Warnings     []string      `json:"warnings,omitempty"`
+	Agents             []Agent              `json:"agents"`
+	QuestionSets       []QuestionSet        `json:"question_sets"`
+	SharedQuestionSets []SharedQuestionSet  `json:"shared_question_sets,omitempty"`
+	RecentRuns         []Run                `json:"recent_runs"`
+	ActiveRunHydration *ActiveRunHydration  `json:"active_run_hydration,omitempty"`
+	Warnings           []string             `json:"warnings,omitempty"`
 }
 
 type AdminFilterPayload struct {

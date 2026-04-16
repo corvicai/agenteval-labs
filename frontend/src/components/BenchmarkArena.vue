@@ -2041,8 +2041,11 @@ onMounted(async () => {
   })
 })
 
-watch(() => wsState.isConnected, async (connected) => {
-  if (!connected) return
+// Watch isSynced (not isConnected) so we only attempt state restoration after
+// syncState() has finished populating recentRuns, agents, and questionSets.
+// Watching isConnected caused a race where restoreActiveRun read stale data.
+watch(() => wsState.isSynced, async (synced) => {
+  if (!synced) return
   const activeRunId = localStorage.getItem('activeRunId')
   if (activeRunId) {
     await restoreActiveRun(activeRunId)

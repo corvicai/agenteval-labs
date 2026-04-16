@@ -73,6 +73,13 @@ const (
 	ReqCreateQuestionSetShareLink  = "REQ_CREATE_QUESTION_SET_SHARE_LINK"
 	ReqGetQuestionSetShareLink     = "REQ_GET_QUESTION_SET_SHARE_LINK"
 	ReqAcceptQuestionSetShareLink  = "REQ_ACCEPT_QUESTION_SET_SHARE_LINK"
+
+	// Collaborative Question Sets
+	ReqCreateQuestionSetCollabInvite = "REQ_CREATE_QS_COLLAB_INVITE"
+	ReqGetQuestionSetCollabInvite    = "REQ_GET_QS_COLLAB_INVITE"
+	ReqAcceptQuestionSetCollabInvite = "REQ_ACCEPT_QS_COLLAB_INVITE"
+	ReqListQuestionSetCollaborators  = "REQ_LIST_QS_COLLABORATORS"
+	ReqRevokeQuestionSetCollaborator = "REQ_REVOKE_QS_COLLABORATOR"
 	ReqUpdateQuestionSetAgents     = "REQ_UPDATE_QUESTION_SET_AGENTS"
 	ReqGetQuestionSetAgentEnvelope = "REQ_GET_QUESTION_SET_AGENT_ENVELOPE"
 	ReqCreateAgent                 = "REQ_CREATE_AGENT"
@@ -188,9 +195,18 @@ const (
 	EvtRunStarted    = "EVT_RUN_STARTED"
 	EvtRunCompleted  = "EVT_RUN_COMPLETED"
 	EvtRunCancelled  = "EVT_RUN_CANCELLED"
-	EvtForceLogout   = "EVT_FORCE_LOGOUT"
-	EvtOnlineStatus  = "EVT_ONLINE_STATUS"
+	EvtForceLogout          = "EVT_FORCE_LOGOUT"
+	EvtOnlineStatus         = "EVT_ONLINE_STATUS"
+	EvtCollaboratorRevoked  = "EVT_COLLABORATOR_REVOKED"
 )
+
+// cachedAudience caches the resolved user audience for a question set.
+type cachedAudience struct {
+	userIDs   []uuid.UUID
+	fetchedAt time.Time
+}
+
+const audienceCacheTTL = 30 * time.Second
 
 // Hub manages WebSocket connections
 type Hub struct {
@@ -207,11 +223,18 @@ type Hub struct {
 	Firebase         *firebase.Client
 	WebAuthn         *webauthn.WebAuthn
 	webauthnSessions map[string]*webauthn.SessionData
+
+	// Audience cache for broadcast expansion (Collaborative Question Sets)
+	audienceCache   map[uuid.UUID]cachedAudience
+	audienceCacheMu sync.RWMutex
 }
 
 // HubInterface defines the methods required for broadcasting (to avoid import cycles in handlers)
 type HubInterface interface {
 	BroadcastEvent(workspaceID uuid.UUID, resource string, action string, data any) error
+	BroadcastToQuestionSetAudience(questionSetID uuid.UUID, msg []byte)
+	SendEventToQS(questionSetID uuid.UUID, eventType, correlationID string, payload any) error
+	InvalidateAudienceCache(questionSetID uuid.UUID)
 }
 
 type Connection struct {
@@ -255,6 +278,7 @@ func NewHub(db *gorm.DB, engine *orchestrator.Engine, jwtSecret string, fb *fire
 		jwtSecret:        jwtSecret,
 		Firebase:         fb,
 		webauthnSessions: make(map[string]*webauthn.SessionData),
+		audienceCache:    make(map[uuid.UUID]cachedAudience),
 	}
 
 	rpID := os.Getenv("RP_ID")
@@ -380,6 +404,120 @@ func (h *Hub) BroadcastEvent(workspaceID uuid.UUID, resource string, action stri
 		Data:     data,
 	}
 	return h.SendEvent(workspaceID, EvtDataChanged, "", payload)
+}
+
+// InvalidateAudienceCache removes the cached audience entry for a question set.
+// Must be called whenever collaborators are added or removed.
+func (h *Hub) InvalidateAudienceCache(questionSetID uuid.UUID) {
+	h.audienceCacheMu.Lock()
+	delete(h.audienceCache, questionSetID)
+	h.audienceCacheMu.Unlock()
+}
+
+// resolveQuestionSetAudience returns the owner user ID + all active collaborator
+// user IDs for questionSetID. Results are cached for audienceCacheTTL (30 s).
+func (h *Hub) resolveQuestionSetAudience(questionSetID uuid.UUID) ([]uuid.UUID, error) {
+	// Check cache first (read lock).
+	h.audienceCacheMu.RLock()
+	if entry, ok := h.audienceCache[questionSetID]; ok && time.Since(entry.fetchedAt) < audienceCacheTTL {
+		ids := make([]uuid.UUID, len(entry.userIDs))
+		copy(ids, entry.userIDs)
+		h.audienceCacheMu.RUnlock()
+		return ids, nil
+	}
+	h.audienceCacheMu.RUnlock()
+
+	// Fetch from DB.
+	type row struct {
+		UserID uuid.UUID `gorm:"column:user_id"`
+	}
+
+	// Owner: workspace.user_id via client → question_set chain.
+	var ownerRow row
+	if err := h.db.Raw(`
+		SELECT w.user_id
+		FROM question_sets qs
+		JOIN clients cl ON cl.id = qs.client_id
+		JOIN workspaces w ON w.id = cl.workspace_id
+		WHERE qs.id = ?
+		LIMIT 1
+	`, questionSetID).Scan(&ownerRow).Error; err != nil {
+		return nil, err
+	}
+
+	userIDs := []uuid.UUID{ownerRow.UserID}
+
+	// Collaborators.
+	var collabRows []row
+	if err := h.db.Raw(`
+		SELECT user_id
+		FROM question_set_collaborators
+		WHERE question_set_id = ? AND accepted_at IS NOT NULL AND revoked_at IS NULL
+	`, questionSetID).Scan(&collabRows).Error; err == nil {
+		for _, r := range collabRows {
+			userIDs = append(userIDs, r.UserID)
+		}
+	}
+	// Silently ignore missing table error (schema not yet migrated).
+
+	// Store in cache (write lock).
+	h.audienceCacheMu.Lock()
+	h.audienceCache[questionSetID] = cachedAudience{
+		userIDs:   userIDs,
+		fetchedAt: time.Now(),
+	}
+	h.audienceCacheMu.Unlock()
+
+	return userIDs, nil
+}
+
+// BroadcastToQuestionSetAudience sends a raw message to all active connections
+// whose UserID belongs to the resolved audience of questionSetID.
+func (h *Hub) BroadcastToQuestionSetAudience(questionSetID uuid.UUID, msg []byte) {
+	audience, err := h.resolveQuestionSetAudience(questionSetID)
+	if err != nil {
+		logger.Warn("[HUB] resolveQuestionSetAudience failed for %s: %v", questionSetID, err)
+		return
+	}
+
+	// Build lookup set.
+	allowed := make(map[uuid.UUID]struct{}, len(audience))
+	for _, uid := range audience {
+		allowed[uid] = struct{}{}
+	}
+
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, conn := range h.connections {
+		if _, ok := allowed[conn.UserID]; ok {
+			if err := conn.safeSend(msg); err != nil {
+				logger.Warn("[HUB] Failed to send to connection %s: %v", conn.ID, err)
+			}
+		}
+	}
+}
+
+// SendEventToQS serializes an event envelope and broadcasts it to the full
+// audience (owner + active collaborators) of questionSetID.
+func (h *Hub) SendEventToQS(questionSetID uuid.UUID, eventType, correlationID string, payload any) error {
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	env := models.Envelope{
+		Type:          eventType,
+		CorrelationID: correlationID,
+		Payload:       payloadBytes,
+	}
+
+	msg, err := json.Marshal(env)
+	if err != nil {
+		return err
+	}
+
+	h.BroadcastToQuestionSetAudience(questionSetID, msg)
+	return nil
 }
 
 func (h *Hub) broadcastOnlineStatusToAdmins() {
