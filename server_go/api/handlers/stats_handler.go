@@ -216,7 +216,9 @@ func (h *StatsHandler) computeStats(scope string, scopeID *uuid.UUID, c echo.Con
 
 		// 4. Avg Duration
 		var avgDuration float64
-		baseResultQuery.Session(&gorm.Session{}).Select("COALESCE(AVG(run_results.duration_ms), 0)").Row().Scan(&avgDuration)
+		if err := baseResultQuery.Session(&gorm.Session{}).Select("COALESCE(AVG(run_results.duration_ms), 0)").Row().Scan(&avgDuration); err != nil {
+			logger.Warn("[STATS] Failed to scan avg duration: %v", err)
+		}
 		stats.AvgDurationMs = avgDuration
 	}
 
@@ -385,13 +387,3 @@ func (h *StatsHandler) saveToCache(scope string, scopeID *uuid.UUID, stats *Aggr
 	h.db.Create(&cache)
 }
 
-// agentQuery helper - kept for backwards compatibility
-func (h *StatsHandler) agentQuery(where string, args []any, agentID uuid.UUID) *gorm.DB {
-	q := h.db.Model(&models.RunResult{}).Where("agent_id = ?", agentID)
-	if where == "workspace_id = ?" {
-		q = q.Joins("JOIN runs ON runs.id = run_results.run_id").Where("runs.workspace_id = ?", args[0])
-	} else if where != "1=1" {
-		q = q.Where(where, args...)
-	}
-	return q
-}

@@ -5,6 +5,7 @@
 # Go
 server_go/main
 server_go/*.exe
+.tmp_go_cache
 
 # Python
 __pycache__/
@@ -47,3 +48,8 @@ ops/nginx/.basic-auth-hosts.map
 
 *firebase-service-account.json
 .mutagen.yml
+
+# Managed Logs and Dumps
+downloaded-logs-*.json
+*.dump
+docs/improvement-plans.md

@@ -54,7 +54,9 @@ func (s *StatsService) ComputeStats(scope string, scopeID *uuid.UUID) (*models.A
 		stats.SuccessRate = float64(successCount) / float64(totalRes)
 
 		var avgDuration float64
-		baseResultQuery.Session(&gorm.Session{}).Select("COALESCE(AVG(run_results.duration_ms), 0)").Row().Scan(&avgDuration)
+		if err := baseResultQuery.Session(&gorm.Session{}).Select("COALESCE(AVG(run_results.duration_ms), 0)").Row().Scan(&avgDuration); err != nil {
+			logger.Warn("[STATS] Failed to scan avg duration: %v", err)
+		}
 		stats.AvgDurationMs = avgDuration
 	}
 

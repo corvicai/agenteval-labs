@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"errors"
-	"math/rand"
 	"os"
 	"strconv"
 	"sync"
@@ -619,11 +618,3 @@ func (h *Hub) checkAdmin(c *Connection, env models.Envelope) error {
 	return nil
 }
 
-func generateRandomCode(length int) string {
-	const charset = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // Excludes I, O, 1, 0
-	b := make([]byte, length)
-	for i := range b {
-		b[i] = charset[rand.Intn(len(charset))]
-	}
-	return string(b)
-}

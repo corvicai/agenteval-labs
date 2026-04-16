@@ -73,7 +73,7 @@ func (h *Hub) handleDevLogin(c *Connection, env models.Envelope) {
 	c.IsAuthenticated = true
 
 	// Generate token
-	token, _ := middleware.GenerateToken(
+	token, err := middleware.GenerateToken(
 		user.ID.String(),
 		workspace.ID.String(),
 		"", // No organization
@@ -81,6 +81,11 @@ func (h *Hub) handleDevLogin(c *Connection, env models.Envelope) {
 		os.Getenv("JWT_SECRET"),
 		"",
 	)
+	if err != nil {
+		logger.Error("[DEV] Failed to generate token for dev login %s: %v", user.ID, err)
+		c.SendError(env.CorrelationID, "failed to generate authentication token")
+		return
+	}
 
 	result := map[string]any{
 		"success": true,
@@ -117,7 +122,11 @@ func (h *Hub) handleSeedHistoricalRun(c *Connection, env models.Envelope) {
 		return
 	}
 
-	qsID, _ := uuid.Parse(payload.QuestionSetID)
+	qsID, err := uuid.Parse(payload.QuestionSetID)
+	if err != nil {
+		c.SendError(env.CorrelationID, "invalid question_set_id")
+		return
+	}
 	targetWSID := c.WorkspaceID
 	if payload.WorkspaceID != "" {
 		if id, err := uuid.Parse(payload.WorkspaceID); err == nil {
@@ -173,7 +182,11 @@ func (h *Hub) handleSeedHistoricalRun(c *Connection, env models.Envelope) {
 	var evaluations []models.Evaluation
 
 	for _, resP := range payload.Results {
-		aID, _ := uuid.Parse(resP.AgentID)
+		aID, parseErr := uuid.Parse(resP.AgentID)
+		if parseErr != nil {
+			logger.Warn("[DEV] Skipping seed result with invalid agent_id %q: %v", resP.AgentID, parseErr)
+			continue
+		}
 		resultID := uuid.New()
 
 		result := models.RunResult{

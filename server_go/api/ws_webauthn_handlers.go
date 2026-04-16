@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/middleware"
 	"benchmarking-platform/models"
 
@@ -75,7 +76,11 @@ func (h *Hub) handleWebAuthnRegisterFinish(c *Connection, env models.Envelope) {
 		return
 	}
 
-	fakeReq, _ := http.NewRequest("POST", "/", bytes.NewReader(req.Response))
+	fakeReq, err := http.NewRequest("POST", "/", bytes.NewReader(req.Response))
+	if err != nil {
+		c.SendError(env.CorrelationID, "Failed to build WebAuthn request: "+err.Error())
+		return
+	}
 	fakeReq.Header.Set("Content-Type", "application/json")
 
 	credential, err := h.WebAuthn.FinishRegistration(user, *sessionData, fakeReq)
@@ -168,7 +173,11 @@ func (h *Hub) handleWebAuthnLoginFinish(c *Connection, env models.Envelope) {
 		return
 	}
 
-	fakeReq, _ := http.NewRequest("POST", "/", bytes.NewReader(req.Response))
+	fakeReq, err := http.NewRequest("POST", "/", bytes.NewReader(req.Response))
+	if err != nil {
+		c.SendError(env.CorrelationID, "Failed to build WebAuthn request: "+err.Error())
+		return
+	}
 	fakeReq.Header.Set("Content-Type", "application/json")
 
 	credential, err := h.WebAuthn.FinishLogin(user, *sessionData, fakeReq)
@@ -195,7 +204,7 @@ func (h *Hub) handleWebAuthnLoginFinish(c *Connection, env models.Envelope) {
 	var workspace models.Workspace
 	h.db.Preload("User").Where("user_id = ?", user.ID).First(&workspace)
 
-	token, _ := middleware.GenerateToken(
+	token, err := middleware.GenerateToken(
 		user.ID.String(),
 		workspace.ID.String(),
 		"", // No organization
@@ -203,6 +212,11 @@ func (h *Hub) handleWebAuthnLoginFinish(c *Connection, env models.Envelope) {
 		h.jwtSecret,
 		"",
 	)
+	if err != nil {
+		logger.Error("[WEBAUTHN] Failed to generate token for user %s: %v", user.ID, err)
+		c.SendError(env.CorrelationID, "failed to generate authentication token")
+		return
+	}
 
 	// Since we are in WebSocket, we can't easily set a cookie that the browser will use for REST calls automatically
 	// BUT the client can store it in localStorage if they choice.

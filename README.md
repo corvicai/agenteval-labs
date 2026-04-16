@@ -235,10 +235,18 @@ This is destructive for encrypted config data, but it is the simplest recovery p
 cd server_go
 go test ./... -v
 
+# Backend Lint + Vet + Tests (matches CI gate)
+cd server_go
+make check    # runs: go vet, golangci-lint, go test
+
 # Frontend Tests
 cd frontend
 npm run test
 ```
+
+The backend lint configuration lives in `server_go/.golangci.yml`.
+`make lint` auto-installs the expected `golangci-lint` version into
+`$GOPATH/bin` on first run.
 
 ### Run Without Docker
 
