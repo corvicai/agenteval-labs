@@ -384,3 +384,119 @@ func TestGetCollabInvite_ReturnsStatus(t *testing.T) {
 	require.NoError(t, json.Unmarshal(preview["status"], &status))
 	assert.Equal(t, "ready", status)
 }
+
+// ---------------------------------------------------------------------------
+// TestBroadcastToQuestionSetAudience_ReachesOwnerAndCollaborators
+// ---------------------------------------------------------------------------
+
+func TestBroadcastToQuestionSetAudience_ReachesOwnerAndCollaborators(t *testing.T) {
+	setup()
+
+	owner, _, _, qs, _ := createQuestionSetTestFixture(t, "broadcast-owner")
+	collab, _, _, _, _ := createQuestionSetTestFixture(t, "broadcast-collab")
+	stranger, _, _, _, _ := createQuestionSetTestFixture(t, "broadcast-stranger")
+
+	// Accept collaborator.
+	now := time.Now()
+	require.NoError(t, db.Create(&models.QuestionSetCollaborator{
+		ID:              uuid.New(),
+		QuestionSetID:   qs.ID,
+		UserID:          collab.ID,
+		Role:            "editor",
+		InvitedByUserID: owner.ID,
+		AcceptedAt:      &now,
+	}).Error)
+
+	hub := NewHub(db, nil, "test-secret", nil)
+
+	ownerConn := &Connection{ID: uuid.New(), UserID: owner.ID, Send: make(chan []byte, 10), Done: make(chan struct{})}
+	collabConn := &Connection{ID: uuid.New(), UserID: collab.ID, Send: make(chan []byte, 10), Done: make(chan struct{})}
+	strangerConn := &Connection{ID: uuid.New(), UserID: stranger.ID, Send: make(chan []byte, 10), Done: make(chan struct{})}
+
+	// Register connections directly (same package access).
+	hub.mu.Lock()
+	hub.connections[ownerConn.ID] = ownerConn
+	hub.connections[collabConn.ID] = collabConn
+	hub.connections[strangerConn.ID] = strangerConn
+	hub.mu.Unlock()
+
+	testMsg := []byte(`{"type":"EVT_TEST","payload":"hello"}`)
+	hub.BroadcastToQuestionSetAudience(qs.ID, testMsg)
+
+	// Owner must receive.
+	select {
+	case msg := <-ownerConn.Send:
+		assert.Equal(t, testMsg, msg)
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("owner did not receive broadcast")
+	}
+
+	// Collaborator must receive.
+	select {
+	case msg := <-collabConn.Send:
+		assert.Equal(t, testMsg, msg)
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("collaborator did not receive broadcast")
+	}
+
+	// Stranger must NOT receive anything.
+	select {
+	case <-strangerConn.Send:
+		t.Fatal("stranger should not receive broadcast")
+	case <-time.After(50 * time.Millisecond):
+		// expected: no message
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestBroadcastToQuestionSetAudience_SkipsRevoked
+// ---------------------------------------------------------------------------
+
+func TestBroadcastToQuestionSetAudience_SkipsRevoked(t *testing.T) {
+	setup()
+
+	owner, _, _, qs, _ := createQuestionSetTestFixture(t, "broadcast-revoked-owner")
+	revoked, _, _, _, _ := createQuestionSetTestFixture(t, "broadcast-revoked-collab")
+
+	// Collaborator accepted then revoked.
+	now := time.Now()
+	revokedAt := now.Add(time.Second)
+	require.NoError(t, db.Create(&models.QuestionSetCollaborator{
+		ID:              uuid.New(),
+		QuestionSetID:   qs.ID,
+		UserID:          revoked.ID,
+		Role:            "editor",
+		InvitedByUserID: owner.ID,
+		AcceptedAt:      &now,
+		RevokedAt:       &revokedAt,
+	}).Error)
+
+	hub := NewHub(db, nil, "test-secret", nil)
+
+	ownerConn := &Connection{ID: uuid.New(), UserID: owner.ID, Send: make(chan []byte, 10), Done: make(chan struct{})}
+	revokedConn := &Connection{ID: uuid.New(), UserID: revoked.ID, Send: make(chan []byte, 10), Done: make(chan struct{})}
+
+	hub.mu.Lock()
+	hub.connections[ownerConn.ID] = ownerConn
+	hub.connections[revokedConn.ID] = revokedConn
+	hub.mu.Unlock()
+
+	testMsg := []byte(`{"type":"EVT_TEST","payload":"hello"}`)
+	hub.BroadcastToQuestionSetAudience(qs.ID, testMsg)
+
+	// Owner must receive.
+	select {
+	case msg := <-ownerConn.Send:
+		assert.Equal(t, testMsg, msg)
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("owner did not receive broadcast")
+	}
+
+	// Revoked collaborator must NOT receive.
+	select {
+	case <-revokedConn.Send:
+		t.Fatal("revoked collaborator should not receive broadcast")
+	case <-time.After(50 * time.Millisecond):
+		// expected: no message
+	}
+}

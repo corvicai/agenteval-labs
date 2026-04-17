@@ -32,6 +32,17 @@
       </div>
     </div>
 
+    <div v-if="hasEncryptionIssue" class="encryption-health-banner">
+      <div class="encryption-health-banner__icon">🔐</div>
+      <div class="encryption-health-banner__body">
+        <strong>Encryption key issue detected</strong>
+        <span>The active encryption key does not match the stored fingerprint (status: <code>{{ wsState.encryptionKeyHealth?.state_status }}</code>).
+          Agents with lost credentials are shown with a <strong>🔐 Needs credentials</strong> badge.
+          See the <button class="link-btn" @click="currentTab = 'debug'">Debug tab</button> for details.
+        </span>
+      </div>
+    </div>
+
     <div v-if="loading && !users.length && !organizations.length" class="loading-state">
       <div class="spinner"></div>
       <p>Loading administrative data...</p>
@@ -90,8 +101,11 @@
               <option value="1w">Last 1 Week</option>
             </select>
           </div>
-          <span v-if="filteredUsers.length !== users.length" class="filter-count">
-            Showing {{ filteredUsers.length }} of {{ users.length }}
+          <span class="filter-count">
+            <template v-if="filteredUsers.length !== users.length">
+              {{ filteredUsers.length }} match on page ·
+            </template>
+            {{ usersTotal }} total
           </span>
         </div>
         
@@ -180,6 +194,16 @@
             </tbody>
           </table>
         </div>
+
+        <!-- Users pagination bar -->
+        <div v-if="usersTotal > usersPageSize" class="pagination-bar">
+          <button class="pagination-btn" @click="prevUsersPage" :disabled="usersPage === 0">← Prev</button>
+          <span class="pagination-info">
+            Page {{ usersPage + 1 }} of {{ usersTotalPages }}
+            <span class="pagination-total">({{ usersTotal }} total)</span>
+          </span>
+          <button class="pagination-btn" @click="nextUsersPage" :disabled="usersPage >= usersTotalPages - 1">Next →</button>
+        </div>
       </div>
 
       <!-- Organizations Tab -->
@@ -220,8 +244,11 @@
               <option value="1w">Last 1 Week</option>
             </select>
           </div>
-          <span v-if="filteredOrganizations.length !== organizations.length" class="filter-count">
-            Showing {{ filteredOrganizations.length }} of {{ organizations.length }}
+          <span class="filter-count">
+            <template v-if="filteredOrganizations.length !== organizations.length">
+              {{ filteredOrganizations.length }} match on page ·
+            </template>
+            {{ orgsTotal }} total
           </span>
         </div>
         
@@ -280,6 +307,16 @@
               </tr>
             </tbody>
           </table>
+        </div>
+
+        <!-- Organizations pagination bar -->
+        <div v-if="orgsTotal > orgsPageSize" class="pagination-bar">
+          <button class="pagination-btn" @click="prevOrgsPage" :disabled="orgsPage === 0">← Prev</button>
+          <span class="pagination-info">
+            Page {{ orgsPage + 1 }} of {{ orgsTotalPages }}
+            <span class="pagination-total">({{ orgsTotal }} total)</span>
+          </span>
+          <button class="pagination-btn" @click="nextOrgsPage" :disabled="orgsPage >= orgsTotalPages - 1">Next →</button>
         </div>
       </div>
 
@@ -1010,7 +1047,7 @@ const props = defineProps({
   initialTab: { type: String, default: 'users' }
 })
 
-const { state: wsState } = useWSStore()
+const { state: wsState, hasEncryptionIssue } = useWSStore()
 
 const emit = defineEmits(['close', 'view-user-profile', 'view-org-profile', 'tab-change'])
 
@@ -1042,6 +1079,14 @@ const formError = ref('')
 const editingUserId = ref(null)
 const editingOrg = ref(null)
 
+// Pagination State
+const usersPage = ref(0)
+const usersTotal = ref(0)
+const usersPageSize = ref(50)
+const orgsPage = ref(0)
+const orgsTotal = ref(0)
+const orgsPageSize = ref(50)
+
 // Filter State
 const userSearch = ref('')
 const userOrgFilter = ref('')
@@ -1057,6 +1102,10 @@ const runStatusFilter = ref('')
 
 const RUNS_REFRESH_INTERVAL_MS = 15000
 let runsRefreshTimer = null
+
+// Computed: Pagination helpers
+const usersTotalPages = computed(() => Math.max(1, Math.ceil(usersTotal.value / usersPageSize.value)))
+const orgsTotalPages = computed(() => Math.max(1, Math.ceil(orgsTotal.value / orgsPageSize.value)))
 
 // Computed: Filtered Users
 const filteredUsers = computed(() => {
@@ -1268,6 +1317,12 @@ function viewOrgProfile(orgId) {
 }
 
 
+// Pagination navigation
+function prevUsersPage() { if (usersPage.value > 0) { usersPage.value--; loadData() } }
+function nextUsersPage() { if (usersPage.value < usersTotalPages.value - 1) { usersPage.value++; loadData() } }
+function prevOrgsPage()  { if (orgsPage.value > 0)  { orgsPage.value--;  loadData() } }
+function nextOrgsPage()  { if (orgsPage.value < orgsTotalPages.value - 1)  { orgsPage.value++;  loadData() } }
+
 async function loadData() {
   if (isRefreshing.value) return
   isRefreshing.value = true
@@ -1275,12 +1330,24 @@ async function loadData() {
   error.value = ''
   try {
     // Use WebSocket for admin data
-    const [usersList, orgsList] = await Promise.all([
-      wsService.adminGetUsers({ time_range: userTimeFilter.value }),
-      wsService.adminGetOrganizations({ time_range: orgTimeFilter.value })
+    const [usersResp, orgsResp] = await Promise.all([
+      wsService.adminGetUsers({
+        time_range: userTimeFilter.value,
+        page: usersPage.value,
+        page_size: usersPageSize.value,
+      }),
+      wsService.adminGetOrganizations({
+        time_range: orgTimeFilter.value,
+        page: orgsPage.value,
+        page_size: orgsPageSize.value,
+      })
     ])
-    users.value = usersList
-    organizations.value = orgsList
+    // Handle paginated response shape { users, total, page, page_size }
+    users.value = usersResp.users ?? usersResp
+    usersTotal.value = usersResp.total ?? users.value.length
+    // Handle paginated response shape { organizations, total, page, page_size }
+    organizations.value = orgsResp.organizations ?? orgsResp
+    orgsTotal.value = orgsResp.total ?? organizations.value.length
     
     // Load logs if tab is active
     if (currentTab.value === 'logs') {
@@ -1617,10 +1684,12 @@ watch(currentTab, (newTab) => {
 })
 
 watch(userTimeFilter, () => {
+  usersPage.value = 0
   loadData()
 })
 
 watch(orgTimeFilter, () => {
+  orgsPage.value = 0
   loadData()
 })
 </script>
@@ -2008,6 +2077,44 @@ watch(orgTimeFilter, () => {
   border-radius: 999px;
   font-weight: 500;
   white-space: nowrap;
+}
+
+/* Pagination bar */
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 0.75rem 0 0.25rem;
+}
+
+.pagination-btn {
+  padding: 5px 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: var(--card-bg, #fff);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.pagination-btn:hover:not(:disabled) {
+  background: #e0e7ff;
+  border-color: #6366f1;
+}
+.pagination-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.pagination-info {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.pagination-total {
+  color: #6366f1;
+  font-weight: 500;
 }
 
 .date-badge {
@@ -2593,5 +2700,47 @@ td {
   background: #fffbeb;
   color: #92400e;
   border: 1px solid #fde68a;
+}
+
+.encryption-health-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 20px;
+  background: #fff7ed;
+  border-bottom: 2px solid #f97316;
+  color: #7c2d12;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.encryption-health-banner__icon {
+  font-size: 1.25rem;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.encryption-health-banner__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.encryption-health-banner__body code {
+  font-family: monospace;
+  background: rgba(0,0,0,0.06);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: #c2410c;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: inherit;
+  padding: 0;
+  font-weight: 600;
 }
 </style>

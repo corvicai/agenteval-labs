@@ -11,6 +11,11 @@
           ⚠️ <strong>Warning:</strong> No primary agents are enabled. You won't be able to run benchmarks.
         </div>
 
+        <div v-if="hasUndecryptableAgents" class="alert alert-danger">
+          🔐 <strong>Credential issue detected:</strong> One or more agents lost their credentials due to an encryption key change.
+          Open each agent marked with <strong>🔐 Needs credentials</strong> and re-enter its API key/token to restore it.
+        </div>
+
         <div v-if="!editingAgentId" class="agent-tabs">
           <button :class="['tab-btn', { active: activeTab === 'agents' }]" @click="activeTab = 'agents'">
             Agents <span class="tab-count">{{ agentsTabCount }}</span>
@@ -40,6 +45,9 @@
           >
             <div class="agent-header" :class="{ 'no-mb': editingAgentId !== agent.id }">
               <span class="agent-name-text">{{ agent.name }}</span>
+              <span v-if="agent.config_status === 'needs_recredentials'" class="creds-lost-badge" title="Credentials lost — re-enter to restore">
+                🔐 Needs credentials
+              </span>
               <span class="agent-type-badge" :class="agent.provider_type">
                 {{ getAgentTypeLabel(agent) }}
               </span>
@@ -557,6 +565,14 @@
         @close="shareAgentTarget = null"
       />
 
+      <!-- Force Delete Confirmation Modal (Nested) -->
+      <AgentForceDeleteModal
+        v-if="forceDeleteAgent"
+        :agent-name="forceDeleteAgent.name"
+        @confirm="confirmForceDelete"
+        @cancel="forceDeleteAgent = null"
+      />
+
       <!-- Spy Modal (Nested) -->
       <div v-if="spyAgent" class="modal-overlay" style="z-index: 1001;" @click.self="spyAgent = null">
         <div class="modal-container payload-modal">
@@ -586,6 +602,7 @@ import { capturePostHogEvent } from '../services/posthog.js'
 import { wsService } from '../services/websocket.js'
 import { generateAgentName } from '../utils/nameGenerator.js'
 import ShareAgentModal from './ShareAgentModal.vue'
+import AgentForceDeleteModal from './AgentForceDeleteModal.vue'
 
 const isDev = import.meta.env.DEV
 
@@ -600,6 +617,7 @@ const emit = defineEmits(['update', 'close'])
 
 const localAgents = ref([])
 const hasEnabledAgents = computed(() => localAgents.value.some(a => a.enabled && a.provider_type !== 'evaluator'))
+const hasUndecryptableAgents = computed(() => localAgents.value.some(a => a.config_status === 'needs_recredentials'))
 
 const spyAgent = ref(null)
 const spyPayload = ref(null)
@@ -613,6 +631,10 @@ const saveStatus = ref(null) // 'saving', 'saved', 'error'
 const saveStatusText = ref('')
 const pendingChanges = ref(false)
 const dirtyAgentIds = ref(new Set())
+
+// Force-delete confirmation modal state
+const forceDeleteModal = ref(null) // { agent, resolve }
+const forceDeleteAgent = ref(null)
 const pendingCreateIds = ref(new Set())
 const isEditing = ref(false) // Block watcher updates when editing
 const showEvaluatorModeModal = ref(false)
@@ -1463,30 +1485,47 @@ async function toggleAgent(agent) {
   }
 }
 
-async function deleteAgent(agent, force = false) {
+async function deleteAgent(agent) {
   if (!confirm(`Delete agent "${agent.name}"?`)) return
 
   try {
-    await wsService.deleteAgent(agent.id, force)
+    await wsService.deleteAgent(agent.id, false)
     localAgents.value = localAgents.value.filter(a => a.id !== agent.id)
     dirtyAgentIds.value.delete(agent.id)
     pendingCreateIds.value.delete(agent.id)
     pendingChanges.value = dirtyAgentIds.value.size > 0
     emit('update')
-    showSaveStatus('saved', force ? 'Agent force-deleted' : 'Agent deleted')
+    showSaveStatus('saved', 'Agent deleted')
   } catch (e) {
     console.error('Failed to delete agent:', e)
     const errorMsg = e.message || ''
-    if (!force && (errorMsg.includes('encryption') || errorMsg.includes('failed to find') || errorMsg.includes('failed to load'))) {
-      const tryForce = confirm(
-        `Delete failed: ${errorMsg}\n\nThis agent has an unreadable configuration (encryption issue).\nDo you want to force-delete it directly from the database?`
-      )
-      if (tryForce) {
-        await deleteAgent(agent, true)
-        return
-      }
+    const isEncryptionIssue = errorMsg.includes('encryption') ||
+      errorMsg.includes('failed to find') ||
+      errorMsg.includes('failed to load') ||
+      agent.config_status === 'needs_recredentials'
+    if (isEncryptionIssue) {
+      forceDeleteAgent.value = agent
+      return
     }
     showSaveStatus('error', errorMsg || 'Delete failed')
+  }
+}
+
+async function confirmForceDelete() {
+  const agent = forceDeleteAgent.value
+  forceDeleteAgent.value = null
+  if (!agent) return
+  try {
+    await wsService.deleteAgent(agent.id, true)
+    localAgents.value = localAgents.value.filter(a => a.id !== agent.id)
+    dirtyAgentIds.value.delete(agent.id)
+    pendingCreateIds.value.delete(agent.id)
+    pendingChanges.value = dirtyAgentIds.value.size > 0
+    emit('update')
+    showSaveStatus('saved', 'Agent force-deleted')
+  } catch (e) {
+    console.error('Failed to force-delete agent:', e)
+    showSaveStatus('error', e.message || 'Force delete failed')
   }
 }
 
@@ -1718,6 +1757,20 @@ function startDrag(index) {
   letter-spacing: 0.02em;
 }
 
+.creds-lost-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #fff3cd;
+  color: #856404;
+  border: 1px solid #ffc107;
+  letter-spacing: 0.02em;
+}
+
 .agent-card.shared-card {
   border-left: 3px solid #8b5cf6;
   cursor: default;
@@ -1899,6 +1952,19 @@ function startDrag(index) {
   display: flex;
   gap: 0.5rem;
   align-items: center;
+}
+
+.alert-danger {
+  background: #fff1f2;
+  color: #9f1239;
+  border: 1px solid #fecdd3;
+  padding: 0.75rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  line-height: 1.5;
 }
 
 .disabled-card {

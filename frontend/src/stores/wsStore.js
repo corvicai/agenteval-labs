@@ -21,7 +21,15 @@ const state = reactive({
     runningQuestionSetId: null,
     // Populated by syncState when the workspace has an active run; allows
     // BenchmarkArena to restore run results inline without a second request.
-    activeRunHydration: null
+    activeRunHydration: null,
+    // Populated for admin users only when the encryption key health is not "match".
+    // Components can check hasEncryptionIssue to decide whether to surface a banner.
+    encryptionKeyHealth: null,
+    // Plan 24 Camada 3 — tracks the timestamp of the latest result received per
+    // run so we can ask for a delta (REQ_GET_RUN_PROGRESS) on reconnect instead
+    // of a full REQ_GET_RUN_DETAILS round-trip.
+    // Map<runId: string, isoTimestamp: string>
+    lastProgressTsPerRun: {},
 })
 
 const listSignature = (items = []) => {
@@ -105,6 +113,7 @@ export function useWSStore() {
                     console.log('[WS Store] Active run hydration received for run:', data.active_run_hydration.run_id,
                         '— results:', data.active_run_hydration.results?.length ?? 0)
                 }
+                state.encryptionKeyHealth = data.encryption_health || null
                 if (warnings.length > 0) {
                     console.warn('[WS Store] Sync completed with warnings:', warnings)
                 }
@@ -222,9 +231,15 @@ export function useWSStore() {
                 // Live deltas were applied on top of the existing store —
                 // mark as synced so watchers waiting on isSynced wake up.
                 state.isSynced = true
+                // Plan 24 Layer 4: recover any in-flight requests that were
+                // parked during the disconnect before marking sync complete.
+                await wsService.drainPendingOnReconnect()
                 return
             }
-            syncState()
+            await syncState()
+            // Plan 24 Layer 4: recover parked in-flight requests now that
+            // the store is fully synced and the server cache is accessible.
+            await wsService.drainPendingOnReconnect()
         })
 
         wsService.on('disconnected', (payload) => {
@@ -271,6 +286,22 @@ export function useWSStore() {
             if (run) {
                 // Increment completed tasks or similar logic
             }
+            // Plan 24 Camada 3 — stamp latest progress timestamp per run
+            if (payload?.run_id) {
+                state.lastProgressTsPerRun = {
+                    ...state.lastProgressTsPerRun,
+                    [payload.run_id]: new Date().toISOString()
+                }
+            }
+        })
+
+        wsService.on('EVT_TASK_PROGRESS', (payload) => {
+            if (payload?.run_id) {
+                state.lastProgressTsPerRun = {
+                    ...state.lastProgressTsPerRun,
+                    [payload.run_id]: new Date().toISOString()
+                }
+            }
         })
 
         wsService.on('EVT_ONLINE_STATUS', (payload) => {
@@ -292,7 +323,16 @@ export function useWSStore() {
         startRun: wsService.startRun.bind(wsService),
         cancelRun: wsService.cancelRun.bind(wsService),
         rerunTask: wsService.rerunTask.bind(wsService),
-        setRunningQuestionSetId: (id) => { state.runningQuestionSetId = id }
+        setRunningQuestionSetId: (id) => { state.runningQuestionSetId = id },
+        // Plan 24 Camada 3 — get the stored progress cursor for a run
+        getLastProgressTs: (runId) => state.lastProgressTsPerRun[runId] || null,
+        // Delegate getRunProgress to websocket service
+        getRunProgress: (runId, sinceTs) => wsService.getRunProgress(runId, sinceTs),
+        // True when the server reports an encryption key issue (admin-only).
+        get hasEncryptionIssue() {
+            const s = state.encryptionKeyHealth?.state_status
+            return s && s !== 'match' && s !== ''
+        }
     }
 }
 

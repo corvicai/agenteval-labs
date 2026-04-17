@@ -17,6 +17,25 @@ class WebSocketService {
         // broadcast event; kept in memory only (not persisted) so a fresh
         // tab always falls back to REQ_SYNC_STATE.
         this.lastEventId = null
+
+        // Client-side heartbeat (Plan 25B). Sends REQ_PING every 30 s and
+        // considers the connection zombie if no DATA_PONG arrives within 10 s.
+        this._heartbeatInterval = null
+        this._heartbeatTimeout = null
+
+        // Plan 24, Layer 4 — pending requests parked during a transient
+        // (unintentional) network drop. Keyed by correlationId; value is
+        // { resolve, reject, parkedAt }. Drained on reconnect via
+        // drainPendingOnReconnect(). NOT populated for intentional
+        // disconnects (AFK, logout, workspace-switch) which call
+        // _rejectPendingRequests() directly through disconnect().
+        this.pendingOnReconnect = new Map()
+
+        // Visibility-aware reconnect (Plan 25C): re-verify health on tab focus.
+        this._onVisibilityChange = this._handleVisibilityChange.bind(this)
+        if (typeof document !== 'undefined') {
+            document.addEventListener('visibilitychange', this._onVisibilityChange)
+        }
     }
 
     static REQUEST_TIMEOUTS = {
@@ -248,6 +267,7 @@ class WebSocketService {
                             }
                         }
 
+                        this._startClientHeartbeat()
                         this._emit('connected', {})
                         resolve()
                     }
@@ -284,6 +304,7 @@ class WebSocketService {
 
                     ws.onclose = (closeEvent) => {
                         if (this.ws !== ws) return
+                        this._stopClientHeartbeat()
                         const reconnectPlanned = !this.suppressNextReconnect && this.shouldReconnect
                         console.log('[WS] Disconnected', {
                             code: closeEvent?.code,
@@ -299,7 +320,13 @@ class WebSocketService {
                             disconnectReason: this.lastDisconnectReason
                         })
                         this.lastDisconnectReason = null
-                        this._rejectPendingRequests('WebSocket disconnected')
+                        // Park (not reject) pending requests for unintentional network
+                        // drops so drainPendingOnReconnect() can recover server
+                        // responses from the short-lived cache (Plan 24, Layer 4).
+                        // Intentional disconnects (AFK, logout, workspace-switch) call
+                        // _rejectPendingRequests() from disconnect() before ws.close(),
+                        // so pendingRequests is already empty here in those cases.
+                        this._rejectPendingRequests('WebSocket disconnected', reconnectPlanned)
                         if (this.suppressNextReconnect) {
                             this.suppressNextReconnect = false
                             return
@@ -400,7 +427,89 @@ class WebSocketService {
         setTimeout(() => this._establishConnection(), delay)
     }
 
+    // ── Plan 25B: Client-side heartbeat ────────────────────────────────────
+    // Sends REQ_PING every 30 s when the connection is open.
+    // If DATA_PONG doesn't arrive within 10 s the socket is treated as a
+    // zombie, force-closed, and reconnect is triggered immediately.
+    _startClientHeartbeat() {
+        this._stopClientHeartbeat()
+        this._heartbeatInterval = setInterval(() => {
+            if (!this.isConnected()) {
+                this._stopClientHeartbeat()
+                return
+            }
+            // Send ping with a 10-second timeout
+            const pingTimeout = 10000
+            this._heartbeatTimeout = setTimeout(() => {
+                console.warn('[WS] Heartbeat pong timeout — zombie connection detected; reconnecting')
+                this._heartbeatTimeout = null
+                // Force-close without suppressing reconnect
+                if (this.ws) {
+                    const ws = this.ws
+                    this.ws = null
+                    this.connectionPromise = null
+                    try { ws.close() } catch (_) {}
+                }
+                if (this.shouldReconnect) {
+                    this._attemptReconnect()
+                }
+            }, pingTimeout)
+
+            this.request('REQ_PING', {}, pingTimeout + 1000)
+                .then(() => {
+                    if (this._heartbeatTimeout) {
+                        clearTimeout(this._heartbeatTimeout)
+                        this._heartbeatTimeout = null
+                    }
+                })
+                .catch(() => {
+                    // request() will reject if connection closes; timeout above handles zombie case
+                    if (this._heartbeatTimeout) {
+                        clearTimeout(this._heartbeatTimeout)
+                        this._heartbeatTimeout = null
+                    }
+                })
+        }, 30000)
+    }
+
+    _stopClientHeartbeat() {
+        if (this._heartbeatInterval) {
+            clearInterval(this._heartbeatInterval)
+            this._heartbeatInterval = null
+        }
+        if (this._heartbeatTimeout) {
+            clearTimeout(this._heartbeatTimeout)
+            this._heartbeatTimeout = null
+        }
+    }
+
+    // ── Plan 25C: Visibility-aware reconnect ───────────────────────────────
+    // When the tab becomes visible after being hidden, verify the connection
+    // is still alive. If not, force an immediate reconnect attempt.
+    _handleVisibilityChange() {
+        if (typeof document === 'undefined') return
+        if (document.visibilityState !== 'visible') return
+        if (!this.shouldReconnect) return
+        if (this.isConnected()) {
+            // Quick ping to verify the connection is not a zombie
+            this.request('REQ_PING', {}, 5000).catch(() => {
+                console.warn('[WS] Visibility ping failed — reconnecting')
+                if (this.ws) {
+                    const ws = this.ws
+                    this.ws = null
+                    this.connectionPromise = null
+                    try { ws.close() } catch (_) {}
+                }
+                this._attemptReconnect()
+            })
+        } else if (!this.connectionPromise) {
+            console.log('[WS] Tab visible and disconnected — reconnecting immediately')
+            this._attemptReconnect()
+        }
+    }
+
     disconnect(reason = 'manual') {
+        this._stopClientHeartbeat()
         if (this.ws) {
             console.log('[WS] Disconnect requested', {
                 reason,
@@ -416,6 +525,13 @@ class WebSocketService {
             this.connectionPromise = null
             this._iapTokenPromise = null
         }
+        // Reject any requests that were parked from a prior network drop so
+        // they don't leak across a logout or workspace switch.
+        for (const [, entry] of this.pendingOnReconnect.entries()) {
+            entry.reject(new Error('WebSocket disconnected'))
+        }
+        this.pendingOnReconnect.clear()
+
         this.workspaceId = null
         this.token = null
         // Drop the replay cursor so a fresh login never attempts to resume
@@ -423,6 +539,48 @@ class WebSocketService {
         if (reason === 'logout' || reason === 'session_expired' || reason === 'app-unmount') {
             this.lastEventId = null
         }
+    }
+
+    /**
+     * Plan 24, Layer 4 — drain parked pending requests after a transient
+     * reconnect. For each request in pendingOnReconnect, asks the server
+     * whether it processed the request via REQ_GET_PENDING_RESPONSE. If the
+     * server has a cached response (within its 90 s TTL) the original promise
+     * is resolved; otherwise it is rejected with a descriptive error.
+     *
+     * Called by wsStore after syncState() (or event replay) completes so the
+     * caller sees the recovered response in the context of a fully-synced store.
+     */
+    async drainPendingOnReconnect() {
+        if (this.pendingOnReconnect.size === 0) return
+        // Match server-side ResponseCache TTL (90 s). Requests older than this
+        // cannot be in the cache and should fail fast.
+        const SERVER_CACHE_TTL_MS = 90000
+        const parked = new Map(this.pendingOnReconnect)
+        this.pendingOnReconnect.clear()
+
+        const tasks = []
+        for (const [correlationId, entry] of parked.entries()) {
+            const ageMs = Date.now() - entry.parkedAt
+            if (ageMs > SERVER_CACHE_TTL_MS) {
+                entry.reject(new Error('Request timed out while disconnected'))
+                continue
+            }
+            tasks.push(
+                this.request('REQ_GET_PENDING_RESPONSE', { correlation_id: correlationId }, 10000)
+                    .then((resp) => {
+                        if (resp?.found && resp.payload != null) {
+                            entry.resolve(resp.payload)
+                        } else {
+                            entry.reject(new Error('Request did not complete before connection was lost'))
+                        }
+                    })
+                    .catch((e) => {
+                        entry.reject(new Error('Could not verify request after reconnect: ' + (e?.message || 'unknown')))
+                    })
+            )
+        }
+        await Promise.allSettled(tasks)
     }
 
     async authenticateWithFirebase(token) {
@@ -433,11 +591,23 @@ class WebSocketService {
         return this.request('AUTH', { token })
     }
 
-    _rejectPendingRequests(message) {
+    // Plan 24, Layer 4: when park=true the pending requests are moved to
+    // pendingOnReconnect instead of being rejected. This is only safe for
+    // unintentional network drops where shouldReconnect=true; intentional
+    // disconnects (AFK, logout) always call with park=false (default).
+    _rejectPendingRequests(message, park = false) {
         if (this.pendingRequests.size === 0) return
         for (const [correlationId, pending] of this.pendingRequests.entries()) {
             clearTimeout(pending.timeout)
-            pending.reject(new Error(message))
+            if (park) {
+                this.pendingOnReconnect.set(correlationId, {
+                    resolve: pending.resolve,
+                    reject: pending.reject,
+                    parkedAt: Date.now()
+                })
+            } else {
+                pending.reject(new Error(message))
+            }
             this.pendingRequests.delete(correlationId)
         }
     }
@@ -618,6 +788,18 @@ class WebSocketService {
 
     cancelRun(runId) {
         return this.request('CMD_CANCEL_RUN', { run_id: runId })
+    }
+
+    /**
+     * Plan 24, Layer 3 — Request delta run results since a given timestamp.
+     * @param {string} runId  UUID of the run to inspect
+     * @param {string|null} sinceTs  ISO-8601 timestamp (e.g. new Date().toISOString()).
+     *                               If null, returns all results.
+     */
+    getRunProgress(runId, sinceTs = null) {
+        const payload = { run_id: runId }
+        if (sinceTs) payload.since_ts = sinceTs
+        return this.request('REQ_GET_RUN_PROGRESS', payload, 30000)
     }
 
     runEvaluators(runId, evaluatorAgentIds = [], timeoutMs = WebSocketService.REQUEST_TIMEOUTS.RUN_EVALUATORS) {
