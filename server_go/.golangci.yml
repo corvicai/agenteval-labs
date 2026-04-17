@@ -30,7 +30,9 @@ linters-settings:
       - (*benchmarking-platform/api.Connection).safeSend
       - (*benchmarking-platform/api.Hub).BroadcastEvent
       - (*benchmarking-platform/api.Hub).SendEvent
+      - (*benchmarking-platform/api.Hub).SendEventToUser
       - (benchmarking-platform/api.HubInterface).BroadcastEvent
+      - (benchmarking-platform/api.HubInterface).SendEventToUser
       # json.Marshal of concrete in-memory structs never fails in practice.
       - encoding/json.Marshal
       # gorm soft helpers where zero-value result is acceptable.

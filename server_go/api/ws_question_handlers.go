@@ -580,9 +580,15 @@ func (h *Hub) handleGetQuestionSetAgentEnvelope(c *Connection, env models.Envelo
 
 	var user models.User
 	h.db.First(&user, "id = ?", c.UserID)
+	isCollaborator := false
 	if !user.IsAdmin && c.WorkspaceID != uuid.Nil && meta.WorkspaceID != c.WorkspaceID {
-		c.SendError(env.CorrelationID, "workspace mismatch")
-		return
+		// Check if the user is an active collaborator on this QS.
+		access, _, _, _ := h.getQuestionSetAccess(h.db, c.UserID, qsID)
+		if access < accessEditor {
+			c.SendError(env.CorrelationID, "workspace mismatch")
+			return
+		}
+		isCollaborator = true
 	}
 
 	var workspaceAgents []models.Agent
@@ -642,6 +648,16 @@ func (h *Hub) handleGetQuestionSetAgentEnvelope(c *Connection, env models.Envelo
 			continue
 		}
 		availableAgents = append(availableAgents, candidate)
+	}
+
+	// Collaborators (non-owners) see agent names/models but NOT API keys/tokens.
+	if isCollaborator {
+		for i := range selectedAgents {
+			selectedAgents[i] = redactAgentConfig(selectedAgents[i])
+		}
+		for i := range availableAgents {
+			availableAgents[i] = redactAgentConfig(availableAgents[i])
+		}
 	}
 
 	c.SendResponse(DataResponse, env.CorrelationID, models.QuestionSetAgentEnvelopeResponse{

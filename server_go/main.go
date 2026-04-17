@@ -403,7 +403,16 @@ func main() {
 	hub := api.NewHub(database, engine, jwtSecret, fbClient)
 	go hub.Run()
 
+	// Route orchestrator events through the question-set audience so active
+	// collaborators receive task/run updates in real time. Falls back to the
+	// owner's workspace if the run can't be resolved (e.g. non-run events or
+	// corrupted correlation id).
 	engine.SetEventCallback(func(workspaceID uuid.UUID, eventType string, correlationID string, payload any) {
+		if runID, err := uuid.Parse(correlationID); err == nil && runID != uuid.Nil {
+			if sendErr := hub.SendEventForRun(runID, eventType, correlationID, payload); sendErr == nil {
+				return
+			}
+		}
 		hub.SendEvent(workspaceID, eventType, correlationID, payload)
 	})
 	engine.Start()
