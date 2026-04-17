@@ -27,18 +27,47 @@
         </div>
 
         <div class="agents-list">
-          <div v-for="(agent, index) in visibleAgents" :key="agent.id" class="agent-card" :class="{ 'disabled-card': !agent.enabled, 'clickable': !editingAgentId }" @click="!editingAgentId && openAgentConfig(agent)">
+          <div
+            v-for="(agent, index) in visibleAgents"
+            :key="agent.id"
+            class="agent-card"
+            :class="{
+              'disabled-card': !agent.enabled,
+              'clickable': !editingAgentId && !agent.is_shared,
+              'shared-card': agent.is_shared
+            }"
+            @click="!editingAgentId && !agent.is_shared && openAgentConfig(agent)"
+          >
             <div class="agent-header" :class="{ 'no-mb': editingAgentId !== agent.id }">
               <span class="agent-name-text">{{ agent.name }}</span>
               <span class="agent-type-badge" :class="agent.provider_type">
                 {{ getAgentTypeLabel(agent) }}
               </span>
+              <span v-if="agent.is_shared" class="shared-badge" :title="'Shared by ' + (agent.owner_name || 'another user')">
+                shared · @{{ agent.owner_name || 'owner' }}
+              </span>
               <div class="agent-actions">
-                <button class="btn-icon" @click.stop="toggleAgent(agent)" :title="agent.enabled ? 'Disable' : 'Enable'">
+                <button
+                  v-if="!agent.is_shared"
+                  class="btn-icon"
+                  @click.stop="toggleAgent(agent)"
+                  :title="agent.enabled ? 'Disable' : 'Enable'"
+                >
                   {{ agent.enabled ? '✅' : '⏸️' }}
                 </button>
+                <button
+                  v-if="!agent.is_shared"
+                  class="btn-icon"
+                  @click.stop="openShareModal(agent)"
+                  title="Share agent"
+                >🔗</button>
                 <button class="btn-icon" @click.stop="showSpyModal(agent)" title="Spy Payload">🔍</button>
-                <button class="btn-icon btn-danger-icon" @click.stop="deleteAgent(agent)" title="Delete">🗑️</button>
+                <button
+                  v-if="!agent.is_shared"
+                  class="btn-icon btn-danger-icon"
+                  @click.stop="deleteAgent(agent)"
+                  title="Delete"
+                >🗑️</button>
               </div>
             </div>
             
@@ -520,6 +549,14 @@
         </div>
       </div>
 
+      <!-- Share Agent Modal (Nested, owner only) -->
+      <ShareAgentModal
+        v-if="shareAgentTarget"
+        :agent-id="shareAgentTarget.id"
+        :agent-name="shareAgentTarget.name"
+        @close="shareAgentTarget = null"
+      />
+
       <!-- Spy Modal (Nested) -->
       <div v-if="spyAgent" class="modal-overlay" style="z-index: 1001;" @click.self="spyAgent = null">
         <div class="modal-container payload-modal">
@@ -548,6 +585,7 @@ import { ref, watch, computed, onMounted } from 'vue'
 import { capturePostHogEvent } from '../services/posthog.js'
 import { wsService } from '../services/websocket.js'
 import { generateAgentName } from '../utils/nameGenerator.js'
+import ShareAgentModal from './ShareAgentModal.vue'
 
 const isDev = import.meta.env.DEV
 
@@ -565,6 +603,12 @@ const hasEnabledAgents = computed(() => localAgents.value.some(a => a.enabled &&
 
 const spyAgent = ref(null)
 const spyPayload = ref(null)
+const shareAgentTarget = ref(null)
+
+function openShareModal(agent) {
+  if (agent?.is_shared) return
+  shareAgentTarget.value = agent
+}
 const saveStatus = ref(null) // 'saving', 'saved', 'error'
 const saveStatusText = ref('')
 const pendingChanges = ref(false)
@@ -1658,6 +1702,26 @@ function startDrag(index) {
 .agent-type-badge.evaluator {
   background: #fef3c7;
   color: #92400e;
+}
+
+.shared-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #ede9fe;
+  color: #6d28d9;
+  border: 1px solid #ddd6fe;
+  letter-spacing: 0.02em;
+}
+
+.agent-card.shared-card {
+  border-left: 3px solid #8b5cf6;
+  cursor: default;
+  background: #faf5ff;
 }
 
 .agent-actions {

@@ -176,6 +176,20 @@ func (h *Hub) handleUpdateAgent(c *Connection, env models.Envelope) {
 		return
 	}
 
+	// Only the owner of the agent's workspace may mutate it. Shared-access
+	// collaborators (Plano 28) can use the agent but never edit config/name
+	// /provider_type. Defensive check — the frontend hides mutation UI for
+	// shared agents, but we enforce it server-side.
+	var ownerWorkspace models.Workspace
+	if err := h.db.First(&ownerWorkspace, "id = ?", agent.WorkspaceID).Error; err != nil {
+		c.SendErrorWithDetails(env.CorrelationID, "failed to load agent workspace", err.Error())
+		return
+	}
+	if ownerWorkspace.UserID != c.UserID {
+		c.SendError(env.CorrelationID, "only the agent owner can update it")
+		return
+	}
+
 	// Check for decryption-failed marker - warn but allow update if new config is provided
 	var configMap map[string]any
 	if err := json.Unmarshal(agent.Config, &configMap); err != nil {
@@ -216,7 +230,16 @@ func (h *Hub) handleUpdateAgent(c *Connection, env models.Envelope) {
 		logger.Warn("[WS][UPDATE_AGENT] failed to propagate config to question set agents: agent_id=%s err=%v", agentID, err)
 	}
 
-	h.BroadcastEvent(agent.WorkspaceID, "agents", "updated", agent)
+	// Broadcast to the workspace (owner's own UIs) AND to shared-agent
+	// collaborators with the config redacted. SendEventForAgent emits two
+	// envelopes — one full-fat to the owner, one redacted to collaborators.
+	redactedAgent := redactAgentConfig(agent)
+	ownerPayload := models.DataChangedPayload{Resource: "agents", Action: "updated", Data: agent}
+	collabPayload := models.DataChangedPayload{Resource: "shared_agents", Action: "updated", Data: redactedAgent}
+	if err := h.SendEventForAgent(agent.ID, EvtDataChanged, "", ownerPayload, collabPayload); err != nil {
+		logger.Warn("[WS][UPDATE_AGENT] SendEventForAgent failed agent_id=%s err=%v; falling back to workspace-only broadcast", agentID, err)
+		h.BroadcastEvent(agent.WorkspaceID, "agents", "updated", agent)
+	}
 	c.SendResponse(DataResponse, env.CorrelationID, agent)
 }
 
@@ -273,6 +296,9 @@ func (h *Hub) handleCreateAgent(c *Connection, env models.Envelope) {
 
 	logger.Info("[WS][CREATE_AGENT] agent created successfully agent_id=%s user_id=%s", agent.ID, c.UserID)
 
+	// At creation time there are no collaborators yet, but we still go
+	// through the workspace broadcast for the owner. (No shared variant
+	// needed because audience is empty.)
 	h.BroadcastEvent(wsID, "agents", "created", agent)
 	c.SendResponse(DataResponse, env.CorrelationID, agent)
 }
@@ -298,13 +324,53 @@ func (h *Hub) handleDeleteAgent(c *Connection, env models.Envelope) {
 		return
 	}
 
-	// Force mode: delete without loading the agent (bypasses decryption errors)
+	// Resolve owner workspace (used to enforce owner-only deletion + to
+	// broadcast the delete event). Uses a raw query so we don't choke on
+	// undecryptable config — in force mode we want to proceed regardless.
+	var ownerWorkspaceID uuid.UUID
+	h.db.Raw("SELECT workspace_id FROM agents WHERE id = ?", agentID).Scan(&ownerWorkspaceID)
+	if ownerWorkspaceID == uuid.Nil {
+		c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "already_deleted"})
+		return
+	}
+	var ownerWorkspace models.Workspace
+	if err := h.db.First(&ownerWorkspace, "id = ?", ownerWorkspaceID).Error; err != nil {
+		c.SendErrorWithDetails(env.CorrelationID, "failed to load agent workspace", err.Error())
+		return
+	}
+	if ownerWorkspace.UserID != c.UserID {
+		c.SendError(env.CorrelationID, "only the agent owner can delete it")
+		return
+	}
+
+	// Snapshot active collaborators BEFORE the delete cascade runs so we can
+	// notify them to drop the shared agent from their UI. The FK
+	// `ON DELETE CASCADE` wipes agent_collaborators as part of the delete.
+	type collabSnapshot struct {
+		UserID uuid.UUID `gorm:"column:user_id"`
+	}
+	var activeCollabs []collabSnapshot
+	_ = h.db.Raw(`
+		SELECT user_id FROM agent_collaborators
+		WHERE agent_id = ? AND accepted_at IS NOT NULL AND revoked_at IS NULL
+	`, agentID).Scan(&activeCollabs).Error
+
+	notifyCollabsAndOwner := func() {
+		h.InvalidateAgentAudienceCache(agentID)
+		for _, collab := range activeCollabs {
+			_ = h.SendEventToUser(collab.UserID, EvtCollaboratorRevoked, "", map[string]any{
+				"resource": "agents",
+				"agent_id": agentID.String(),
+				"user_id":  collab.UserID.String(),
+				"reason":   "agent_deleted",
+			})
+		}
+		h.BroadcastEvent(ownerWorkspaceID, "agents", "deleted", map[string]string{"id": agentID.String()})
+	}
+
+	// Force mode: delete without loading the agent (bypasses decryption errors).
 	if payload.Force {
 		tx := h.db.Begin()
-
-		// Get workspace_id before deletion for broadcasting
-		var workspaceID uuid.UUID
-		h.db.Raw("SELECT workspace_id FROM agents WHERE id = ?", agentID).Scan(&workspaceID)
 
 		if err := tx.Where("agent_id = ?", agentID).Delete(&models.QuestionSetAgent{}).Error; err != nil {
 			tx.Rollback()
@@ -324,9 +390,7 @@ func (h *Hub) handleDeleteAgent(c *Connection, env models.Envelope) {
 			return
 		}
 
-		if workspaceID != uuid.Nil {
-			h.BroadcastEvent(workspaceID, "agents", "deleted", map[string]string{"id": agentID.String()})
-		}
+		notifyCollabsAndOwner()
 		c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "deleted_force"})
 		return
 	}
@@ -335,7 +399,6 @@ func (h *Hub) handleDeleteAgent(c *Connection, env models.Envelope) {
 	var agent models.Agent
 	if err := h.db.First(&agent, "id = ?", agentID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			// If not found, we can't broadcast because we don't know the workspace
 			c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "already_deleted"})
 			return
 		}
@@ -359,7 +422,7 @@ func (h *Hub) handleDeleteAgent(c *Connection, env models.Envelope) {
 		return
 	}
 
-	h.BroadcastEvent(agent.WorkspaceID, "agents", "deleted", map[string]string{"id": agentID.String()})
+	notifyCollabsAndOwner()
 	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "success"})
 }
 

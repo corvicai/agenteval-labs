@@ -39,6 +39,8 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 		h.handleGetResultDetails(c, env)
 	case ReqGetRetryStatus:
 		h.handleGetRetryStatus(c, env)
+	case ReqGetMissedEvents:
+		h.handleGetMissedEvents(c, env)
 
 	// Dev/Auth handlers
 	case ReqDevGetManagers:
@@ -107,6 +109,18 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 		h.handleListQuestionSetCollaborators(c, env)
 	case ReqRevokeQuestionSetCollaborator:
 		h.handleRevokeQuestionSetCollaborator(c, env)
+
+	// Shared Agents (Plano 28)
+	case ReqCreateAgentCollabInvite:
+		h.handleCreateAgentCollabInvite(c, env)
+	case ReqGetAgentCollabInvite:
+		h.handleGetAgentCollabInvite(c, env)
+	case ReqAcceptAgentCollabInvite:
+		h.handleAcceptAgentCollabInvite(c, env)
+	case ReqListAgentCollaborators:
+		h.handleListAgentCollaborators(c, env)
+	case ReqRevokeAgentCollaborator:
+		h.handleRevokeAgentCollaborator(c, env)
 	case ReqUpdateQuestionSetAgents:
 		h.handleUpdateQuestionSetAgents(c, env)
 	case ReqGetQuestionSetAgentEnvelope:

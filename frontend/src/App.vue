@@ -181,13 +181,14 @@
         <!-- Arena View - Always show when in benchmarks mode -->
         <main v-if="viewMode === 'benchmarks'" class="main-content no-padding">
           <KeepAlive>
-            <BenchmarkArena 
+            <BenchmarkArena
                 v-if="viewMode === 'benchmarks'"
                 :key="currentWorkspace?.id || 'no-workspace'"
                 :workspace-id="currentWorkspace?.id"
                 :workspaces="workspaces"
                 :agents="agents || []"
                 :question-sets="questionSets || []"
+                :shared-question-sets="sharedQuestionSets || []"
                 :initial-question-set-id="currentQuestionSet?.id"
                 @update:currentQuestionSet="val => currentQuestionSet = val"
                 @view-history="goToHistory"
@@ -237,6 +238,20 @@
         :current-workspace-id="currentWorkspace?.id"
         @close="dismissPendingShareLink"
         @accepted="handleQuestionSetShareAccepted"
+      />
+
+      <QuestionSetCollabAcceptModal
+        v-if="showCollabAcceptModal && pendingCollabInviteToken"
+        :token="pendingCollabInviteToken"
+        @close="dismissCollabInvite"
+        @accepted="handleCollabInviteAccepted"
+      />
+
+      <AgentCollabAcceptModal
+        v-if="showAgentCollabAcceptModal && pendingAgentCollabInviteToken"
+        :token="pendingAgentCollabInviteToken"
+        @close="dismissAgentCollabInvite"
+        @accepted="handleAgentCollabInviteAccepted"
       />
     </template>
     <MaintenanceOverlay :active="wsState.isMaintenance" />
@@ -294,6 +309,8 @@ import AgentManagerModal from './components/AgentManagerModal.vue'
 import DocsView from './components/DocsView.vue'
 import PrintReport from './components/PrintReport.vue'
 import QuestionSetShareAcceptModal from './components/QuestionSetShareAcceptModal.vue'
+import QuestionSetCollabAcceptModal from './components/QuestionSetCollabAcceptModal.vue'
+import AgentCollabAcceptModal from './components/AgentCollabAcceptModal.vue'
 import * as api from './services/api.js'
 import wsService from './services/websocket.js'
 import { useWSStore } from './stores/wsStore'
@@ -366,6 +383,10 @@ const workspacesError = ref('')
 const currentWorkspace = ref(api.getStoredWorkspace())
 const pendingShareToken = ref('')
 const showShareAcceptModal = ref(false)
+const pendingCollabInviteToken = ref('')
+const showCollabAcceptModal = ref(false)
+const pendingAgentCollabInviteToken = ref('')
+const showAgentCollabAcceptModal = ref(false)
 const refreshInterval = ref(null)
 const afkOverlayVisible = ref(false)
 const isReconnectingFromAfk = ref(false)
@@ -400,6 +421,8 @@ watch(
   [isAuthenticated, appReady, () => workspaces.value.length],
   () => {
     maybeOpenPendingShareLink()
+    maybeOpenPendingCollabInvite()
+    maybeOpenPendingAgentCollabInvite()
   }
 )
 
@@ -507,8 +530,21 @@ const afkDebugLastActivityLabel = computed(() => {
   return `${ageSec}s ago @ ${time}`
 })
 
-const agents = computed(() => wsState.agents)
+const ownedAgents = computed(() => wsState.agents)
+// Shared agents are delivered with a redacted config by the server. We flag
+// them here so downstream components can render a "from @owner" badge and
+// treat them as read-only (Plano 28).
+const sharedAgentsList = computed(() =>
+  (wsState.sharedAgents || []).map(a => ({
+    ...a,
+    is_shared: true,
+    owner_name: a.owner_name || '',
+    owner_user_id: a.owner_user_id || null
+  }))
+)
+const agents = computed(() => [...ownedAgents.value, ...sharedAgentsList.value])
 const questionSets = computed(() => wsState.questionSets)
+const sharedQuestionSets = computed(() => wsState.sharedQuestionSets || [])
 const currentQuestionSet = ref(null)
 const loadingResults = ref(false)
 
@@ -642,6 +678,30 @@ function clearPendingShareTokenFromUrl() {
   window.history.replaceState({}, '', nextUrl)
 }
 
+function getPendingCollabInviteTokenFromUrl() {
+  const params = new URLSearchParams(window.location.search)
+  return String(params.get('collab_invite') || '').trim()
+}
+
+function clearCollabInviteTokenFromUrl() {
+  const url = new URL(window.location.href)
+  url.searchParams.delete('collab_invite')
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`
+  window.history.replaceState({}, '', nextUrl)
+}
+
+function getPendingAgentCollabInviteTokenFromUrl() {
+  const params = new URLSearchParams(window.location.search)
+  return String(params.get('agent_collab_invite') || '').trim()
+}
+
+function clearAgentCollabInviteTokenFromUrl() {
+  const url = new URL(window.location.href)
+  url.searchParams.delete('agent_collab_invite')
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`
+  window.history.replaceState({}, '', nextUrl)
+}
+
 function maybeOpenPendingShareLink() {
   if (!pendingShareToken.value) {
     pendingShareToken.value = getPendingShareTokenFromUrl()
@@ -656,6 +716,47 @@ function dismissPendingShareLink() {
   showShareAcceptModal.value = false
   pendingShareToken.value = ''
   clearPendingShareTokenFromUrl()
+}
+
+function maybeOpenPendingCollabInvite() {
+  if (!pendingCollabInviteToken.value) {
+    pendingCollabInviteToken.value = getPendingCollabInviteTokenFromUrl()
+  }
+  if (!pendingCollabInviteToken.value) return
+  if (!isAuthenticated.value || !appReady.value) return
+  showCollabAcceptModal.value = true
+}
+
+function dismissCollabInvite() {
+  showCollabAcceptModal.value = false
+  pendingCollabInviteToken.value = ''
+  clearCollabInviteTokenFromUrl()
+}
+
+function handleCollabInviteAccepted(result) {
+  dismissCollabInvite()
+  console.log('[App] Collaboration invite accepted:', result)
+  // State is refreshed by the modal itself via syncState()
+}
+
+function maybeOpenPendingAgentCollabInvite() {
+  if (!pendingAgentCollabInviteToken.value) {
+    pendingAgentCollabInviteToken.value = getPendingAgentCollabInviteTokenFromUrl()
+  }
+  if (!pendingAgentCollabInviteToken.value) return
+  if (!isAuthenticated.value || !appReady.value) return
+  showAgentCollabAcceptModal.value = true
+}
+
+function dismissAgentCollabInvite() {
+  showAgentCollabAcceptModal.value = false
+  pendingAgentCollabInviteToken.value = ''
+  clearAgentCollabInviteTokenFromUrl()
+}
+
+function handleAgentCollabInviteAccepted(result) {
+  dismissAgentCollabInvite()
+  console.log('[App] Agent collaboration invite accepted:', result)
 }
 
 function handleArenaHistoryClick() {
@@ -798,6 +899,8 @@ async function onLogin() {
     } finally {
       appReady.value = true
       maybeOpenPendingShareLink()
+      maybeOpenPendingCollabInvite()
+      maybeOpenPendingAgentCollabInvite()
       scheduleAfkTimer()
       isLoggingIn.value = false
     }
@@ -1629,6 +1732,8 @@ onMounted(async () => {
       } finally {
         appReady.value = true
         maybeOpenPendingShareLink()
+        maybeOpenPendingCollabInvite()
+        maybeOpenPendingAgentCollabInvite()
         lastAfkResetAt = Date.now()
         scheduleAfkTimer()
       }
