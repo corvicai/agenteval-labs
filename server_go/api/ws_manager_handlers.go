@@ -5,7 +5,9 @@ import (
 	"os"
 	"time"
 
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/middleware"
+	"benchmarking-platform/internal/validation"
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
@@ -155,7 +157,25 @@ func (h *Hub) handleManagerCreateUser(c *Connection, env models.Envelope) {
 		return
 	}
 
-	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err := validation.ValidateUserName(req.Name); err != nil {
+		c.SendError(env.CorrelationID, err.Error())
+		return
+	}
+	if err := validation.ValidateEmail(req.Email); err != nil {
+		c.SendError(env.CorrelationID, err.Error())
+		return
+	}
+	if err := validation.ValidatePassword(req.Password); err != nil {
+		c.SendError(env.CorrelationID, err.Error())
+		return
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		logger.Error("[MANAGER] Failed to hash password for new user %s: %v", req.Email, err)
+		c.SendError(env.CorrelationID, "failed to hash password")
+		return
+	}
 	user := models.User{
 		ID:           uuid.New(),
 		Name:         req.Name,
@@ -214,9 +234,17 @@ func (h *Hub) handleManagerUpdateUser(c *Connection, env models.Envelope) {
 	}
 
 	if req.Name != "" {
+		if err := validation.ValidateUserName(req.Name); err != nil {
+			c.SendError(env.CorrelationID, err.Error())
+			return
+		}
 		user.Name = req.Name
 	}
 	if req.Email != "" {
+		if err := validation.ValidateEmail(req.Email); err != nil {
+			c.SendError(env.CorrelationID, err.Error())
+			return
+		}
 		user.Email = req.Email
 	}
 

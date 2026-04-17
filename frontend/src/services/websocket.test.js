@@ -104,6 +104,60 @@ describe('WebSocketService', () => {
         expect(callback).toHaveBeenCalledWith({ data: 'hello' })
     })
 
+    it('should track event_id from broadcast envelopes', async () => {
+        await wsService.connectAnonymous()
+        expect(wsService.lastEventId).toBeNull()
+
+        wsService.ws.onmessage({
+            data: JSON.stringify({
+                type: 'EVT_TASK_COMPLETED',
+                event_id: 'abc123:42',
+                payload: { run_id: 'r1' }
+            })
+        })
+
+        expect(wsService.lastEventId).toBe('abc123:42')
+
+        // Responses without event_id must not overwrite the cursor.
+        wsService.ws.onmessage({
+            data: JSON.stringify({
+                type: 'DATA_RESPONSE',
+                correlation_id: 'test-uuid',
+                payload: {}
+            })
+        })
+        expect(wsService.lastEventId).toBe('abc123:42')
+    })
+
+    it('getMissedEvents forces full sync when no cursor exists', async () => {
+        await wsService.connectAnonymous()
+        wsService.lastEventId = null
+        const resp = await wsService.getMissedEvents(null)
+        expect(resp).toEqual({ needs_full_sync: true, events: [] })
+    })
+
+    it('replayEvent re-routes envelopes through listeners', async () => {
+        await wsService.connectAnonymous()
+        const callback = vi.fn()
+        wsService.on('EVT_TASK_COMPLETED', callback)
+
+        wsService.replayEvent({
+            type: 'EVT_TASK_COMPLETED',
+            event_id: 'abc123:7',
+            payload: { run_id: 'r1', success: true }
+        })
+
+        expect(callback).toHaveBeenCalledWith({ run_id: 'r1', success: true })
+        expect(wsService.lastEventId).toBe('abc123:7')
+    })
+
+    it('disconnect with logout reason clears the replay cursor', async () => {
+        await wsService.connectAnonymous()
+        wsService.lastEventId = 'abc123:9'
+        wsService.disconnect('logout')
+        expect(wsService.lastEventId).toBeNull()
+    })
+
     it('should pass IAP token in subprotocols if it is a valid JWT', async () => {
         // Force a non-localhost hostname for the test
         delete window.location

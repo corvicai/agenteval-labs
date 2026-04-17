@@ -123,6 +123,16 @@ func (s *EncryptionKeyRotationService) RotateOnStartIfConfigured() (EncryptionKe
 		return result, err
 	}
 
+	keyService.AppendKeyStateHistory(
+		"rotation_completed",
+		result.PreviousFingerprintPrefix,
+		result.CurrentFingerprintPrefix,
+		"mismatch",
+		"match",
+		"startup_rotation",
+		"",
+	)
+
 	return result, nil
 }
 

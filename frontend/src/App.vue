@@ -77,6 +77,16 @@
               </select>
             </div>
             <div class="buttons">
+              <!-- Plan 23B: Stay Connected toggle -->
+              <button
+                class="btn btn-stay-connected"
+                :class="{ active: afkStayConnected }"
+                :title="afkStayConnected ? 'Stay Connected ativo — clique para desativar' : 'Ativar Stay Connected (evita pausa por inatividade)'"
+                @click="toggleAfkStayConnected"
+                aria-label="Toggle Stay Connected"
+              >
+                {{ afkStayConnected ? '🔗' : '🔌' }}
+              </button>
               <span class="user-badge" :class="{ admin: isAdmin }" @click="openMyProfile">
                 {{ isAdmin ? '👑' : '👤' }} {{ currentUserName }}
               </span>
@@ -181,13 +191,14 @@
         <!-- Arena View - Always show when in benchmarks mode -->
         <main v-if="viewMode === 'benchmarks'" class="main-content no-padding">
           <KeepAlive>
-            <BenchmarkArena 
+            <BenchmarkArena
                 v-if="viewMode === 'benchmarks'"
                 :key="currentWorkspace?.id || 'no-workspace'"
                 :workspace-id="currentWorkspace?.id"
                 :workspaces="workspaces"
                 :agents="agents || []"
                 :question-sets="questionSets || []"
+                :shared-question-sets="sharedQuestionSets || []"
                 :initial-question-set-id="currentQuestionSet?.id"
                 @update:currentQuestionSet="val => currentQuestionSet = val"
                 @view-history="goToHistory"
@@ -238,7 +249,38 @@
         @close="dismissPendingShareLink"
         @accepted="handleQuestionSetShareAccepted"
       />
+
+      <QuestionSetCollabAcceptModal
+        v-if="showCollabAcceptModal && pendingCollabInviteToken"
+        :token="pendingCollabInviteToken"
+        @close="dismissCollabInvite"
+        @accepted="handleCollabInviteAccepted"
+      />
+
+      <AgentCollabAcceptModal
+        v-if="showAgentCollabAcceptModal && pendingAgentCollabInviteToken"
+        :token="pendingAgentCollabInviteToken"
+        @close="dismissAgentCollabInvite"
+        @accepted="handleAgentCollabInviteAccepted"
+      />
     </template>
+    <!-- Plan 23A: AFK pre-warning toast -->
+    <Teleport to="body">
+      <Transition name="afk-warn">
+        <div
+          v-if="afkWarnVisible"
+          class="afk-warn-toast"
+          role="alert"
+          aria-live="polite"
+        >
+          <span class="afk-warn-icon">⏱️</span>
+          <span class="afk-warn-text">Sua sessão será pausada em <strong>60 s</strong> por inatividade.</span>
+          <button class="afk-warn-btn" @click="dismissAfkWarn">Manter ativa</button>
+          <button class="afk-warn-close" @click="dismissAfkWarn" aria-label="Fechar">×</button>
+        </div>
+      </Transition>
+    </Teleport>
+
     <MaintenanceOverlay :active="wsState.isMaintenance" />
     <AfkReconnectOverlay
       :active="afkOverlayVisible"
@@ -294,6 +336,8 @@ import AgentManagerModal from './components/AgentManagerModal.vue'
 import DocsView from './components/DocsView.vue'
 import PrintReport from './components/PrintReport.vue'
 import QuestionSetShareAcceptModal from './components/QuestionSetShareAcceptModal.vue'
+import QuestionSetCollabAcceptModal from './components/QuestionSetCollabAcceptModal.vue'
+import AgentCollabAcceptModal from './components/AgentCollabAcceptModal.vue'
 import * as api from './services/api.js'
 import wsService from './services/websocket.js'
 import { useWSStore } from './stores/wsStore'
@@ -366,6 +410,10 @@ const workspacesError = ref('')
 const currentWorkspace = ref(api.getStoredWorkspace())
 const pendingShareToken = ref('')
 const showShareAcceptModal = ref(false)
+const pendingCollabInviteToken = ref('')
+const showCollabAcceptModal = ref(false)
+const pendingAgentCollabInviteToken = ref('')
+const showAgentCollabAcceptModal = ref(false)
 const refreshInterval = ref(null)
 const afkOverlayVisible = ref(false)
 const isReconnectingFromAfk = ref(false)
@@ -400,10 +448,12 @@ watch(
   [isAuthenticated, appReady, () => workspaces.value.length],
   () => {
     maybeOpenPendingShareLink()
+    maybeOpenPendingCollabInvite()
+    maybeOpenPendingAgentCollabInvite()
   }
 )
 
-const DEFAULT_AFK_TIMEOUT_MS = 300000
+const DEFAULT_AFK_TIMEOUT_MS = 600000
 const MIN_AFK_TIMEOUT_MS = 60000
 const afkForegroundHeartbeatMs = 15000
 let afkForegroundHeartbeat = null
@@ -440,11 +490,51 @@ const afkTimeoutMs = Number.isFinite(parsedAfkTimeout) && parsedAfkTimeout >= MI
   ? parsedAfkTimeout
   : DEFAULT_AFK_TIMEOUT_MS
 
-// During an active benchmark run, double the AFK timeout so long runs don't
+// Plan 23B — Stay Connected toggle (localStorage-persisted, 10× timeout multiplier)
+const AFK_STAY_CONNECTED_KEY = 'afk_stay_connected'
+const AFK_STAY_CONNECTED_SET_AT_KEY = 'afk_stay_connected_set_at'
+const AFK_STAY_CONNECTED_TTL_MS = 8 * 60 * 60 * 1000 // 8 hours
+
+function _loadAfkStayConnected() {
+  try {
+    if (localStorage.getItem(AFK_STAY_CONNECTED_KEY) !== '1') return false
+    const setAt = Number(localStorage.getItem(AFK_STAY_CONNECTED_SET_AT_KEY) || '0')
+    if (setAt && Date.now() - setAt > AFK_STAY_CONNECTED_TTL_MS) {
+      localStorage.removeItem(AFK_STAY_CONNECTED_KEY)
+      localStorage.removeItem(AFK_STAY_CONNECTED_SET_AT_KEY)
+      return false
+    }
+    return true
+  } catch (_) { return false }
+}
+
+const afkStayConnected = ref(_loadAfkStayConnected())
+
+function toggleAfkStayConnected() {
+  const next = !afkStayConnected.value
+  afkStayConnected.value = next
+  try {
+    if (next) {
+      localStorage.setItem(AFK_STAY_CONNECTED_KEY, '1')
+      localStorage.setItem(AFK_STAY_CONNECTED_SET_AT_KEY, String(Date.now()))
+    } else {
+      localStorage.removeItem(AFK_STAY_CONNECTED_KEY)
+      localStorage.removeItem(AFK_STAY_CONNECTED_SET_AT_KEY)
+    }
+  } catch (_) {}
+  // Reschedule the AFK timer with the new effective timeout
+  if (canTrackAfk()) scheduleAfkTimer()
+}
+
+// During an active benchmark run, triple the AFK timeout so long runs don't
 // unexpectedly disconnect the user who may be watching progress.
-const effectiveAfkTimeoutMs = computed(() =>
-  wsState.runningQuestionSetId ? afkTimeoutMs * 3 : afkTimeoutMs
-)
+// Stay Connected multiplies by an additional 10× for users who want to keep
+// the tab open indefinitely.
+const effectiveAfkTimeoutMs = computed(() => {
+  let ms = wsState.runningQuestionSetId ? afkTimeoutMs * 3 : afkTimeoutMs
+  if (afkStayConnected.value) ms = ms * 10
+  return ms
+})
 if (parsedAfkTimeout != null && parsedAfkTimeout < MIN_AFK_TIMEOUT_MS) {
   console.warn('[AFK] Ignoring too-low AFK timeout configuration', {
     configured: config.AFK_TIMEOUT_MS,
@@ -473,6 +563,9 @@ const afkActivityEvents = [
   'focus'
 ]
 let afkTimer = null
+let afkWarnTimer = null
+const afkWarnVisible = ref(false)
+const AFK_WARN_BEFORE_MS = 60000 // warn 60 s before the AFK timeout fires
 let lastAfkResetAt = 0
 const afkListenerOptions = { capture: true, passive: true }
 const afkDebug = ref({
@@ -507,8 +600,21 @@ const afkDebugLastActivityLabel = computed(() => {
   return `${ageSec}s ago @ ${time}`
 })
 
-const agents = computed(() => wsState.agents)
+const ownedAgents = computed(() => wsState.agents)
+// Shared agents are delivered with a redacted config by the server. We flag
+// them here so downstream components can render a "from @owner" badge and
+// treat them as read-only (Plano 28).
+const sharedAgentsList = computed(() =>
+  (wsState.sharedAgents || []).map(a => ({
+    ...a,
+    is_shared: true,
+    owner_name: a.owner_name || '',
+    owner_user_id: a.owner_user_id || null
+  }))
+)
+const agents = computed(() => [...ownedAgents.value, ...sharedAgentsList.value])
 const questionSets = computed(() => wsState.questionSets)
+const sharedQuestionSets = computed(() => wsState.sharedQuestionSets || [])
 const currentQuestionSet = ref(null)
 const loadingResults = ref(false)
 
@@ -642,6 +748,30 @@ function clearPendingShareTokenFromUrl() {
   window.history.replaceState({}, '', nextUrl)
 }
 
+function getPendingCollabInviteTokenFromUrl() {
+  const params = new URLSearchParams(window.location.search)
+  return String(params.get('collab_invite') || '').trim()
+}
+
+function clearCollabInviteTokenFromUrl() {
+  const url = new URL(window.location.href)
+  url.searchParams.delete('collab_invite')
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`
+  window.history.replaceState({}, '', nextUrl)
+}
+
+function getPendingAgentCollabInviteTokenFromUrl() {
+  const params = new URLSearchParams(window.location.search)
+  return String(params.get('agent_collab_invite') || '').trim()
+}
+
+function clearAgentCollabInviteTokenFromUrl() {
+  const url = new URL(window.location.href)
+  url.searchParams.delete('agent_collab_invite')
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`
+  window.history.replaceState({}, '', nextUrl)
+}
+
 function maybeOpenPendingShareLink() {
   if (!pendingShareToken.value) {
     pendingShareToken.value = getPendingShareTokenFromUrl()
@@ -656,6 +786,47 @@ function dismissPendingShareLink() {
   showShareAcceptModal.value = false
   pendingShareToken.value = ''
   clearPendingShareTokenFromUrl()
+}
+
+function maybeOpenPendingCollabInvite() {
+  if (!pendingCollabInviteToken.value) {
+    pendingCollabInviteToken.value = getPendingCollabInviteTokenFromUrl()
+  }
+  if (!pendingCollabInviteToken.value) return
+  if (!isAuthenticated.value || !appReady.value) return
+  showCollabAcceptModal.value = true
+}
+
+function dismissCollabInvite() {
+  showCollabAcceptModal.value = false
+  pendingCollabInviteToken.value = ''
+  clearCollabInviteTokenFromUrl()
+}
+
+function handleCollabInviteAccepted(result) {
+  dismissCollabInvite()
+  console.log('[App] Collaboration invite accepted:', result)
+  // State is refreshed by the modal itself via syncState()
+}
+
+function maybeOpenPendingAgentCollabInvite() {
+  if (!pendingAgentCollabInviteToken.value) {
+    pendingAgentCollabInviteToken.value = getPendingAgentCollabInviteTokenFromUrl()
+  }
+  if (!pendingAgentCollabInviteToken.value) return
+  if (!isAuthenticated.value || !appReady.value) return
+  showAgentCollabAcceptModal.value = true
+}
+
+function dismissAgentCollabInvite() {
+  showAgentCollabAcceptModal.value = false
+  pendingAgentCollabInviteToken.value = ''
+  clearAgentCollabInviteTokenFromUrl()
+}
+
+function handleAgentCollabInviteAccepted(result) {
+  dismissAgentCollabInvite()
+  console.log('[App] Agent collaboration invite accepted:', result)
 }
 
 function handleArenaHistoryClick() {
@@ -798,6 +969,8 @@ async function onLogin() {
     } finally {
       appReady.value = true
       maybeOpenPendingShareLink()
+      maybeOpenPendingCollabInvite()
+      maybeOpenPendingAgentCollabInvite()
       scheduleAfkTimer()
       isLoggingIn.value = false
     }
@@ -829,6 +1002,16 @@ async function handleLogout() {
   clearReconnectOverlayTimer()
   clearAfkForegroundHeartbeat()
   clearAfkTimer()
+  clearAfkWarnTimer()
+  afkWarnVisible.value = false
+  // Reset Stay Connected on logout (Plan 23B)
+  if (afkStayConnected.value) {
+    afkStayConnected.value = false
+    try {
+      localStorage.removeItem(AFK_STAY_CONNECTED_KEY)
+      localStorage.removeItem(AFK_STAY_CONNECTED_SET_AT_KEY)
+    } catch (_) {}
+  }
   // runResults, currentRun, tasks, selectedQuestionId are now in BenchmarkArena and will be unmounted.
   // We just need to clear global state.
   isManager.value = false
@@ -1317,6 +1500,19 @@ function clearAfkTimer() {
   refreshAfkDebugState()
 }
 
+function clearAfkWarnTimer() {
+  if (!afkWarnTimer) return
+  clearTimeout(afkWarnTimer)
+  afkWarnTimer = null
+}
+
+function dismissAfkWarn() {
+  clearAfkWarnTimer()
+  afkWarnVisible.value = false
+  // Treat dismissal as user activity so the timer resets
+  markUserActivity(true, 'afk-warn-dismiss')
+}
+
 function afkDebugLog(eventName, details = {}) {
   if (!afkDebug.value.enabled) return
   console.debug('[AFK][debug]', eventName, details)
@@ -1416,8 +1612,12 @@ function startAfkForegroundHeartbeat() {
   if (afkForegroundHeartbeat) return
   afkForegroundHeartbeat = setInterval(() => {
     if (!canTrackAfk()) return
+    // Only gate by visibility, not by document.hasFocus(). hasFocus() returns
+    // false for legitimate active users on tiling window managers, VDI
+    // (Citrix/Parallels), dual-monitor setups where the browser window is
+    // visible but not the foreground window, or anytime an IDE/terminal is
+    // overlapping the tab — causing spurious AFK disconnects.
     if (document.visibilityState !== 'visible') return
-    if (!document.hasFocus()) return
     afkDebug.value = {
       ...afkDebug.value,
       heartbeatCount: afkDebug.value.heartbeatCount + 1
@@ -1437,6 +1637,11 @@ function showReconnectOverlay(mode = 'afk') {
 
 function markUserActivity(force = false, source = 'activity') {
   if (afkOverlayVisible.value) return
+  // Dismiss the pre-warning toast on any activity
+  if (afkWarnVisible.value && source !== 'afk-warn-dismiss') {
+    clearAfkWarnTimer()
+    afkWarnVisible.value = false
+  }
   const now = Date.now()
   if (!force && now - lastAfkResetAt < 500) {
     afkDebug.value = {
@@ -1478,6 +1683,14 @@ async function activateAfkMode() {
     timeoutMs,
     workspaceId: currentWorkspace.value?.id || null
   })
+  // Plan 23E — PostHog telemetry
+  capturePostHogEvent('afk_timeout_triggered', {
+    timeoutMs,
+    hadActiveRun: !!wsState.runningQuestionSetId,
+    lastActivityAgeSec: lastAfkResetAt ? Math.round((Date.now() - lastAfkResetAt) / 1000) : null,
+    visibilityState: typeof document !== 'undefined' ? document.visibilityState : 'unknown',
+    hasFocus: typeof document !== 'undefined' ? document.hasFocus() : false
+  })
   afkDebug.value = {
     ...afkDebug.value,
     lastDisconnectReason: 'afk-timeout',
@@ -1491,6 +1704,8 @@ async function activateAfkMode() {
 
 function scheduleAfkTimer() {
   clearAfkTimer()
+  clearAfkWarnTimer()
+  afkWarnVisible.value = false
   if (!canTrackAfk() || afkOverlayVisible.value) return
   if (!lastAfkResetAt) {
     lastAfkResetAt = Date.now()
@@ -1504,6 +1719,17 @@ function scheduleAfkTimer() {
     return
   }
   afkTimer = setTimeout(() => activateAfkMode(), remaining)
+
+  // Schedule pre-warning toast (Plan 23A) — only when there's enough lead time
+  const warnRemaining = remaining - AFK_WARN_BEFORE_MS
+  if (warnRemaining > 0) {
+    afkWarnTimer = setTimeout(() => {
+      if (canTrackAfk() && !afkOverlayVisible.value) {
+        afkWarnVisible.value = true
+      }
+    }, warnRemaining)
+  }
+
   afkDebugLog('schedule', { remainingMs: remaining, elapsedMs: elapsed, timeoutMs })
   refreshAfkDebugState()
 }
@@ -1625,6 +1851,8 @@ onMounted(async () => {
       } finally {
         appReady.value = true
         maybeOpenPendingShareLink()
+        maybeOpenPendingCollabInvite()
+        maybeOpenPendingAgentCollabInvite()
         lastAfkResetAt = Date.now()
         scheduleAfkTimer()
       }
@@ -1730,6 +1958,88 @@ onUnmounted(() => {
 
  
 /* Compact, modern logout button */
+/* ── Plan 23B: Stay Connected toggle ──────────────────────────────────── */
+.btn-stay-connected {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  font-size: 15px;
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  color: #64748b;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+.btn-stay-connected:hover {
+  background: rgba(148, 163, 184, 0.18);
+  border-color: rgba(148, 163, 184, 0.35);
+}
+.btn-stay-connected.active {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.35);
+}
+.btn-stay-connected.active:hover {
+  background: rgba(34, 197, 94, 0.2);
+  border-color: rgba(34, 197, 94, 0.5);
+}
+
+/* ── Plan 23A: AFK pre-warning toast ──────────────────────────────────── */
+.afk-warn-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 11500;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #1e293b;
+  border: 1px solid #f59e0b;
+  border-radius: 12px;
+  padding: 12px 16px;
+  color: #f1f5f9;
+  font-size: 13.5px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  max-width: min(380px, calc(100vw - 48px));
+}
+.afk-warn-icon { font-size: 18px; flex-shrink: 0; }
+.afk-warn-text { flex: 1; line-height: 1.4; }
+.afk-warn-btn {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border-radius: 7px;
+  background: #f59e0b;
+  border: none;
+  color: #1e293b;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.afk-warn-btn:hover { background: #fbbf24; }
+.afk-warn-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+.afk-warn-close:hover { color: #f1f5f9; }
+
+.afk-warn-enter-active, .afk-warn-leave-active {
+  transition: opacity 0.25s, transform 0.25s;
+}
+.afk-warn-enter-from, .afk-warn-leave-to {
+  opacity: 0;
+  transform: translateY(12px);
+}
+
 .btn-logout-compact {
   display: inline-flex;
   align-items: center;

@@ -38,7 +38,34 @@ export function useArenaRunRestoration(options = {}) {
 
     isRestoringRun.value = true
     try {
-      const data = await wsService.getRunDetails(runId)
+      // Fast-path: use ActiveRunHydration from the latest syncState when the
+      // run_id matches. Avoids a second round-trip (REQ_GET_RUN_DETAILS) and
+      // keeps restoration working even if the follow-up request would fail on
+      // a flaky post-AFK network. Falls back to getRunDetails otherwise.
+      let data = null
+      const hydration = wsState.activeRunHydration
+      if (hydration?.run_id === runId && Array.isArray(hydration.results)) {
+        const activeRun = (wsState.recentRuns || []).find((r) => r.id === runId)
+        const qs = activeRun
+          ? (wsState.questionSets || []).find((q) => q.id === activeRun.question_set_id)
+          : null
+        if (activeRun && qs) {
+          data = {
+            run: activeRun,
+            question_set: qs,
+            results: hydration.results,
+            // agent map is not needed for live restoration; runAgentIds are
+            // derived from results in resolveRunAgentIds.
+            agents: {}
+          }
+          console.log('[Arena] restoreActiveRun using hydrated run', runId,
+            `(results=${hydration.results.length})`)
+        }
+      }
+
+      if (!data) {
+        data = await wsService.getRunDetails(runId)
+      }
       if (!data || !data.run) return
 
       if (data.run.status === 'running') {
@@ -96,7 +123,8 @@ export function useArenaRunRestoration(options = {}) {
               timestamp: res.created_at,
               evaluations: res.evaluations || [],
               metadata: res.metadata || null,
-              humanValidation: res.evaluations?.find((e) => e.rater_type === 'user')?.rating
+              humanValidation: res.evaluations?.find((e) => e.rater_type === 'user')?.rating,
+              targetRunResultId: res.target_run_result_id || null
             }
           })
           runResults.value = restored
@@ -156,7 +184,8 @@ export function useArenaRunRestoration(options = {}) {
               timestamp: res.created_at,
               evaluations: res.evaluations || [],
               metadata: res.metadata || null,
-              humanValidation: res.evaluations?.find((e) => e.rater_type === 'user')?.rating
+              humanValidation: res.evaluations?.find((e) => e.rater_type === 'user')?.rating,
+              targetRunResultId: res.target_run_result_id || null
             }
           })
         }

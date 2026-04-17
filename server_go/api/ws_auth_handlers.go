@@ -7,6 +7,7 @@ import (
 
 	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/middleware"
+	"benchmarking-platform/internal/validation"
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
@@ -170,7 +171,7 @@ func (h *Hub) handleWsLogin(c *Connection, env models.Envelope) {
 	c.IsAuthenticated = true
 
 	// Generate token for persistence (no organization)
-	token, _ := middleware.GenerateToken(
+	token, err := middleware.GenerateToken(
 		user.ID.String(),
 		workspace.ID.String(),
 		"", // No organization
@@ -178,6 +179,12 @@ func (h *Hub) handleWsLogin(c *Connection, env models.Envelope) {
 		h.jwtSecret,
 		"",
 	)
+	if err != nil {
+		logger.Error("[AUTH] Failed to generate token for user %s: %v", user.ID, err)
+		recordLog(&user.ID, "failed", "token_generation_error", nil)
+		c.SendError(env.CorrelationID, "failed to generate authentication token")
+		return
+	}
 
 	recordLog(&user.ID, "success", "", nil)
 
@@ -238,14 +245,33 @@ func (h *Hub) handleWsRegister(c *Connection, env models.Envelope) {
 		}
 	}
 
-	// 2. Validate Email Uniqueness
+	// 2. Validate inputs
+	if err := validation.ValidateUserName(req.Name); err != nil {
+		c.SendError(env.CorrelationID, err.Error())
+		return
+	}
+	if err := validation.ValidateEmail(req.Email); err != nil {
+		c.SendError(env.CorrelationID, err.Error())
+		return
+	}
+	if err := validation.ValidatePassword(req.Password); err != nil {
+		c.SendError(env.CorrelationID, err.Error())
+		return
+	}
+
+	// 3. Validate Email Uniqueness
 	var existing models.User
 	if err := h.db.Where("email = ?", req.Email).First(&existing).Error; err == nil {
 		c.SendError(env.CorrelationID, "email already registered")
 		return
 	}
 
-	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		logger.Error("[AUTH] Failed to hash password during registration for %s: %v", req.Email, err)
+		c.SendError(env.CorrelationID, "failed to hash password")
+		return
+	}
 	user := models.User{
 		ID:           uuid.New(),
 		Name:         req.Name,
@@ -258,7 +284,8 @@ func (h *Hub) handleWsRegister(c *Connection, env models.Envelope) {
 	// 3. Handle Organization Linking/Creation
 	var orgID uuid.UUID
 
-	if role == "manager" && req.InviteCode == "" {
+	switch {
+	case role == "manager" && req.InviteCode == "":
 		// Public Manager Registration (New Org)
 		if req.OrganizationName == "" {
 			tx.Rollback()
@@ -277,7 +304,7 @@ func (h *Hub) handleWsRegister(c *Connection, env models.Envelope) {
 			return
 		}
 		orgID = org.ID
-	} else if req.InviteCode != "" {
+	case req.InviteCode != "":
 		// Registration via Invite
 		if invite.IsNewOrg {
 			if req.OrganizationName == "" {
@@ -309,7 +336,7 @@ func (h *Hub) handleWsRegister(c *Connection, env models.Envelope) {
 			orgID = *invite.OrganizationID
 			role = invite.Role
 		}
-	} else {
+	default:
 		tx.Rollback()
 		c.SendError(env.CorrelationID, "common users must use an invite code")
 		return
@@ -390,7 +417,12 @@ func (h *Hub) handleWsBootstrapAdmin(c *Connection, env models.Envelope) {
 		return
 	}
 
-	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		logger.Error("[AUTH] Failed to hash password during bootstrap admin: %v", err)
+		c.SendError(env.CorrelationID, "failed to hash password")
+		return
+	}
 	user := models.User{
 		ID:           uuid.New(),
 		Name:         req.Name,
@@ -553,7 +585,8 @@ func (h *Hub) handleJoinOrganization(c *Connection, env models.Envelope) {
 	})
 }
 
-// handleWsChangePassword allows users to change their own password or admins to reset others
+// handleWsChangePassword allows users to change their own password or admins
+// to reset others. Admin actions are recorded via logger.Info for audit.
 func (h *Hub) handleWsChangePassword(c *Connection, env models.Envelope) {
 	if !c.IsAuthenticated {
 		c.SendError(env.CorrelationID, "authentication required")
@@ -574,6 +607,7 @@ func (h *Hub) handleWsChangePassword(c *Connection, env models.Envelope) {
 		var currentUser models.User
 		h.db.First(&currentUser, "id = ?", c.UserID)
 		if !currentUser.IsAdmin {
+			logger.Warn("[SECURITY] Non-admin user %s attempted to change password for user %s", c.UserID, req.ID)
 			c.SendError(env.CorrelationID, "admin access required to change other users' passwords")
 			return
 		}
@@ -628,11 +662,20 @@ func (h *Hub) handleWsChangePassword(c *Connection, env models.Envelope) {
 	}
 
 	// 3. Hash and Save
-	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
+	if err != nil {
+		logger.Error("[SECURITY] Failed to hash new password for user %s: %v", targetUserID, err)
+		c.SendError(env.CorrelationID, "failed to hash password")
+		return
+	}
 	user.PasswordHash = string(hashedPassword)
 	if err := h.db.Save(&user).Error; err != nil {
 		c.SendError(env.CorrelationID, "failed to update password")
 		return
+	}
+
+	if !isSelfChange {
+		logger.Info("[SECURITY] Admin %s changed password for user %s (%s)", c.UserID, targetUserID, user.Email)
 	}
 
 	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "password updated successfully"})
@@ -680,8 +723,8 @@ func (h *Hub) handleCreateOrganization(c *Connection, env models.Envelope) {
 		return
 	}
 
-	if req.Name == "" {
-		c.SendError(env.CorrelationID, "organization name is required")
+	if err := validation.ValidateOrgName(req.Name); err != nil {
+		c.SendError(env.CorrelationID, err.Error())
 		return
 	}
 
@@ -738,7 +781,7 @@ func (h *Hub) handleCreateOrganization(c *Connection, env models.Envelope) {
 	// 5. Generate Full Token
 	var user models.User
 	h.db.First(&user, c.UserID)
-	token, _ := middleware.GenerateToken(
+	token, err := middleware.GenerateToken(
 		user.ID.String(),
 		ws.ID.String(),
 		org.ID.String(),
@@ -746,6 +789,11 @@ func (h *Hub) handleCreateOrganization(c *Connection, env models.Envelope) {
 		h.jwtSecret,
 		"",
 	)
+	if err != nil {
+		logger.Error("[AUTH] Failed to generate token after org select for user %s: %v", user.ID, err)
+		c.SendError(env.CorrelationID, "failed to generate authentication token")
+		return
+	}
 
 	c.SendResponse(DataWsLoginResult, env.CorrelationID, map[string]any{
 		"success": true,

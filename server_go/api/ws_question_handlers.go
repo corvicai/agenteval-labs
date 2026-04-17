@@ -166,7 +166,9 @@ func (h *Hub) handleExportQuestionSet(c *Connection, env models.Envelope) {
 	}
 
 	var data any
-	json.Unmarshal(qs.Data, &data)
+	if err := json.Unmarshal(qs.Data, &data); err != nil {
+		logger.Warn("[QS] Failed to parse question set %s data: %v", qs.ID, err)
+	}
 
 	c.SendResponse(DataResponse, env.CorrelationID, data)
 }
@@ -578,9 +580,19 @@ func (h *Hub) handleGetQuestionSetAgentEnvelope(c *Connection, env models.Envelo
 
 	var user models.User
 	h.db.First(&user, "id = ?", c.UserID)
+	isCollaborator := false
 	if !user.IsAdmin && c.WorkspaceID != uuid.Nil && meta.WorkspaceID != c.WorkspaceID {
-		c.SendError(env.CorrelationID, "workspace mismatch")
-		return
+		// Check if the user is an active collaborator on this QS.
+		access, _, _, accessErr := h.getQuestionSetAccess(h.db, c.UserID, qsID)
+		if accessErr != nil {
+			c.SendError(env.CorrelationID, "failed to verify question set access")
+			return
+		}
+		if access < accessEditor {
+			c.SendError(env.CorrelationID, "workspace mismatch")
+			return
+		}
+		isCollaborator = true
 	}
 
 	var workspaceAgents []models.Agent
@@ -640,6 +652,16 @@ func (h *Hub) handleGetQuestionSetAgentEnvelope(c *Connection, env models.Envelo
 			continue
 		}
 		availableAgents = append(availableAgents, candidate)
+	}
+
+	// Collaborators (non-owners) see agent names/models but NOT API keys/tokens.
+	if isCollaborator {
+		for i := range selectedAgents {
+			selectedAgents[i] = redactAgentConfig(selectedAgents[i])
+		}
+		for i := range availableAgents {
+			availableAgents[i] = redactAgentConfig(availableAgents[i])
+		}
 	}
 
 	c.SendResponse(DataResponse, env.CorrelationID, models.QuestionSetAgentEnvelopeResponse{

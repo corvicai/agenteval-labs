@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
@@ -26,7 +27,8 @@ func (h *Hub) handleCreateEvaluation(c *Connection, env models.Envelope) {
 	var ratingCode int
 	var rating string
 
-	if req.RatingCode != nil {
+	switch {
+	case req.RatingCode != nil:
 		ratingCode = *req.RatingCode
 		// Map back to rating string for compatibility
 		switch ratingCode {
@@ -42,7 +44,7 @@ func (h *Hub) handleCreateEvaluation(c *Connection, env models.Envelope) {
 			c.SendError(env.CorrelationID, "invalid rating_code")
 			return
 		}
-	} else if req.Rating != "" {
+	case req.Rating != "":
 		rating = req.Rating
 		switch rating {
 		case "like":
@@ -57,7 +59,7 @@ func (h *Hub) handleCreateEvaluation(c *Connection, env models.Envelope) {
 			c.SendError(env.CorrelationID, "invalid rating")
 			return
 		}
-	} else {
+	default:
 		c.SendError(env.CorrelationID, "rating or rating_code is required")
 		return
 	}
@@ -94,12 +96,25 @@ func (h *Hub) handleCreateEvaluation(c *Connection, env models.Envelope) {
 		return
 	}
 
-	// Broadcast update to all workspace clients
-	h.BroadcastEvent(c.WorkspaceID, EvtDataChanged, "", models.DataChangedPayload{
+	// Broadcast to the full question-set audience (owner + active
+	// collaborators) so scores appear in real time on every connected side.
+	// Fallback to workspace scope if the run can't be resolved (defensive —
+	// shouldn't happen for a valid run_result_id).
+	dataChanged := models.DataChangedPayload{
 		Resource: "run_results",
 		Action:   "updated",
 		Data:     eval,
-	})
+	}
+	var runRow struct {
+		RunID uuid.UUID `gorm:"column:run_id"`
+	}
+	if err := h.db.Raw(`SELECT run_id FROM run_results WHERE id = ? LIMIT 1`, resultID).Scan(&runRow).Error; err != nil || runRow.RunID == uuid.Nil {
+		logger.Warn("[WS] handleCreateEvaluation: could not resolve run for result %s: %v", resultID, err)
+		h.BroadcastEvent(c.WorkspaceID, EvtDataChanged, "", dataChanged)
+	} else if sendErr := h.SendEventForRun(runRow.RunID, EvtDataChanged, "", dataChanged); sendErr != nil {
+		logger.Warn("[WS] handleCreateEvaluation: SendEventForRun failed, falling back to workspace broadcast: %v", sendErr)
+		h.BroadcastEvent(c.WorkspaceID, EvtDataChanged, "", dataChanged)
+	}
 
 	c.SendResponse(DataEvaluation, env.CorrelationID, eval)
 }
@@ -133,7 +148,9 @@ func (h *Hub) handleRunEvaluators(c *Connection, env models.Envelope) {
 		return
 	}
 
-	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "evaluators queued"})
+	if err := h.cacheAndSendResponse(c, DataResponse, env.CorrelationID, map[string]string{"status": "evaluators queued"}); err != nil {
+		logger.Warn("[WS] handleRunEvaluators: send failed: %v", err)
+	}
 }
 
 func (h *Hub) handleGetSpyPayload(c *Connection, env models.Envelope) {
@@ -154,15 +171,25 @@ func (h *Hub) handleGetSpyPayload(c *Connection, env models.Envelope) {
 		question = "[Sample question for preview]"
 	}
 
-	var agent models.Agent
-	if err := h.db.First(&agent, "id = ?", id).Error; err != nil {
+	// Only the owner and active collaborators may peek at the spy payload
+	// (even though it's redacted, it still exposes provider_type, prompt
+	// layout, and non-sensitive config knobs that are reasonable to gate).
+	access, agent, _, accessErr := h.getAgentAccess(h.db, c.UserID, id)
+	if accessErr != nil {
 		c.SendError(env.CorrelationID, "agent not found")
 		return
 	}
+	if access == agentAccessNone {
+		c.SendError(env.CorrelationID, "agent is not accessible to you")
+		return
+	}
 
-	// Redact sensitive fields (same logic as REST)
+	// Redact sensitive fields (same logic as REST). We still redact for the
+	// owner — the spy payload is a preview tool, not a credential export.
 	config := make(map[string]any)
-	json.Unmarshal(agent.Config, &config)
+	if err := json.Unmarshal(agent.Config, &config); err != nil {
+		logger.Warn("[EVAL] Failed to parse agent %s config for spy payload: %v", agent.ID, err)
+	}
 
 	sensitiveKeys := []string{"token", "api_key", "secret", "password", "key"}
 	redactedConfig := make(map[string]any)

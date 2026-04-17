@@ -11,8 +11,14 @@ if (typeof window !== 'undefined') {
 }
 
 if (!purify) {
+  console.warn('[markdown] DOMPurify unavailable — using HTML escape fallback')
   purify = {
-    sanitize: (html) => html
+    sanitize: (html) => String(html ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;')
   }
 }
 

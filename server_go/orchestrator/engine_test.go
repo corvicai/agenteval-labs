@@ -189,7 +189,7 @@ func TestEngine_QueueTask(t *testing.T) {
 	db := setupOrchestratorTestDB(t)
 	runID, _ := createTestRun(db)
 
-	engine := NewEngine(db, 2)
+	engine := NewEngine(db, 2, 0)
 	engine.Start()
 
 	t.Run("executes task and stores result", func(t *testing.T) {
@@ -220,7 +220,7 @@ func TestEngine_CancelRun(t *testing.T) {
 	db := setupOrchestratorTestDB(t)
 	runID, _ := createTestRun(db)
 
-	engine := NewEngine(db, 1)
+	engine := NewEngine(db, 1, 0)
 	engine.Start()
 
 	t.Run("cancels run and skips tasks", func(t *testing.T) {
@@ -251,7 +251,7 @@ func TestEngine_CancelRun_SkipsTasksAlreadyDequeuedButWaitingSemaphore(t *testin
 	db := setupOrchestratorTestDB(t)
 	runID, workspaceID := createTestRun(db)
 
-	engine := NewEngine(db, 3)
+	engine := NewEngine(db, 3, 0)
 	mockRunner := newBlockingRunner()
 	engine.runner = mockRunner
 	engine.Start()
@@ -300,7 +300,7 @@ func TestEngine_RerunTaskMarksRunRunningAndIncrementsTotalTasks(t *testing.T) {
 		"total_tasks": 1,
 	}).Error)
 
-	engine := NewEngine(db, 0)
+	engine := NewEngine(db, 0, 0)
 
 	err := engine.RerunTask(runID, agent.ID, "q-1", nil)
 	require.NoError(t, err)
@@ -334,7 +334,7 @@ func TestEngine_RerunTaskForEvaluatorKeepsCanonicalEvalQuestionID(t *testing.T) 
 	}
 	require.NoError(t, db.Create(&targetResult).Error)
 
-	engine := NewEngine(db, 0)
+	engine := NewEngine(db, 0, 0)
 
 	err := engine.RerunTask(runID, evaluator.ID, "q-1", &RerunTaskOptions{
 		ResultID:         targetResult.ID.String(),
@@ -372,7 +372,7 @@ func TestEngine_RerunTaskForEvaluatorUsesFrontendExpectedOverrideWithoutOriginal
 	}
 	require.NoError(t, db.Create(&targetResult).Error)
 
-	engine := NewEngine(db, 0)
+	engine := NewEngine(db, 0, 0)
 
 	err := engine.RerunTask(runID, evaluator.ID, "q-1", &RerunTaskOptions{
 		ResultID:       targetResult.ID.String(),
@@ -408,7 +408,7 @@ func TestEngine_RerunTaskForEvaluatorUsesTargetAgentFromPrimaryResultID(t *testi
 	}
 	require.NoError(t, db.Create(&targetResult).Error)
 
-	engine := NewEngine(db, 0)
+	engine := NewEngine(db, 0, 0)
 
 	err := engine.RerunTask(runID, evaluator.ID, "q-1", &RerunTaskOptions{
 		ResultID:         targetResult.ID.String(),
@@ -456,7 +456,7 @@ func TestEngine_RunEvaluatorsQueuesOnlyLatestLogicalResult(t *testing.T) {
 		CreatedAt:  now,
 	}).Error)
 
-	engine := NewEngine(db, 0)
+	engine := NewEngine(db, 0, 0)
 
 	err := engine.RunEvaluators(runID, []uuid.UUID{evaluator.ID})
 	require.NoError(t, err)
@@ -533,7 +533,7 @@ func TestEngine_StartRun_QueuesQuestionsInAscendingOrder(t *testing.T) {
 		Position:      1,
 	}).Error)
 
-	engine := NewEngine(db, 0)
+	engine := NewEngine(db, 0, 0)
 
 	run, err := engine.StartRun(workspace.ID, qs.ID, nil)
 	require.NoError(t, err)
@@ -589,7 +589,7 @@ func TestEngine_StartRun_PreservesExplicitAgentOrder(t *testing.T) {
 	require.NoError(t, db.Model(&models.Agent{}).Where("id = ?", agentA.ID).Update("position", 10).Error)
 	require.NoError(t, db.Model(&models.Agent{}).Where("id = ?", agentB.ID).Update("position", 0).Error)
 
-	engine := NewEngine(db, 0)
+	engine := NewEngine(db, 0, 0)
 
 	run, err := engine.StartRun(workspace.ID, qs.ID, []uuid.UUID{agentA.ID, agentB.ID})
 	require.NoError(t, err)
@@ -628,7 +628,7 @@ func TestEngine_StartRunForUser_PersistsStarter(t *testing.T) {
 
 	agent := createTestAgent(t, db, workspace.ID, "Agent A", "openai", mockOpenAIConfig())
 
-	engine := NewEngine(db, 0)
+	engine := NewEngine(db, 0, 0)
 
 	run, err := engine.StartRunForUser(workspace.ID, qs.ID, []uuid.UUID{agent.ID}, user.ID)
 	require.NoError(t, err)
@@ -646,7 +646,7 @@ func TestEngine_CancelRun_EmitsRunFinishedCancelled(t *testing.T) {
 	db := setupOrchestratorTestDB(t)
 	runID, workspaceID := createTestRun(db)
 
-	engine := NewEngine(db, 1)
+	engine := NewEngine(db, 1, 0)
 
 	eventCh := make(chan map[string]any, 1)
 	engine.SetEventCallback(func(wsID uuid.UUID, eventType string, corrID string, payload any) {
@@ -679,7 +679,7 @@ func TestEngine_EventCallback(t *testing.T) {
 	db := setupOrchestratorTestDB(t)
 	runID, workspaceID := createTestRun(db)
 
-	engine := NewEngine(db, 1)
+	engine := NewEngine(db, 1, 0)
 
 	var events []string
 	var mu sync.Mutex
@@ -720,7 +720,7 @@ func TestEngine_HandlesErrors(t *testing.T) {
 	db := setupOrchestratorTestDB(t)
 	runID, _ := createTestRun(db)
 
-	engine := NewEngine(db, 1)
+	engine := NewEngine(db, 1, 0)
 	engine.Start()
 
 	t.Run("stores error results", func(t *testing.T) {
@@ -746,7 +746,7 @@ func TestEngine_HandlesErrors(t *testing.T) {
 func TestEngine_Concurrency(t *testing.T) {
 	db := setupOrchestratorTestDB(t)
 	runID, _ := createTestRun(db)
-	engine := NewEngine(db, 5) // 5 workers
+	engine := NewEngine(db, 5, 0) // 5 workers
 	engine.Start()
 
 	t.Run("processes tasks concurrently", func(t *testing.T) {
@@ -797,7 +797,7 @@ func TestEngine_RetryPrimaryAutoRunsEvaluatorForSameQuestion(t *testing.T) {
 		Position:      1,
 	}).Error)
 
-	engine := NewEngine(db, 2)
+	engine := NewEngine(db, 2, 0)
 	engine.Start()
 
 	engine.QueueTask(&Task{
@@ -855,7 +855,7 @@ func TestEngine_StartRun_AutoRunsEvaluatorsAfterPrimaryCompletion(t *testing.T) 
 		Position:      1,
 	}).Error)
 
-	engine := NewEngine(db, 2)
+	engine := NewEngine(db, 2, 0)
 	engine.Start()
 
 	run, err := engine.StartRun(workspaceID, qsID, []uuid.UUID{primaryAgent.ID})
@@ -902,7 +902,7 @@ func TestEngine_StartRun_DoesNotAutoRunUnselectedEvaluator(t *testing.T) {
 		Position:      0,
 	}).Error)
 
-	engine := NewEngine(db, 2)
+	engine := NewEngine(db, 2, 0)
 	engine.Start()
 
 	run, err := engine.StartRun(workspaceID, qsID, []uuid.UUID{primaryAgent.ID})
@@ -945,7 +945,7 @@ func TestEngine_PersistEvaluatorScore_UpsertsByEvaluator(t *testing.T) {
 	}
 	require.NoError(t, db.Create(&targetResult).Error)
 
-	engine := NewEngine(db, 1)
+	engine := NewEngine(db, 1, 0)
 	task := &Task{
 		RunID:             runID,
 		AgentID:           evaluatorAgent.ID,
@@ -999,7 +999,7 @@ func TestEngine_StartRun_UsesGlobalCredentialsWhenOverrideConfigIsEmpty(t *testi
 		Position:      0,
 	}).Error)
 
-	engine := NewEngine(db, 2)
+	engine := NewEngine(db, 2, 0)
 	engine.Start()
 
 	startedRun, err := engine.StartRun(workspaceID, qsID, []uuid.UUID{primaryAgent.ID})

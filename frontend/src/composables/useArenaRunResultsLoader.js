@@ -85,13 +85,21 @@ export function useArenaRunResultsLoader(options = {}) {
       return
     }
 
-    runResults.value = {}
+    // Snapshot existing in-memory results BEFORE wiping. During a live run,
+    // EVT_TASK_COMPLETED fills runResults[agent][q].answer directly, but
+    // those answers are never written to contentCache. If we blow the slate
+    // clean we'd force a full re-download from the server, leaving the UI
+    // showing "loading" for every cell until DownloadManager catches up —
+    // which looks like "everything was erased" at EVT_RUN_FINISHED.
+    const previousResults = runResults.value || {}
+
     taskProgress.value = {}
     currentRun.value = null
     totalTasks.value = 0
     completedTasks.value = 0
 
     if (!data || !data.run || !data.run.id) {
+      runResults.value = {}
       return
     }
 
@@ -106,6 +114,41 @@ export function useArenaRunResultsLoader(options = {}) {
       if (!skeletonResults[agentId]) skeletonResults[agentId] = {}
 
       const cached = contentCache.get(res.content_hash)
+      const existing = previousResults[agentId]?.[qIdStr]
+      const hasInMemoryAnswer = !!existing
+        && String(existing.id || '') === String(res.id || '')
+        && (typeof existing.answer === 'string' && existing.answer.length > 0 || !!existing.error)
+
+      if (hasInMemoryAnswer) {
+        // Warm contentCache so subsequent selections/refreshes find the
+        // answer without a round-trip.
+        if (res.content_hash && typeof existing.answer === 'string' && existing.answer.length > 0) {
+          contentCache.set(res.content_hash, {
+            answer: existing.answer,
+            evaluations: existing.evaluations || []
+          })
+        }
+
+        const mergedEvaluations = Array.isArray(res.evaluations) && res.evaluations.length > 0
+          ? res.evaluations
+          : (existing.evaluations || [])
+
+        skeletonResults[agentId][qIdStr] = {
+          ...existing,
+          id: res.id,
+          content_hash: res.content_hash,
+          loading: false,
+          success: res.status === 'success',
+          error: res.status === 'error' ? (res.error || existing.error || 'Error in run') : (existing.error || null),
+          duration: (res.duration_ms != null) ? res.duration_ms / 1000 : existing.duration,
+          timestamp: res.created_at || existing.timestamp,
+          evaluations: mergedEvaluations,
+          humanValidation: mergedEvaluations?.find((evaluation) => evaluation.rater_type === 'user')?.rating ?? existing.humanValidation ?? null,
+          metadata: existing.metadata ?? null,
+          targetRunResultId: res.target_run_result_id || existing.targetRunResultId || null
+        }
+        return
+      }
 
       skeletonResults[agentId][qIdStr] = {
         id: res.id,
@@ -118,7 +161,8 @@ export function useArenaRunResultsLoader(options = {}) {
         timestamp: res.created_at,
         evaluations: cached ? (cached.evaluations || []) : [],
         humanValidation: cached ? cached.evaluations?.find((evaluation) => evaluation.rater_type === 'user')?.rating : null,
-        metadata: null
+        metadata: null,
+        targetRunResultId: res.target_run_result_id || null
       }
 
       if (!cached) allResultIds.push(res.id)

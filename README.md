@@ -145,7 +145,7 @@ All messages use a standard envelope: `{ "type": "REQ_*", "correlation_id": "...
 | `APP_ENV` | `development` | `development` or `production` (disables dev features) |
 | `FIREBASE_SERVICE_ACCOUNT` | — | Path to Firebase Service Account JSON |
 | `ALLOWED_ORIGINS` | — | Comma-separated CORS origins (production) |
-| `VITE_AFK_TIMEOUT_MS` | `180000` | Frontend idle timeout (ms) before WebSocket disconnect |
+| `VITE_AFK_TIMEOUT_MS` | `600000` | Frontend idle timeout (ms) before WebSocket disconnect (min: 60000; tripled during active runs) |
 | `VITE_HMR_HOST`, `VITE_HMR_CLIENT_PORT`, `VITE_HMR_PROTOCOL` | — | Optional HMR config for dev behind proxy |
 
 ## Encryption Key Rotation
@@ -235,10 +235,18 @@ This is destructive for encrypted config data, but it is the simplest recovery p
 cd server_go
 go test ./... -v
 
+# Backend Lint + Vet + Tests (matches CI gate)
+cd server_go
+make check    # runs: go vet, golangci-lint, go test
+
 # Frontend Tests
 cd frontend
 npm run test
 ```
+
+The backend lint configuration lives in `server_go/.golangci.yml`.
+`make lint` auto-installs the expected `golangci-lint` version into
+`$GOPATH/bin` on first run.
 
 ### Run Without Docker
 

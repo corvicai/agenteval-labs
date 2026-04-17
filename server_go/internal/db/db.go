@@ -178,6 +178,50 @@ func EnsureQuestionSetShareLinkSchema(db *gorm.DB) error {
 	return nil
 }
 
+func IsMissingQuestionSetCollaboratorsRelationError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+	return (strings.Contains(msg, `relation "question_set_collaborators"`) ||
+		strings.Contains(msg, `relation "question_set_collab_invites"`)) &&
+		strings.Contains(msg, `does not exist`)
+}
+
+func EnsureQuestionSetCollaboratorSchema(db *gorm.DB) error {
+	logger.Warn("[DB] question_set_collaborators missing; attempting on-demand schema repair")
+	if err := db.AutoMigrate(&models.QuestionSetCollaborator{}, &models.QuestionSetCollabInvite{}); err != nil {
+		return fmt.Errorf("ensure question_set_collaborators schema: %w", err)
+	}
+	return nil
+}
+
+// IsMissingAgentCollaboratorsRelationError matches the Postgres/SQLite errors
+// returned when the agent_collaborators / agent_collab_invites tables have not
+// yet been created. Used by handlers to perform on-demand AutoMigrate so the
+// feature degrades gracefully on dev DBs that skipped migrations.
+func IsMissingAgentCollaboratorsRelationError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+	return (strings.Contains(msg, `relation "agent_collaborators"`) ||
+		strings.Contains(msg, `relation "agent_collab_invites"`) ||
+		strings.Contains(msg, `no such table: agent_collaborators`) ||
+		strings.Contains(msg, `no such table: agent_collab_invites`)) &&
+		(strings.Contains(msg, `does not exist`) || strings.Contains(msg, `no such table`))
+}
+
+func EnsureAgentCollaboratorSchema(db *gorm.DB) error {
+	logger.Warn("[DB] agent_collaborators missing; attempting on-demand schema repair")
+	if err := db.AutoMigrate(&models.AgentCollaborator{}, &models.AgentCollabInvite{}); err != nil {
+		return fmt.Errorf("ensure agent_collaborators schema: %w", err)
+	}
+	return nil
+}
+
 func CreateRunCompat(db *gorm.DB, run *models.Run) error {
 	if err := db.Create(run).Error; err != nil {
 		if !IsMissingRunsCreatedByColumnError(err) {

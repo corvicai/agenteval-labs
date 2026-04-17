@@ -46,7 +46,8 @@ func (h *EvaluationHandler) Create(c echo.Context) error {
 	var ratingCode int
 	var rating string
 
-	if req.RatingCode != nil {
+	switch {
+	case req.RatingCode != nil:
 		ratingCode = *req.RatingCode
 		// Map back to rating string for compatibility
 		switch ratingCode {
@@ -61,7 +62,7 @@ func (h *EvaluationHandler) Create(c echo.Context) error {
 		default:
 			return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid rating_code"})
 		}
-	} else if req.Rating != "" {
+	case req.Rating != "":
 		rating = req.Rating
 		switch rating {
 		case "like":
@@ -75,7 +76,7 @@ func (h *EvaluationHandler) Create(c echo.Context) error {
 		default:
 			return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid rating"})
 		}
-	} else {
+	default:
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "rating or rating_code is required"})
 	}
 

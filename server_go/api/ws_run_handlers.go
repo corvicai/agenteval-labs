@@ -17,6 +17,60 @@ import (
 	"gorm.io/gorm"
 )
 
+// injectEvaluatorTargetIDsLite fills TargetRunResultID for evaluator
+// RunResultLite entries using a lookup over the primary results already present
+// in the slice. No extra DB round-trip is required.
+func injectEvaluatorTargetIDsLite(results []models.RunResultLite) {
+	primary := make(map[string]uuid.UUID, len(results))
+	for _, r := range results {
+		if !strings.HasPrefix(r.QuestionID, "eval-") {
+			primary[r.AgentID.String()+":"+r.QuestionID] = r.ID
+		}
+	}
+	for i := range results {
+		if !strings.HasPrefix(results[i].QuestionID, "eval-") {
+			continue
+		}
+		rest := strings.TrimPrefix(results[i].QuestionID, "eval-")
+		// Format: <36-char UUID> + "-" + questionID
+		if len(rest) <= 36 {
+			continue
+		}
+		targetAgentStr := rest[:36]
+		questionID := rest[37:]
+		if primaryID, ok := primary[targetAgentStr+":"+questionID]; ok {
+			id := primaryID
+			results[i].TargetRunResultID = &id
+		}
+	}
+}
+
+// injectEvaluatorTargetIDsFull is the same but for full RunResult slices
+// (used by handleGetRunDetails).
+func injectEvaluatorTargetIDsFull(results []models.RunResult) {
+	primary := make(map[string]uuid.UUID, len(results))
+	for _, r := range results {
+		if !strings.HasPrefix(r.QuestionID, "eval-") {
+			primary[r.AgentID.String()+":"+r.QuestionID] = r.ID
+		}
+	}
+	for i := range results {
+		if !strings.HasPrefix(results[i].QuestionID, "eval-") {
+			continue
+		}
+		rest := strings.TrimPrefix(results[i].QuestionID, "eval-")
+		if len(rest) <= 36 {
+			continue
+		}
+		targetAgentStr := rest[:36]
+		questionID := rest[37:]
+		if primaryID, ok := primary[targetAgentStr+":"+questionID]; ok {
+			id := primaryID
+			results[i].TargetRunResultID = &id
+		}
+	}
+}
+
 func normalizeResultEvaluationsForDisplay(result *models.RunResult) {
 	if result == nil || len(result.Evaluations) == 0 {
 		return
@@ -76,6 +130,7 @@ func ensureAgentSyncConfigs(agents []models.Agent) (hadDecryptionErrors bool) {
 		if json.Unmarshal(agents[i].Config, &m) == nil {
 			if _, bad := m["_error"]; bad {
 				agents[i].Config = models.EncryptedJSON([]byte(`{}`))
+				agents[i].ConfigStatus = "needs_recredentials"
 				hadDecryptionErrors = true
 			}
 		}
@@ -109,6 +164,21 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 		if err := h.db.Find(&agents, agentIDs).Error; err != nil {
 			c.SendError(env.CorrelationID, "failed to load agents for validation")
 			return
+		}
+
+		// Authorize every selected agent (Plano 28). Each must be either
+		// owned by the user OR shared with them via agent_collaborators.
+		// This prevents a client from smuggling in a stranger's agent ID.
+		for _, agent := range agents {
+			access, _, _, accessErr := h.getAgentAccess(h.db, c.UserID, agent.ID)
+			if accessErr != nil {
+				c.SendError(env.CorrelationID, fmt.Sprintf("failed to verify access to agent '%s'", agent.Name))
+				return
+			}
+			if access == agentAccessNone {
+				c.SendError(env.CorrelationID, fmt.Sprintf("agent '%s' is not accessible to you", agent.Name))
+				return
+			}
 		}
 
 		for _, agent := range agents {
@@ -233,14 +303,41 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 	}
 	logger.Debug("[RUNNER] Ping OK: I'm here")
 
-	// For legacy support, we use the connection's workspace
-	run, err := h.engine.StartRunForUser(c.WorkspaceID, qsID, agentIDs, c.UserID)
+	// For shared QSs, runs must live in the owner's workspace so they're
+	// scoped correctly (agents, broadcasts, stats, later reads all live
+	// there). MUST stay in sync with handleGetLatestRunByQuestionSet /
+	// handleGetRunDetails / handleSyncState, otherwise collaborators will
+	// create runs they can't read back (they'd query the owner's workspace
+	// while the run sits orphaned in the collaborator's workspace).
+	runWorkspaceID := c.WorkspaceID
+	if access, _, ownerWs, aErr := h.getQuestionSetAccess(h.db, c.UserID, qsID); aErr == nil && access != accessNone && access != accessOwner {
+		runWorkspaceID = ownerWs.ID
+		logger.Debug("[WS] handleStartRun: routing shared-QS run to owner workspace user=%s qs=%s access=%d ownerWs=%s",
+			c.UserID, qsID, access, ownerWs.ID)
+	}
+	run, err := h.engine.StartRunForUser(runWorkspaceID, qsID, agentIDs, c.UserID)
 	if err != nil {
 		c.SendError(env.CorrelationID, err.Error())
 		return
 	}
 
-	c.SendResponse(DataResponse, env.CorrelationID, run)
+	// Notify the full QS audience (owner + collaborators) that a run was
+	// created. Without this, collaborators never learn about the new run and
+	// never see live progress/results until they trigger a fresh syncState.
+	// Falls back to workspace-scoped broadcast if QS fan-out fails.
+	createdPayload := models.DataChangedPayload{
+		Resource: "runs",
+		Action:   "created",
+		Data:     run,
+	}
+	if sendErr := h.SendEventToQS(qsID, EvtDataChanged, "", createdPayload); sendErr != nil {
+		logger.Warn("[WS] handleStartRun: QS fan-out failed for run %s: %v", run.ID, sendErr)
+		h.BroadcastEvent(runWorkspaceID, "runs", "created", run)
+	}
+
+	if err := h.cacheAndSendResponse(c, DataResponse, env.CorrelationID, run); err != nil {
+		logger.Warn("[WS] handleStartRun: send failed: %v", err)
+	}
 }
 
 func (h *Hub) handleRerunTask(c *Connection, env models.Envelope) {
@@ -250,8 +347,27 @@ func (h *Hub) handleRerunTask(c *Connection, env models.Envelope) {
 		return
 	}
 
-	runID, _ := uuid.Parse(payload.RunID)
-	agentID, _ := uuid.Parse(payload.AgentID)
+	runID, err := uuid.Parse(payload.RunID)
+	if err != nil {
+		c.SendError(env.CorrelationID, "invalid run_id")
+		return
+	}
+	agentID, err := uuid.Parse(payload.AgentID)
+	if err != nil {
+		c.SendError(env.CorrelationID, "invalid agent_id")
+		return
+	}
+
+	// Authorize agent access (Plano 28). Users can rerun a task only with an
+	// agent they own or that has been shared with them.
+	if access, _, _, accessErr := h.getAgentAccess(h.db, c.UserID, agentID); accessErr != nil {
+		c.SendError(env.CorrelationID, "failed to verify agent access")
+		return
+	} else if access == agentAccessNone {
+		c.SendError(env.CorrelationID, "agent is not accessible to you")
+		return
+	}
+
 	retryID := uuid.NewString()
 
 	// Pass frontend-provided context to engine
@@ -268,10 +384,12 @@ func (h *Hub) handleRerunTask(c *Connection, env models.Envelope) {
 		return
 	}
 
-	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{
+	if err := h.cacheAndSendResponse(c, DataResponse, env.CorrelationID, map[string]string{
 		"status":   "queued",
 		"retry_id": retryID,
-	})
+	}); err != nil {
+		logger.Warn("[WS] handleRerunTask: send failed: %v", err)
+	}
 }
 
 func (h *Hub) handleCancelRun(c *Connection, env models.Envelope) {
@@ -281,9 +399,15 @@ func (h *Hub) handleCancelRun(c *Connection, env models.Envelope) {
 		return
 	}
 
-	runID, _ := uuid.Parse(payload.RunID)
+	runID, err := uuid.Parse(payload.RunID)
+	if err != nil {
+		c.SendError(env.CorrelationID, "invalid run_id")
+		return
+	}
 	h.engine.CancelRun(runID)
-	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "cancelled"})
+	if err := h.cacheAndSendResponse(c, DataResponse, env.CorrelationID, map[string]string{"status": "cancelled"}); err != nil {
+		logger.Warn("[WS] handleCancelRun: send failed: %v", err)
+	}
 }
 
 func (h *Hub) handleSyncState(c *Connection, env models.Envelope) {
@@ -306,10 +430,51 @@ func (h *Hub) handleSyncState(c *Connection, env models.Envelope) {
 			return
 		}
 		ensureAgentSyncConfigs(payload.Agents)
-	} else {
-		if ensureAgentSyncConfigs(payload.Agents) {
-			payload.Warnings = append(payload.Warnings, "Some agent configs could not be decrypted; returning agent metadata without config.")
+	} else if ensureAgentSyncConfigs(payload.Agents) {
+		payload.Warnings = append(payload.Warnings, "Some agent configs could not be decrypted; returning agent metadata without config.")
+	}
+
+	// 1b. Get Shared Agents (Plano 28) — agents the user was granted
+	// use-only access to. Config is redacted before serialization so
+	// credentials never leave the backend.
+	type sharedAgentRow struct {
+		AgentID     uuid.UUID `gorm:"column:agent_id"`
+		AcceptedAt  time.Time `gorm:"column:accepted_at"`
+		OwnerUserID uuid.UUID `gorm:"column:owner_user_id"`
+		OwnerName   string    `gorm:"column:owner_name"`
+	}
+	var sharedAgentRows []sharedAgentRow
+	sharedAgentErr := h.db.Raw(`
+		SELECT ac.agent_id, ac.accepted_at,
+		       w.user_id AS owner_user_id,
+		       u.name    AS owner_name
+		FROM agent_collaborators ac
+		JOIN agents a ON a.id = ac.agent_id
+		JOIN workspaces w ON w.id = a.workspace_id
+		JOIN users u ON u.id = w.user_id
+		WHERE ac.user_id = ? AND ac.accepted_at IS NOT NULL AND ac.revoked_at IS NULL
+		ORDER BY ac.accepted_at DESC
+	`, c.UserID).Scan(&sharedAgentRows).Error
+
+	if sharedAgentErr == nil && len(sharedAgentRows) > 0 {
+		payload.SharedAgents = make([]models.SharedAgent, 0, len(sharedAgentRows))
+		for _, row := range sharedAgentRows {
+			var agent models.Agent
+			if loadErr := h.db.First(&agent, "id = ?", row.AgentID).Error; loadErr != nil {
+				logger.Warn("[WS] SyncState: could not load shared agent %s: %v", row.AgentID, loadErr)
+				continue
+			}
+			agent = redactAgentConfig(agent)
+			payload.SharedAgents = append(payload.SharedAgents, models.SharedAgent{
+				Agent:       agent,
+				OwnerUserID: row.OwnerUserID,
+				OwnerName:   row.OwnerName,
+				AcceptedAt:  row.AcceptedAt,
+			})
 		}
+	} else if sharedAgentErr != nil {
+		// Missing table (schema not migrated) is expected on fresh dev DBs — ignore.
+		logger.Debug("[WS] SyncState: could not load shared agents (may not be migrated): %v", sharedAgentErr)
 	}
 
 	// 2. Get Question Sets
@@ -355,22 +520,164 @@ func (h *Hub) handleSyncState(c *Connection, env models.Envelope) {
 		}
 	}
 
-	// 3. Get Recent Runs (last 10)
-	if err := h.db.Raw(`
-		SELECT r.*, qs.name as question_set_name
-		FROM runs r
-		JOIN question_sets qs ON r.question_set_id = qs.id
-		WHERE r.workspace_id = ?
-		ORDER BY r.created_at desc
-		LIMIT 10
-	`, c.WorkspaceID).Scan(&payload.RecentRuns).Error; err != nil {
-		logger.Error("[WS] SyncState error loading recent runs: %v", err)
-		c.SendError(env.CorrelationID, "failed to load recent runs: "+err.Error())
+	// 2b. Get Shared Question Sets (QSs owned by other users where current user is an active collaborator)
+	type sharedQSRow struct {
+		// question_sets columns
+		ID       string `gorm:"column:id"`
+		ClientID string `gorm:"column:client_id"`
+		Name     string `gorm:"column:name"`
+		Version  string `gorm:"column:version"`
+		// owner info
+		OwnerUserID      string `gorm:"column:owner_user_id"`
+		OwnerName        string `gorm:"column:owner_name"`
+		OwnerWorkspaceID string `gorm:"column:owner_workspace_id"`
+		// collaborator info
+		Role       string     `gorm:"column:role"`
+		AcceptedAt *time.Time `gorm:"column:accepted_at"`
+	}
+	var sharedRows []sharedQSRow
+	sharedErr := h.db.Raw(`
+		SELECT
+			qs.id, qs.client_id, qs.name, qs.version,
+			w.user_id AS owner_user_id,
+			u.name AS owner_name,
+			w.id AS owner_workspace_id,
+			c.role, c.accepted_at
+		FROM question_set_collaborators c
+		JOIN question_sets qs ON qs.id = c.question_set_id
+		JOIN clients cl ON cl.id = qs.client_id
+		JOIN workspaces w ON w.id = cl.workspace_id
+		JOIN users u ON u.id = w.user_id
+		WHERE c.user_id = ? AND c.accepted_at IS NOT NULL AND c.revoked_at IS NULL
+		ORDER BY c.accepted_at DESC
+	`, c.UserID).Scan(&sharedRows).Error
+
+	// Collect shared QS IDs for run query and OwnerAgents loading below.
+	sharedQSIDs := make([]uuid.UUID, 0)
+
+	if sharedErr == nil && len(sharedRows) > 0 {
+		payload.SharedQuestionSets = make([]models.SharedQuestionSet, 0, len(sharedRows))
+		for _, row := range sharedRows {
+			qsID, qsIDErr := uuid.Parse(row.ID)
+			ownerUserID, ownerUserErr := uuid.Parse(row.OwnerUserID)
+			ownerWsID, ownerWsErr := uuid.Parse(row.OwnerWorkspaceID)
+			if qsIDErr != nil || ownerUserErr != nil || ownerWsErr != nil {
+				logger.Warn("[WS] SyncState: skipping shared QS row with unparseable UUIDs: qs=%q user=%q ws=%q",
+					row.ID, row.OwnerUserID, row.OwnerWorkspaceID)
+				continue
+			}
+			// Load the full QS (with Client + Agents)
+			var fullQS models.QuestionSet
+			if loadErr := h.db.Preload("Client").Preload("Agents").First(&fullQS, "id = ?", qsID).Error; loadErr != nil {
+				logger.Warn("[WS] SyncState: could not load shared QS %s: %v", qsID, loadErr)
+				continue
+			}
+			at := time.Time{}
+			if row.AcceptedAt != nil {
+				at = *row.AcceptedAt
+			}
+
+			// Load owner's workspace agents (redacted) so the collaborator can
+			// select them when starting a run — secrets are never exposed.
+			var ownerAgents []models.Agent
+			if loadErr := h.db.Where("workspace_id = ?", ownerWsID).
+				Order("position ASC, created_at ASC").
+				Find(&ownerAgents).Error; loadErr != nil {
+				logger.Warn("[WS] SyncState: could not load owner agents for shared QS %s: %v", qsID, loadErr)
+			}
+			redactedOwnerAgents := make([]models.Agent, len(ownerAgents))
+			for i, a := range ownerAgents {
+				redactedOwnerAgents[i] = redactAgentConfig(a)
+			}
+
+			payload.SharedQuestionSets = append(payload.SharedQuestionSets, models.SharedQuestionSet{
+				QuestionSet:      fullQS,
+				OwnerUserID:      ownerUserID,
+				OwnerName:        row.OwnerName,
+				OwnerWorkspaceID: ownerWsID,
+				Role:             row.Role,
+				AcceptedAt:       at,
+				OwnerAgents:      redactedOwnerAgents,
+			})
+			sharedQSIDs = append(sharedQSIDs, qsID)
+		}
+	} else if sharedErr != nil {
+		// If the table doesn't exist yet, silently ignore (schema not migrated).
+		logger.Debug("[WS] SyncState: could not load shared question sets (may not be migrated): %v", sharedErr)
+	}
+
+	// 3. Get Recent Runs — own workspace + runs belonging to shared QSs
+	// (which live in the owner's workspace, not the collaborator's).
+	var runsErr error
+	if len(sharedQSIDs) > 0 {
+		runsErr = h.db.Raw(`
+			SELECT r.*, qs.name as question_set_name
+			FROM runs r
+			JOIN question_sets qs ON r.question_set_id = qs.id
+			WHERE r.workspace_id = ? OR r.question_set_id IN ?
+			ORDER BY r.created_at desc
+			LIMIT 20
+		`, c.WorkspaceID, sharedQSIDs).Scan(&payload.RecentRuns).Error
+	} else {
+		runsErr = h.db.Raw(`
+			SELECT r.*, qs.name as question_set_name
+			FROM runs r
+			JOIN question_sets qs ON r.question_set_id = qs.id
+			WHERE r.workspace_id = ?
+			ORDER BY r.created_at desc
+			LIMIT 10
+		`, c.WorkspaceID).Scan(&payload.RecentRuns).Error
+	}
+	if runsErr != nil {
+		logger.Error("[WS] SyncState error loading recent runs: %v", runsErr)
+		c.SendError(env.CorrelationID, "failed to load recent runs: "+runsErr.Error())
 		return
+	}
+
+	// 4. Hydrate active run results so the frontend can restore in-progress UI
+	// state after an AFK/network reconnect without a separate REQ_GET_RUN_DETAILS.
+	// Pick the most recent run that is still running or pending.
+	for _, run := range payload.RecentRuns {
+		if run.Status != "running" && run.Status != "pending" {
+			continue
+		}
+		var results []models.RunResult
+		if err := h.db.
+			Preload("Evaluations").
+			Where("run_id = ?", run.ID).
+			Order("created_at asc").
+			Limit(500).
+			Find(&results).Error; err != nil {
+			logger.Warn("[WS] SyncState: failed to hydrate active run %s results: %v", run.ID, err)
+			payload.Warnings = append(payload.Warnings, "active run results could not be loaded")
+			break
+		}
+		// Normalize agent-only evaluations into the user-rating shape the
+		// frontend consumes, matching the behaviour of REQ_GET_RUN_DETAILS.
+		normalizeResultsEvaluationsForDisplay(results)
+		payload.ActiveRunHydration = &models.ActiveRunHydration{
+			RunID:         run.ID,
+			TotalExpected: run.TotalTasks,
+			Results:       results,
+		}
+		logger.Debug("[WS] SyncState: hydrated active run %s with %d results (total_expected=%d)",
+			run.ID, len(results), run.TotalTasks)
+		break // only hydrate the most recent active run
 	}
 
 	logger.Debug("[WS] SyncState completed for workspace: %s (Agents: %d, Sets: %d, Runs: %d)",
 		c.WorkspaceID, len(payload.Agents), len(payload.QuestionSets), len(payload.RecentRuns))
+
+	// Include encryption health for admin users so the admin panel can show a
+	// persistent banner without the operator needing to navigate to the debug tab.
+	if c.UserID != uuid.Nil && h.db != nil {
+		var user models.User
+		if err := h.db.Select("is_admin, email").First(&user, "id = ?", c.UserID).Error; err == nil && user.HasAdminAccess() {
+			if encHealth, ehErr := encryptionKeyHealthForAdmin(h.db); ehErr == nil && encHealth != nil {
+				payload.EncryptionHealth = encHealth
+			}
+		}
+	}
 
 	c.SendResponse(DataState, env.CorrelationID, payload)
 }
@@ -412,6 +719,7 @@ func (h *Hub) handleGetRunDetails(c *Connection, env models.Envelope) {
 		return
 	}
 	response.Results = orchestrator.CollapseRunResultsToLatest(response.Results)
+	injectEvaluatorTargetIDsFull(response.Results)
 	normalizeResultsEvaluationsForDisplay(response.Results)
 
 	// 4. Collect Agent info
@@ -534,6 +842,7 @@ func (h *Hub) handleGetRunLite(c *Connection, env models.Envelope) {
 		}
 	}
 	results = orchestrator.CollapseRunResultLitesToLatest(results)
+	injectEvaluatorTargetIDsLite(results)
 
 	// Fetch Evaluations existence (to set HasEvaluations flag)
 	// Optimize: Get all result IDs that have evaluations
@@ -601,8 +910,37 @@ func (h *Hub) handleGetLatestRunByQuestionSet(c *Connection, env models.Envelope
 		return
 	}
 
+	// Determine which workspace owns this QS's runs.
+	// For shared QSs the runs live in the owner's workspace, not the
+	// collaborator's own workspace. getQuestionSetAccess already loads the
+	// owning Workspace in a single round-trip and handles owner/editor/viewer
+	// uniformly — we use it instead of a bespoke raw SQL scan to avoid
+	// UUID/text-column scan errors observed in prod.
+	access, _, ownerWs, accessErr := h.getQuestionSetAccess(h.db, c.UserID, qsID)
+	if accessErr != nil {
+		logger.Warn("[WS] GetLatestRunByQS: access lookup failed user=%s qs=%s err=%v",
+			c.UserID, qsID, accessErr)
+		c.SendError(env.CorrelationID, "question set not found")
+		return
+	}
+	// Fallback: when the connection's workspace already matches the owning
+	// workspace, treat it as owner. This covers (a) legacy/test fixtures that
+	// don't populate Connection.UserID, and (b) any transient drift where the
+	// workspace.user_id lookup happens to miss. It's safe because the WS
+	// token is scoped to exactly one workspace.
+	if access == accessNone && ownerWs.ID != uuid.Nil && ownerWs.ID == c.WorkspaceID {
+		access = accessOwner
+	}
+	if access == accessNone {
+		logger.Warn("[WS] GetLatestRunByQS: rejected user=%s qs=%s (no access) connWs=%s ownerWs=%s",
+			c.UserID, qsID, c.WorkspaceID, ownerWs.ID)
+		c.SendError(env.CorrelationID, "not authorized")
+		return
+	}
+	runWorkspaceID := ownerWs.ID
+
 	var run models.Run
-	runQuery := h.db.Where("workspace_id = ? AND question_set_id = ? AND status != ?", c.WorkspaceID, qsID, "running").
+	runQuery := h.db.Where("workspace_id = ? AND question_set_id = ? AND status != ?", runWorkspaceID, qsID, "running").
 		Order("created_at desc").
 		Limit(1).
 		Find(&run)
@@ -611,6 +949,8 @@ func (h *Hub) handleGetLatestRunByQuestionSet(c *Connection, env models.Envelope
 		return
 	}
 	if runQuery.RowsAffected == 0 {
+		logger.Debug("[WS] GetLatestRunByQS: no run found user=%s qs=%s access=%d runWs=%s",
+			c.UserID, qsID, access, runWorkspaceID)
 		c.SendResponse(DataRunLite, env.CorrelationID, map[string]any{
 			"run":          nil,
 			"question_set": nil,
@@ -670,6 +1010,7 @@ func (h *Hub) handleGetLatestRunByQuestionSet(c *Connection, env models.Envelope
 		}
 	}
 	results = orchestrator.CollapseRunResultLitesToLatest(results)
+	injectEvaluatorTargetIDsLite(results)
 
 	var resultIDsWithEvals []uuid.UUID
 	h.db.Model(&models.Evaluation{}).
@@ -818,7 +1159,24 @@ func (h *Hub) handleDeleteRun(c *Connection, env models.Envelope) {
 		return
 	}
 
-	h.BroadcastEvent(run.WorkspaceID, "runs", "deleted", map[string]string{"id": runID.String()})
+	// Notify the full question-set audience (owner + active collaborators)
+	// so every connected side drops the run from its list, not just the
+	// owner's workspace. Fall back to workspace broadcast if QS fan-out
+	// fails for any reason. Drop the run→QS cache entry afterwards.
+	deletedPayload := models.DataChangedPayload{
+		Resource: "runs",
+		Action:   "deleted",
+		Data:     map[string]string{"id": runID.String()},
+	}
+	if run.QuestionSetID != uuid.Nil {
+		if err := h.SendEventToQS(run.QuestionSetID, EvtDataChanged, "", deletedPayload); err != nil {
+			logger.Warn("[WS] handleDeleteRun: SendEventToQS failed, fallback to workspace: %v", err)
+			h.BroadcastEvent(run.WorkspaceID, "runs", "deleted", map[string]string{"id": runID.String()})
+		}
+	} else {
+		h.BroadcastEvent(run.WorkspaceID, "runs", "deleted", map[string]string{"id": runID.String()})
+	}
+	h.InvalidateRunQSCache(runID)
 	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "success"})
 }
 
@@ -832,6 +1190,20 @@ func (h *Hub) handleDeleteAllRuns(c *Connection, env models.Envelope) {
 		c.SendError(env.CorrelationID, "no workspace selected")
 		return
 	}
+
+	// Snapshot (runID, questionSetID) pairs before deletion so we can notify
+	// the audience of each involved question set afterwards. Collaborators
+	// live outside the owner's workspace and wouldn't otherwise get the
+	// "deleted" event from a pure workspace broadcast.
+	type runQSPair struct {
+		ID            uuid.UUID `gorm:"column:id"`
+		QuestionSetID uuid.UUID `gorm:"column:question_set_id"`
+	}
+	var pairs []runQSPair
+	if err := h.db.Raw(`SELECT id, question_set_id FROM runs WHERE workspace_id = ?`, c.WorkspaceID).Scan(&pairs).Error; err != nil {
+		logger.Warn("[WS] handleDeleteAllRuns: failed to snapshot runs for broadcast: %v", err)
+	}
+
 	err := h.db.Transaction(func(tx *gorm.DB) error {
 		// 1. Delete Evaluations for all runs in workspace
 		if err := tx.Exec(`
@@ -866,6 +1238,26 @@ func (h *Hub) handleDeleteAllRuns(c *Connection, env models.Envelope) {
 		return
 	}
 
+	// Always notify the owner's workspace (legacy clients, non-shared QSs).
 	h.BroadcastEvent(c.WorkspaceID, "runs", "all_deleted", nil)
+
+	// Also fan out one "deleted" event per run to each shared QS audience so
+	// collaborators drop the runs from their UI without a refresh. We reuse
+	// the same shape as single-run deletion so the existing frontend handler
+	// in wsStore.js ("runs" + "deleted") handles it without changes.
+	for _, p := range pairs {
+		if p.QuestionSetID == uuid.Nil {
+			continue
+		}
+		if err := h.SendEventToQS(p.QuestionSetID, EvtDataChanged, "", models.DataChangedPayload{
+			Resource: "runs",
+			Action:   "deleted",
+			Data:     map[string]string{"id": p.ID.String()},
+		}); err != nil {
+			logger.Warn("[WS] handleDeleteAllRuns: SendEventToQS(%s) failed: %v", p.QuestionSetID, err)
+		}
+		h.InvalidateRunQSCache(p.ID)
+	}
+
 	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "success"})
 }

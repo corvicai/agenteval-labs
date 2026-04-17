@@ -15,7 +15,9 @@ type AgentService struct {
 
 func (s *AgentService) GetSpyPayload(agent *models.Agent, question string) (map[string]any, error) {
 	config := make(map[string]any)
-	json.Unmarshal(agent.Config, &config)
+	if err := json.Unmarshal(agent.Config, &config); err != nil {
+		return nil, err
+	}
 
 	// Redact sensitive fields
 	sensitiveKeys := []string{"token", "api_key", "secret", "password"}

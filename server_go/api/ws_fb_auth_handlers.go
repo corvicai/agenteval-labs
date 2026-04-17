@@ -106,7 +106,7 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 	}
 
 	// Generate internal JWT (Workspace/Org might be empty if onboarding needed)
-	token, _ := middleware.GenerateToken(
+	token, err := middleware.GenerateToken(
 		user.ID.String(),
 		workspace.ID.String(), // Empty if onboarding
 		"",                    // No organization
@@ -114,6 +114,11 @@ func (h *Hub) handleAuth(c *Connection, env models.Envelope) {
 		h.jwtSecret,
 		"",
 	)
+	if err != nil {
+		logger.Error("[FB_AUTH] Failed to generate token for user %s: %v", user.ID, err)
+		c.SendError(env.CorrelationID, "failed to generate authentication token")
+		return
+	}
 
 	// Update last login
 	now := time.Now().UTC()

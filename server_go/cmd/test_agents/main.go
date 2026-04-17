@@ -122,7 +122,9 @@ func (c *WSClient) Send(msgType string, payload any) (json.RawMessage, error) {
 				Error   string `json:"error"`
 				Details any    `json:"details"`
 			}
-			json.Unmarshal(resp.Payload, &errPayload)
+			if err := json.Unmarshal(resp.Payload, &errPayload); err != nil {
+				return nil, fmt.Errorf("server returned EVT_ERROR with unparseable payload: %w", err)
+			}
 			if errPayload.Details != nil {
 				return nil, fmt.Errorf("%s (details: %v)", errPayload.Error, errPayload.Details)
 			}
@@ -201,7 +203,9 @@ func main() {
 			ID string `json:"id"`
 		} `json:"workspace"`
 	}
-	json.Unmarshal(loginResp, &loginData)
+	if err := json.Unmarshal(loginResp, &loginData); err != nil {
+		log.Fatalf("❌ Failed to parse login response: %v", err)
+	}
 	client.token = loginData.Token
 	client.organizationID = loginData.Organization.ID
 	client.workspaceID = loginData.Workspace.ID
@@ -219,7 +223,9 @@ func main() {
 	var wsData struct {
 		ID string `json:"id"`
 	}
-	json.Unmarshal(wsResp, &wsData)
+	if err := json.Unmarshal(wsResp, &wsData); err != nil {
+		log.Fatalf("❌ Failed to parse workspace response: %v", err)
+	}
 	client.workspaceID = wsData.ID
 	log.Printf("✅ Workspace created: %s", client.workspaceID)
 
@@ -252,7 +258,9 @@ func main() {
 		var agentData struct {
 			ID string `json:"id"`
 		}
-		json.Unmarshal(agentResp, &agentData)
+		if err := json.Unmarshal(agentResp, &agentData); err != nil {
+			log.Fatalf("❌ Failed to parse agent %d response: %v", i, err)
+		}
 		agentIDs = append(agentIDs, agentData.ID)
 		log.Printf("   ✅ Created agent %d: %s", i, agentData.ID)
 	}
@@ -277,7 +285,9 @@ func main() {
 	var qsData struct {
 		ID string `json:"id"`
 	}
-	json.Unmarshal(qsResp, &qsData)
+	if err := json.Unmarshal(qsResp, &qsData); err != nil {
+		log.Fatalf("❌ Failed to parse question set response: %v", err)
+	}
 	qs1ID := qsData.ID
 	log.Printf("✅ Question Set created: %s", qs1ID)
 
@@ -330,7 +340,9 @@ func main() {
 			} `json:"agents"`
 		} `json:"question_sets"`
 	}
-	json.Unmarshal(syncResp, &syncData)
+	if err := json.Unmarshal(syncResp, &syncData); err != nil {
+		log.Fatalf("❌ Failed to parse sync state response: %v", err)
+	}
 
 	enabledCount := 0
 	foundQS := false
@@ -372,7 +384,9 @@ func main() {
 	var agent4Data struct {
 		ID string `json:"id"`
 	}
-	json.Unmarshal(agent4Resp, &agent4Data)
+	if err := json.Unmarshal(agent4Resp, &agent4Data); err != nil {
+		log.Fatalf("❌ Failed to parse agent 4 response: %v", err)
+	}
 	agentIDs = append(agentIDs, agent4Data.ID)
 	log.Printf("✅ Created agent 4: %s", agent4Data.ID)
 
@@ -395,7 +409,9 @@ func main() {
 	var qs2Data struct {
 		ID string `json:"id"`
 	}
-	json.Unmarshal(qs2Resp, &qs2Data)
+	if err := json.Unmarshal(qs2Resp, &qs2Data); err != nil {
+		log.Fatalf("❌ Failed to parse question set 2 response: %v", err)
+	}
 	qs2ID := qs2Data.ID
 	log.Printf("✅ Question Set 2 created: %s", qs2ID)
 
@@ -452,7 +468,9 @@ func main() {
 			} `json:"agents"`
 		} `json:"question_sets"`
 	}
-	json.Unmarshal(syncResp2, &syncData2)
+	if err := json.Unmarshal(syncResp2, &syncData2); err != nil {
+		log.Fatalf("❌ Failed to parse sync state 2 response: %v", err)
+	}
 
 	qs2EnabledCount := 0
 	foundQS2 := false

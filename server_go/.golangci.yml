@@ -1,0 +1,87 @@
+run:
+  timeout: 5m
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - gosimple
+    - gosec     # security anti-patterns (hardcoded creds, weak rand, etc.)
+    - gocritic  # code-smell and style checks
+    - errname   # error types must end with "Error"
+    - makezero  # detect unintentionally zero-length slice appends
+
+linters-settings:
+  errcheck:
+    check-blank: true
+    # Best-effort broadcast/notification/write paths: errors are either
+    # logged internally, non-recoverable for the caller, or structurally
+    # impossible for the argument types used. If reliability starts to
+    # matter for any specific call site, drop the exclusion there and
+    # handle the error in-place.
+    exclude-functions:
+      # Gorilla websocket: subsequent Write/flush will surface failures.
+      - (*github.com/gorilla/websocket.Conn).SetReadDeadline
+      - (*github.com/gorilla/websocket.Conn).SetWriteDeadline
+      - (*github.com/gorilla/websocket.Conn).WriteMessage
+      - (io.Writer).Write
+      # WS broadcast/response helpers (best-effort).
+      - (*benchmarking-platform/api.Connection).SendResponse
+      - (*benchmarking-platform/api.Connection).safeSend
+      - (*benchmarking-platform/api.Hub).BroadcastEvent
+      - (*benchmarking-platform/api.Hub).SendEvent
+      - (*benchmarking-platform/api.Hub).SendEventToUser
+      - (benchmarking-platform/api.HubInterface).BroadcastEvent
+      - (benchmarking-platform/api.HubInterface).SendEventToUser
+      # json.Marshal of concrete in-memory structs never fails in practice.
+      - encoding/json.Marshal
+      # gorm soft helpers where zero-value result is acceptable.
+      - (*gorm.io/gorm.Association).Find
+
+  gosec:
+    excludes:
+      # Already covered by errcheck — no need to double-report.
+      - G104
+      # Standard Go idiom: `1 << uint(i)` for exponential backoff.
+      # The retry counter is always small (≤ maxRetries ≤ 10), so no real
+      # overflow risk; the linter does not understand the invariant.
+      - G115
+
+issues:
+  exclude-rules:
+    # Test helpers commonly ignore teardown errors and assertion helpers.
+    - path: _test\.go
+      linters:
+        - errcheck
+        - unused
+
+    # Placeholder `db any` fields waiting for *gorm.DB wiring — intentional.
+    - path: internal/service/(agent_service|question_service)\.go
+      text: "field `db` is unused"
+      linters:
+        - unused
+
+    # Dev tools under cmd/ use math/rand for synthetic test-data generation
+    # (fake names, dummy passwords). Cryptographic randomness is not needed
+    # there; the tools are never deployed to production.
+    - path: ^cmd/
+      linters:
+        - gosec
+
+    # gocritic style nits in standalone CLI entry-points (exitAfterDefer,
+    # ifElseChain) are non-actionable without restructuring the entire main().
+    - path: ^cmd/
+      linters:
+        - gocritic
+
+    # G101: "REQ_CHANGE_PASSWORD" is a WebSocket message-type constant, not a
+    # credential. This is a known gosec false positive on string literals that
+    # happen to contain "PASSWORD".
+    - path: api/websocket\.go
+      text: "G101"
+      linters:
+        - gosec

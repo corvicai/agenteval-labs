@@ -1,6 +1,7 @@
 package service
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"os"
@@ -88,6 +89,13 @@ func (s *EncryptionKeyService) PromoteCurrentKeyState(current *CurrentEncryption
 		return err
 	}
 
+	// Capture what the state was BEFORE promoting — used for the audit entry.
+	var prevFingerprintPrefix, prevStatus string
+	if state != nil {
+		prevFingerprintPrefix = shortFingerprint(state.ActiveFingerprint)
+		prevStatus = state.LastSeenStatus
+	}
+
 	now := time.Now().UTC()
 	sentinel, err := security.EncryptWithKey(current.Key, []byte(encryptionSentinelPlaintextV1))
 	if err != nil {
@@ -117,7 +125,20 @@ func (s *EncryptionKeyService) PromoteCurrentKeyState(current *CurrentEncryption
 		state.CreatedAt = now
 	}
 
-	return s.db.Save(state).Error
+	if err := s.db.Save(state).Error; err != nil {
+		return err
+	}
+
+	s.AppendKeyStateHistory(
+		"promoted",
+		prevFingerprintPrefix,
+		shortFingerprint(current.Fingerprint),
+		prevStatus,
+		"match",
+		"promote",
+		"",
+	)
+	return nil
 }
 
 func (s *EncryptionKeyService) ReconcileCurrentKey() (EncryptionKeyHealth, error) {
@@ -153,6 +174,15 @@ func (s *EncryptionKeyService) ReconcileCurrentKey() (EncryptionKeyHealth, error
 		if err := s.db.Create(state).Error; err != nil {
 			return EncryptionKeyHealth{}, err
 		}
+		s.AppendKeyStateHistory(
+			"initialized",
+			"",
+			shortFingerprint(current.Fingerprint),
+			"",
+			"initialized",
+			"reconcile_init",
+			"",
+		)
 		return buildEncryptionKeyHealth(current, state), nil
 	}
 
@@ -170,13 +200,14 @@ func (s *EncryptionKeyService) ReconcileCurrentKey() (EncryptionKeyHealth, error
 		}
 
 		plaintext, err := security.DecryptWithKey(current.Key, state.SentinelCiphertext)
-		if err != nil {
+		switch {
+		case err != nil:
 			state.LastSeenStatus = "sentinel_failed"
 			state.LastError = err.Error()
-		} else if string(plaintext) != encryptionSentinelPlaintextV1 {
+		case string(plaintext) != encryptionSentinelPlaintextV1:
 			state.LastSeenStatus = "sentinel_failed"
 			state.LastError = "sentinel plaintext mismatch"
-		} else {
+		default:
 			state.LastSeenStatus = "match"
 			state.LastError = ""
 		}
@@ -286,4 +317,42 @@ func firstNonEmptyEncryptionHealth(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// AppendKeyStateHistory writes a single row to the append-only
+// encryption_key_state_history table. Failures are non-fatal (logged only).
+func (s *EncryptionKeyService) AppendKeyStateHistory(
+	eventType, prevFingerprintPrefix, newFingerprintPrefix,
+	prevStatus, newStatus, source, lastError string,
+) {
+	if s.db == nil {
+		return
+	}
+	entry := &models.EncryptionKeyStateHistory{
+		ID:                        generateHistoryUUID(),
+		EventType:                 eventType,
+		PreviousFingerprintPrefix: prevFingerprintPrefix,
+		NewFingerprintPrefix:      newFingerprintPrefix,
+		PreviousStatus:            prevStatus,
+		NewStatus:                 newStatus,
+		Source:                    source,
+		LastError:                 lastError,
+	}
+	if err := s.db.Create(entry).Error; err != nil {
+		// Non-fatal — history is observability-only. Log at warn and continue.
+		// Do not use the logger package here to avoid import cycles; fmt suffices.
+		_ = fmt.Sprintf("[SECURITY] Failed to append encryption key state history: %v", err)
+	}
+}
+
+func generateHistoryUUID() (id [16]byte) {
+	// crypto/rand-backed UUID v4
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return id
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	copy(id[:], b)
+	return id
 }

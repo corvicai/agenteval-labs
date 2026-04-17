@@ -44,6 +44,7 @@
     <!-- Left Sidebar with Tabs -->
     <LeftSidebar
       :question-sets="questionSets"
+      :shared-question-sets="props.sharedQuestionSets"
       :current-question-set="currentQuestionSet"
       :agents="props.agents"
       :running-question-set-id="wsState.runningQuestionSetId"
@@ -82,6 +83,26 @@
         >
           🧪 Retry Failed Evaluations
           <span class="btn-inline-count">{{ failedEvaluatorRetryCount }}</span>
+        </button>
+        <button
+          v-if="incompletePrimaryRetryCount > 0"
+          class="btn btn-secondary btn-retry-incomplete"
+          @click="retryIncompletePrimaryResults"
+          :disabled="!canRetryIncompletePrimary"
+          :title="retryIncompletePrimaryTitle"
+        >
+          🔄 Retry Missing &amp; Failed
+          <span class="btn-inline-count">{{ incompletePrimaryRetryCount }}</span>
+        </button>
+        <button
+          v-if="incompleteEvaluatorRetryCount > 0 && hasEnabledEvaluators"
+          class="btn btn-secondary btn-retry-incomplete btn-retry-incomplete-eval"
+          @click="retryIncompleteEvaluatorResults"
+          :disabled="!canRetryIncompleteEvaluators"
+          :title="retryIncompleteEvaluatorTitle"
+        >
+          🔄 Retry Missing Evaluations
+          <span class="btn-inline-count">{{ incompleteEvaluatorRetryCount }}</span>
         </button>
         <button
           v-if="hasEnabledEvaluators"
@@ -544,6 +565,10 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
+  sharedQuestionSets: {
+    type: Array,
+    default: () => []
+  },
   initialQuestionSetId: String
 })
 
@@ -751,6 +776,7 @@ function maybeStopRunningWhenIdle() {
 }
 
 const questionSetListSyncKey = computed(() => getQuestionSetListSyncSignature(props.questionSets))
+const sharedQuestionSetListSyncKey = computed(() => getQuestionSetListSyncSignature(props.sharedQuestionSets))
 const recentRunsSyncKey = computed(() => getRecentRunsSyncSignature(wsState.recentRuns))
 
 // Init logic for Question Set
@@ -761,6 +787,12 @@ watch(questionSetListSyncKey, () => {
     if (nextSets.length > 0) {
       initQuestionSet(nextSets)
     }
+    return
+  }
+
+  // If the current QS is a shared one, don't look it up in own question sets.
+  // A separate watcher (sharedQuestionSetListSyncKey) handles shared QS updates.
+  if (currentQuestionSet.value._shared) {
     return
   }
 
@@ -776,6 +808,26 @@ watch(questionSetListSyncKey, () => {
 
   currentQuestionSet.value = null
 }, { immediate: true })
+
+// Keep shared QS in sync when the shared sets list is updated by the server
+// (e.g. owner renames the QS or adds questions).
+watch(sharedQuestionSetListSyncKey, () => {
+  const sharedSets = Array.isArray(props.sharedQuestionSets) ? props.sharedQuestionSets : []
+
+  if (!currentQuestionSet.value?._shared) return
+
+  const updated = sharedSets.find(s => s.id === currentQuestionSet.value.id)
+  if (updated) {
+    const merged = mergeQuestionSetForUI({ ...updated, _shared: true }, currentQuestionSet.value)
+    if (getQuestionSetSyncSignature(merged) !== getQuestionSetSyncSignature(currentQuestionSet.value)) {
+      currentQuestionSet.value = merged
+    }
+    return
+  }
+
+  // Shared QS no longer in the list — access was likely revoked.
+  currentQuestionSet.value = null
+})
 
 // Watch for parent-driven selection changes
 watch(() => props.initialQuestionSetId, (newId) => {
@@ -805,10 +857,17 @@ watch(() => props.workspaceId, (newId) => {
 })
 
 function initQuestionSet(sets) {
+    const sharedSets = Array.isArray(props.sharedQuestionSets) ? props.sharedQuestionSets : []
+
     if (props.initialQuestionSetId) {
         const found = sets.find(s => s.id === props.initialQuestionSetId)
         if (found) {
             currentQuestionSet.value = mergeQuestionSetForUI(found, currentQuestionSet.value)
+            return
+        }
+        const foundShared = sharedSets.find(s => s.id === props.initialQuestionSetId)
+        if (foundShared) {
+            currentQuestionSet.value = mergeQuestionSetForUI({ ...foundShared, _shared: true }, currentQuestionSet.value)
             return
         }
     }
@@ -818,6 +877,11 @@ function initQuestionSet(sets) {
         const found = sets.find(s => s.id === lastId)
         if (found) {
             currentQuestionSet.value = mergeQuestionSetForUI(found, currentQuestionSet.value)
+            return
+        }
+        const foundShared = sharedSets.find(s => s.id === lastId)
+        if (foundShared) {
+            currentQuestionSet.value = mergeQuestionSetForUI({ ...foundShared, _shared: true }, currentQuestionSet.value)
             return
         }
     }
@@ -1241,9 +1305,35 @@ const progressEtaText = computed(() => {
 })
 
 const mergedAgents = computed(() => {
-  if (!props.agents || props.agents.length === 0) return []
-  
   const qs = currentQuestionSet.value
+
+  // For shared QSs, use the owner's agents (redacted, sent by backend in
+  // owner_agents). The collaborator's own agents are irrelevant here.
+  if (qs?._shared) {
+    const ownerAgents = Array.isArray(qs.owner_agents) ? qs.owner_agents : []
+    if (ownerAgents.length === 0) return []
+
+    // Apply QS-level overrides (enabled/position) if present.
+    const overrideMap = {}
+    if (Array.isArray(qs.agents)) {
+      qs.agents.forEach((row) => {
+        const aid = row.agent_id || row.agentID || row.id
+        if (aid) overrideMap[aid] = row
+      })
+    }
+
+    return ownerAgents.map((a) => {
+      const override = overrideMap[a.id]
+      if (!override) return { ...a, enabled: false }
+      return {
+        ...a,
+        enabled: override.enabled !== false,
+        position: override.position !== undefined ? override.position : a.position,
+      }
+    })
+  }
+
+  if (!props.agents || props.agents.length === 0) return []
   if (!qs) return props.agents
 
   if (!qs.agents || !Array.isArray(qs.agents) || qs.agents.length === 0) {
@@ -1878,7 +1968,10 @@ const {
   retryQuestionForEvaluators,
   retryFailedPrimaryResults,
   retryFailedEvaluatorResults,
+  retryIncompletePrimaryResults,
+  retryIncompleteEvaluatorResults,
   getFailedRetryTargets,
+  getIncompleteRetryTargets,
   getQuestionEvaluatorTargets,
   onValidation,
   onRetry
@@ -1927,12 +2020,26 @@ const failedPrimaryRetryCount = computed(() => failedPrimaryRetryTargets.value.l
 const failedEvaluatorRetryTargets = computed(() => getFailedRetryTargets('evaluator'))
 const failedEvaluatorRetryCount = computed(() => failedEvaluatorRetryTargets.value.length)
 
+const incompletePrimaryRetryTargets = computed(() => getIncompleteRetryTargets('primary'))
+const incompletePrimaryRetryCount = computed(() => incompletePrimaryRetryTargets.value.length)
+
+const incompleteEvaluatorRetryTargets = computed(() => getIncompleteRetryTargets('evaluator'))
+const incompleteEvaluatorRetryCount = computed(() => incompleteEvaluatorRetryTargets.value.length)
+
 const canRetryFailedPrimary = computed(() => {
   return !!currentRun.value?.id && failedPrimaryRetryCount.value > 0 && !isRunning.value
 })
 
 const canRetryFailedEvaluators = computed(() => {
   return !!currentRun.value?.id && failedEvaluatorRetryCount.value > 0 && !isRunning.value
+})
+
+const canRetryIncompletePrimary = computed(() => {
+  return !!currentRun.value?.id && incompletePrimaryRetryCount.value > 0 && !isRunning.value
+})
+
+const canRetryIncompleteEvaluators = computed(() => {
+  return !!currentRun.value?.id && incompleteEvaluatorRetryCount.value > 0 && !isRunning.value
 })
 
 const retryFailedPrimaryTitle = computed(() => {
@@ -1945,6 +2052,20 @@ const retryFailedEvaluatorTitle = computed(() => {
   if (!currentRun.value?.id) return 'No run available to retry'
   if (isRunning.value) return 'Wait for the current run or retry activity to finish'
   return `Retry ${failedEvaluatorRetryCount.value} failed evaluator result${failedEvaluatorRetryCount.value === 1 ? '' : 's'}`
+})
+
+const retryIncompletePrimaryTitle = computed(() => {
+  if (!currentRun.value?.id) return 'No run available to retry'
+  if (isRunning.value) return 'Wait for the current run or retry activity to finish'
+  const c = incompletePrimaryRetryCount.value
+  return `Retry ${c} missing or failed agent result${c === 1 ? '' : 's'}`
+})
+
+const retryIncompleteEvaluatorTitle = computed(() => {
+  if (!currentRun.value?.id) return 'No run available to retry'
+  if (isRunning.value) return 'Wait for the current run or retry activity to finish'
+  const c = incompleteEvaluatorRetryCount.value
+  return `Retry ${c} missing or failed evaluator result${c === 1 ? '' : 's'}`
 })
 
 function getQuestionEvaluatorRetryCount(questionId) {
@@ -2041,11 +2162,65 @@ onMounted(async () => {
   })
 })
 
-watch(() => wsState.isConnected, async (connected) => {
-  if (!connected) return
+// Plan 24 Camada 3 — after restoreActiveRun, patch in any run results that
+// arrived during the disconnect but weren't covered by the event buffer.
+// Uses REQ_GET_RUN_PROGRESS with the stored progress cursor so we only fetch
+// the delta (not the entire result set).
+async function reconcileRunProgressDelta(runId) {
+  if (!runId || !isRunning.value) return
+  const sinceTs = wsStore.getLastProgressTs(runId)
+  // Only call if we have a cursor; without one we'd duplicate whatever
+  // restoreActiveRun already loaded.
+  if (!sinceTs) return
+  try {
+    const resp = await wsStore.getRunProgress(runId, sinceTs)
+    const deltaResults = Array.isArray(resp?.results_since) ? resp.results_since : []
+    if (deltaResults.length === 0) return
+    let merged = 0
+    for (const r of deltaResults) {
+      const agentId = r.agent_id
+      const questionId = r.question_id
+      if (!agentId || !questionId) continue
+      if (!runResults.value[agentId]) runResults.value[agentId] = {}
+      const existing = runResults.value[agentId][questionId]
+      // Skip if already resolved (non-loading with answer/error)
+      if (existing && !existing.loading && (existing.answer || existing.error)) continue
+      runResults.value[agentId] = {
+        ...runResults.value[agentId],
+        [questionId]: {
+          id: r.id,
+          loading: false,
+          success: r.status === 'success',
+          answer: r.answer || '',
+          error: r.error || '',
+          duration: (r.duration_ms || 0) / 1000,
+          timestamp: r.created_at || new Date().toISOString(),
+          evaluations: r.evaluations || [],
+          metadata: r.metadata || null,
+          targetRunResultId: null
+        }
+      }
+      merged++
+    }
+    if (merged > 0) {
+      console.log(`[Arena] reconcileRunProgressDelta: merged ${merged} delta result(s) for run ${runId}`)
+    }
+  } catch (e) {
+    // Non-fatal: run will still render with whatever was loaded by restoreActiveRun
+    console.warn('[Arena] reconcileRunProgressDelta failed:', e?.message || e)
+  }
+}
+
+// Watch isSynced (not isConnected) so we only attempt state restoration after
+// syncState() has finished populating recentRuns, agents, and questionSets.
+// Watching isConnected caused a race where restoreActiveRun read stale data.
+watch(() => wsState.isSynced, async (synced) => {
+  if (!synced) return
   const activeRunId = localStorage.getItem('activeRunId')
   if (activeRunId) {
     await restoreActiveRun(activeRunId)
+    // Plan 24 Camada 3: patch in delta results missed during disconnect
+    await reconcileRunProgressDelta(activeRunId)
   } else if (currentQuestionSet.value?.id && !isRunning.value) {
     const questionSetId = String(currentQuestionSet.value.id)
     const latestRunId = String(getRecentRunIdForQS(questionSetId) || '')

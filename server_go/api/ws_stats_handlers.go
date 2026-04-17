@@ -133,7 +133,8 @@ func (h *Hub) handleGetWorkspaceStats(c *Connection, env models.Envelope) {
 
 func (h *Hub) handleGetOrgStats(c *Connection, env models.Envelope) {
 	var req models.GetOrgStatsPayload
-	json.Unmarshal([]byte(env.Payload), &req) // Ignore error, use default force=false
+	// Optional payload: missing/invalid yields zero-value with force=false.
+	_ = json.Unmarshal([]byte(env.Payload), &req) //nolint:errcheck // payload is optional
 
 	// Need orgID from connection
 	orgID := c.OrgID
@@ -186,7 +187,8 @@ func (h *Hub) handleGetOrgStats(c *Connection, env models.Envelope) {
 
 func (h *Hub) handleGetGlobalStats(c *Connection, env models.Envelope) {
 	var req models.GetGlobalStatsPayload
-	json.Unmarshal([]byte(env.Payload), &req)
+	// Optional payload: missing/invalid yields zero-value with force=false.
+	_ = json.Unmarshal([]byte(env.Payload), &req) //nolint:errcheck // payload is optional
 
 	// Admin check
 	var user models.User
