@@ -41,6 +41,12 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 		h.handleGetRetryStatus(c, env)
 	case ReqGetMissedEvents:
 		h.handleGetMissedEvents(c, env)
+	case ReqPing:
+		h.handlePing(c, env)
+	case ReqGetRunProgress:
+		h.handleGetRunProgress(c, env)
+	case ReqGetPendingResponse:
+		h.handleGetPendingResponse(c, env)
 
 	// Dev/Auth handlers
 	case ReqDevGetManagers:
