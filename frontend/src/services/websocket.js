@@ -13,6 +13,10 @@ class WebSocketService {
         this.suppressNextReconnect = false
         this._iapTokenPromise = null
         this.lastDisconnectReason = null
+        // Cursor for REQ_GET_MISSED_EVENTS. Stamped by the server on every
+        // broadcast event; kept in memory only (not persisted) so a fresh
+        // tab always falls back to REQ_SYNC_STATE.
+        this.lastEventId = null
     }
 
     static REQUEST_TIMEOUTS = {
@@ -182,6 +186,12 @@ class WebSocketService {
             this.connectionPromise = null
         }
 
+        // Workspace or token switch invalidates the replay cursor — events
+        // from the previous session don't apply here.
+        if (this.workspaceId && this.workspaceId !== workspaceId) {
+            this.lastEventId = null
+        }
+
         this.workspaceId = workspaceId
         this.token = newToken
         this.reconnectAttempts = 0
@@ -318,6 +328,12 @@ class WebSocketService {
                 } catch (e) { }
             }
 
+            // Track the latest broadcast event so we can ask for missed ones
+            // after a transient disconnect (REQ_GET_MISSED_EVENTS).
+            if (envelope.event_id) {
+                this.lastEventId = envelope.event_id
+            }
+
             // Check for pending request
             if (envelope.correlation_id && this.pendingRequests.has(envelope.correlation_id)) {
                 const { resolve, reject, timeout } = this.pendingRequests.get(envelope.correlation_id)
@@ -343,6 +359,32 @@ class WebSocketService {
         } catch (e) {
             console.error('[WS] Parse error:', e)
         }
+    }
+
+    /**
+     * Replay broadcast events the client missed while disconnected. Called
+     * on reconnect BEFORE REQ_SYNC_STATE so the UI catches up on task
+     * progress without a heavy full snapshot.
+     *
+     * Returns the DATA_MISSED_EVENTS payload:
+     *   { needs_full_sync: boolean, events?: Envelope[], last_event_id?: string }
+     */
+    async getMissedEvents(sinceEventId) {
+        if (!sinceEventId) {
+            return { needs_full_sync: true, events: [] }
+        }
+        return this.request('REQ_GET_MISSED_EVENTS', { since_event_id: sinceEventId })
+    }
+
+    /**
+     * Re-inject a replayed envelope into the normal message pipeline so all
+     * listeners handle it identically to a fresh delivery. Called by the
+     * store after a successful getMissedEvents() round-trip.
+     */
+    replayEvent(envelope) {
+        if (!envelope || !envelope.type) return
+        // _handleMessage parses strings; we already have an object, so wrap.
+        this._handleMessage({ data: JSON.stringify(envelope) })
     }
 
     _attemptReconnect() {
@@ -376,6 +418,11 @@ class WebSocketService {
         }
         this.workspaceId = null
         this.token = null
+        // Drop the replay cursor so a fresh login never attempts to resume
+        // from a previous user's session.
+        if (reason === 'logout' || reason === 'session_expired' || reason === 'app-unmount') {
+            this.lastEventId = null
+        }
     }
 
     async authenticateWithFirebase(token) {
@@ -641,6 +688,33 @@ class WebSocketService {
     revokeCollaborator(questionSetId, userId) {
         return this.request('REQ_REVOKE_QS_COLLABORATOR', {
             question_set_id: questionSetId,
+            user_id: userId
+        })
+    }
+
+    // ---- Collaborative Agents (Plano 28) ----
+
+    createAgentCollabInvite(agentId, invitedEmail = null, role = 'user') {
+        const payload = { agent_id: agentId, role }
+        if (invitedEmail) payload.invited_email = invitedEmail
+        return this.request('REQ_CREATE_AGENT_COLLAB_INVITE', payload)
+    }
+
+    getAgentCollabInvite(token) {
+        return this.request('REQ_GET_AGENT_COLLAB_INVITE', { token })
+    }
+
+    acceptAgentCollabInvite(token) {
+        return this.request('REQ_ACCEPT_AGENT_COLLAB_INVITE', { token })
+    }
+
+    listAgentCollaborators(agentId) {
+        return this.request('REQ_LIST_AGENT_COLLABORATORS', { agent_id: agentId })
+    }
+
+    revokeAgentCollaborator(agentId, userId) {
+        return this.request('REQ_REVOKE_AGENT_COLLABORATOR', {
+            agent_id: agentId,
             user_id: userId
         })
     }

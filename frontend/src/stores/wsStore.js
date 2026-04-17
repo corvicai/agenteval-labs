@@ -3,6 +3,7 @@ import wsService from '../services/websocket'
 
 const state = reactive({
     agents: [],
+    sharedAgents: [],
     questionSets: [],
     sharedQuestionSets: [],
     recentRuns: [],
@@ -57,6 +58,7 @@ export function useWSStore() {
         state.activeRunHydration = null
         if (reason === 'logout' || reason === 'app-unmount') {
             state.agents = []
+            state.sharedAgents = []
             state.questionSets = []
             state.sharedQuestionSets = []
             state.recentRuns = []
@@ -77,6 +79,7 @@ export function useWSStore() {
             console.log('[WS Store] Sync state received:', data)
             if (data && (data.agents || data.question_sets)) {
                 const nextAgents = data.agents || []
+                const nextSharedAgents = data.shared_agents || []
                 const nextQuestionSets = data.question_sets || []
                 const nextSharedQuestionSets = data.shared_question_sets || []
                 const nextRuns = data.recent_runs || []
@@ -84,6 +87,9 @@ export function useWSStore() {
 
                 if (shouldReplaceList(state.agents, nextAgents)) {
                     state.agents = nextAgents
+                }
+                if (shouldReplaceList(state.sharedAgents, nextSharedAgents)) {
+                    state.sharedAgents = nextSharedAgents
                 }
                 if (shouldReplaceList(state.questionSets, nextQuestionSets)) {
                     state.questionSets = nextQuestionSets
@@ -134,6 +140,20 @@ export function useWSStore() {
                 }
                 break
 
+            case 'shared_agents':
+                // Fan-out of an owner's agent update/delete to collaborators
+                // with redacted config. Keep sharedAgents in sync so the
+                // collaborator UI reflects the latest owner-facing state.
+                if (action === 'updated') {
+                    const idx = state.sharedAgents.findIndex(a => a.id === data.id)
+                    if (idx !== -1) {
+                        state.sharedAgents[idx] = { ...state.sharedAgents[idx], ...data }
+                    }
+                } else if (action === 'deleted') {
+                    state.sharedAgents = state.sharedAgents.filter(a => a.id !== data.id)
+                }
+                break
+
             case 'question_sets':
                 if (action === 'created') state.questionSets.unshift(data)
                 else if (action === 'updated') {
@@ -161,10 +181,49 @@ export function useWSStore() {
         }
     }
 
+    // Attempt to replay events missed during a transient disconnect. Returns
+    // true when the buffer served a clean delta and a full sync is NOT
+    // required, false otherwise (cold boot, workspace switch, server
+    // restart, TTL expiry, or any error).
+    const tryReplayMissedEvents = async () => {
+        const cursor = wsService.lastEventId
+        if (!cursor) return false
+        try {
+            const resp = await wsService.getMissedEvents(cursor)
+            if (!resp || resp.needs_full_sync) {
+                console.log('[WS Store] Replay skipped, server requests full sync')
+                return false
+            }
+            const events = Array.isArray(resp.events) ? resp.events : []
+            if (events.length === 0) {
+                console.log('[WS Store] Replay empty — already in sync')
+            } else {
+                console.log(`[WS Store] Replaying ${events.length} missed event(s)`)
+                for (const envelope of events) {
+                    wsService.replayEvent(envelope)
+                }
+            }
+            if (resp.last_event_id) {
+                wsService.lastEventId = resp.last_event_id
+            }
+            return true
+        } catch (e) {
+            console.warn('[WS Store] Replay request failed, falling back to full sync:', e?.message || e)
+            return false
+        }
+    }
+
     // Setup listeners once
     if (wsService.listeners.size === 0) {
-        wsService.on('connected', () => {
+        wsService.on('connected', async () => {
             state.isConnected = true
+            const resumed = await tryReplayMissedEvents()
+            if (resumed) {
+                // Live deltas were applied on top of the existing store —
+                // mark as synced so watchers waiting on isSynced wake up.
+                state.isSynced = true
+                return
+            }
             syncState()
         })
 
@@ -175,6 +234,7 @@ export function useWSStore() {
             const reason = payload?.disconnectReason || 'unknown'
             if (reason === 'logout' || reason === 'app-unmount') {
                 state.agents = []
+                state.sharedAgents = []
                 state.questionSets = []
                 state.sharedQuestionSets = []
                 state.recentRuns = []
@@ -186,12 +246,22 @@ export function useWSStore() {
 
         wsService.on('EVT_DATA_CHANGED', handleDataChanged)
 
-        // Remove the revoked shared QS from the list immediately.
+        // Remove the revoked shared QS / Agent from the corresponding list.
+        // The payload carries either `question_set_id` (QS collab revoke) or
+        // `agent_id` + `resource: "agents"` (agent collab revoke / agent
+        // deleted while shared).
         wsService.on('EVT_COLLABORATOR_REVOKED', (payload) => {
             const qsId = payload?.question_set_id
-            if (!qsId) return
-            state.sharedQuestionSets = state.sharedQuestionSets.filter(q => q.id !== qsId)
-            console.log('[WS Store] Collaborator revoked — removed shared QS:', qsId)
+            if (qsId) {
+                state.sharedQuestionSets = state.sharedQuestionSets.filter(q => q.id !== qsId)
+                console.log('[WS Store] Collaborator revoked — removed shared QS:', qsId)
+                return
+            }
+            const agentId = payload?.agent_id
+            if (agentId && (payload?.resource === 'agents' || payload?.resource === 'shared_agents')) {
+                state.sharedAgents = state.sharedAgents.filter(a => a.id !== agentId)
+                console.log('[WS Store] Collaborator revoked — removed shared agent:', agentId)
+            }
         })
 
         // Optional: handle specific run events for granular updates

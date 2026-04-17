@@ -8,10 +8,32 @@ import (
 )
 
 // Envelope represents the standard message format
+//
+// EventID is set by the server on broadcast events so clients can track the
+// last event they observed and request missed events (REQ_GET_MISSED_EVENTS)
+// after a transient reconnect. It is omitted on request/response envelopes.
 type Envelope struct {
 	Type          string          `json:"type"`
 	CorrelationID string          `json:"correlation_id"`
 	Payload       json.RawMessage `json:"payload"`
+	EventID       string          `json:"event_id,omitempty"`
+}
+
+// GetMissedEventsPayload is the request payload for REQ_GET_MISSED_EVENTS.
+type GetMissedEventsPayload struct {
+	SinceEventID string `json:"since_event_id"`
+}
+
+// MissedEventsResponse is the DATA_MISSED_EVENTS response payload.
+//
+// When NeedsFullSync is true, the server cannot resume from the given event
+// ID (server restart, unknown nonce, or the event rotated out of the buffer)
+// and the client must fall back to REQ_SYNC_STATE. Otherwise Events contains
+// the ordered envelopes the client missed, already audience-filtered.
+type MissedEventsResponse struct {
+	NeedsFullSync bool              `json:"needs_full_sync"`
+	Events        []json.RawMessage `json:"events,omitempty"`
+	LastEventID   string            `json:"last_event_id,omitempty"`
 }
 
 // StartRunPayload represents the payload for CMD_START_RUN
@@ -143,16 +165,30 @@ type SharedQuestionSet struct {
 	OwnerWorkspaceID uuid.UUID `json:"owner_workspace_id"`
 	Role             string    `json:"role"`
 	AcceptedAt       time.Time `json:"accepted_at"`
+	// OwnerAgents are the owner's workspace agents sent with sensitive fields
+	// redacted. Collaborators use these to select agents when starting a run.
+	OwnerAgents []Agent `json:"owner_agents,omitempty"`
+}
+
+// SharedAgent is an Agent owned by another user that the current user has
+// been granted use-only access to (Plano 28). Config is always redacted —
+// secrets never leave the backend.
+type SharedAgent struct {
+	Agent
+	OwnerUserID uuid.UUID `json:"owner_user_id"`
+	OwnerName   string    `json:"owner_name"`
+	AcceptedAt  time.Time `json:"accepted_at"`
 }
 
 // SyncStatePayload response payload
 type SyncStatePayload struct {
-	Agents             []Agent              `json:"agents"`
-	QuestionSets       []QuestionSet        `json:"question_sets"`
-	SharedQuestionSets []SharedQuestionSet  `json:"shared_question_sets,omitempty"`
-	RecentRuns         []Run                `json:"recent_runs"`
-	ActiveRunHydration *ActiveRunHydration  `json:"active_run_hydration,omitempty"`
-	Warnings           []string             `json:"warnings,omitempty"`
+	Agents             []Agent             `json:"agents"`
+	SharedAgents       []SharedAgent       `json:"shared_agents,omitempty"`
+	QuestionSets       []QuestionSet       `json:"question_sets"`
+	SharedQuestionSets []SharedQuestionSet `json:"shared_question_sets,omitempty"`
+	RecentRuns         []Run               `json:"recent_runs"`
+	ActiveRunHydration *ActiveRunHydration `json:"active_run_hydration,omitempty"`
+	Warnings           []string            `json:"warnings,omitempty"`
 }
 
 type AdminFilterPayload struct {
