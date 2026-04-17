@@ -648,6 +648,109 @@ export function useArenaRunExecution(options = {}) {
     await retryFailedResults('evaluator')
   }
 
+  // Returns all targets that need re-running: error OR never run (no result yet).
+  // For primary: any question/agent combo with no result or an error result.
+  // For evaluator: any question that has a primary answer but no evaluator result (or error).
+  function getIncompleteRetryTargets(kind = 'primary') {
+    if (!currentRun.value) return []
+
+    const flatQuestions = typeof getFlatQuestions === 'function' ? getFlatQuestions() : []
+    const enabledAgents = getRetryEligibleAgents(kind)
+    const targets = []
+
+    if (kind !== 'evaluator') {
+      flatQuestions.forEach((question) => {
+        const qIdStr = String(question.id)
+        enabledAgents.forEach((agent) => {
+          if (isEvaluatorAgentObject(agent)) return
+          const result = runResults.value[agent.id]?.[qIdStr]
+          if (result && !result.error) return  // completed successfully — skip
+          if (result?.loading || result?.queued) return  // in-flight — skip
+          targets.push({ agentId: agent.id, questionId: qIdStr, resultKey: qIdStr, targetAgentId: '' })
+        })
+      })
+      return targets
+    }
+
+    // Evaluator: questions with primary answer but missing or errored evaluator result
+    const primaryAgents = getRetryEligibleAgents('primary')
+    const deduped = new Map()
+
+    enabledAgents.forEach((agent) => {
+      if (!isEvaluatorAgentObject(agent)) return
+      const configuredTargetAgentId = String(agent.config?.target_agent_id || '')
+      const agentResults = runResults.value[agent.id] || {}
+
+      flatQuestions.forEach((question) => {
+        const qIdStr = String(question.id)
+
+        const applicablePrimaries = primaryAgents.filter((primary) => {
+          if (isEvaluatorAgentObject(primary)) return false
+          if (configuredTargetAgentId && primary.id !== configuredTargetAgentId) return false
+          const primaryResult = runResults.value[primary.id]?.[qIdStr]
+          return primaryResult?.answer && !primaryResult.error && !primaryResult.loading
+        })
+
+        applicablePrimaries.forEach((primary) => {
+          const canonicalResultKey = `eval-${primary.id}-${qIdStr}`
+          const existingEvalResult = agentResults[canonicalResultKey]
+          if (existingEvalResult && !existingEvalResult.error) return  // eval done — skip
+          if (existingEvalResult?.loading || existingEvalResult?.queued) return  // in-flight — skip
+          deduped.set(`${agent.id}::${canonicalResultKey}`, {
+            agentId: agent.id,
+            questionId: qIdStr,
+            resultKey: canonicalResultKey,
+            targetAgentId: primary.id
+          })
+        })
+      })
+    })
+
+    return [...deduped.values()]
+  }
+
+  async function retryIncompleteResults(kind = 'primary') {
+    if (!currentRun.value) {
+      showAlert('No active run. Please start a benchmark first.')
+      return
+    }
+
+    const targets = getIncompleteRetryTargets(kind)
+    if (targets.length === 0) {
+      showAlert(kind === 'evaluator'
+        ? 'No missing or failed evaluator results found.'
+        : 'No missing or failed results found.')
+      return
+    }
+
+    const batchStamp = Date.now()
+    const localRetryIds = new Map()
+
+    targets.forEach((target, index) => {
+      const localRetryId = `local-${target.agentId}-${target.resultKey}-${batchStamp}-${index}`
+      const targetKey = `${target.agentId}::${target.resultKey}::${target.targetAgentId || ''}`
+      localRetryIds.set(targetKey, localRetryId)
+      markLocalRetryPending(target.agentId, target.questionId, localRetryId, { resultKey: target.resultKey })
+    })
+
+    for (const target of targets) {
+      const targetKey = `${target.agentId}::${target.resultKey}::${target.targetAgentId || ''}`
+      const localRetryId = localRetryIds.get(targetKey)
+      await rerunQuestion(target.agentId, target.questionId, localRetryId, {
+        resultKey: target.resultKey,
+        targetAgentId: target.targetAgentId
+      })
+    }
+  }
+
+  async function retryIncompletePrimaryResults() {
+    await retryIncompleteResults('primary')
+  }
+
+  async function retryIncompleteEvaluatorResults() {
+    await retryIncompleteResults('evaluator')
+  }
+
   async function rateResult(resultId, rating) {
     try {
       return await wsService.createEvaluation(resultId, rating)
@@ -699,6 +802,9 @@ export function useArenaRunExecution(options = {}) {
     retryFailedPrimaryResults,
     retryFailedEvaluatorResults,
     getFailedRetryTargets,
+    getIncompleteRetryTargets,
+    retryIncompletePrimaryResults,
+    retryIncompleteEvaluatorResults,
     getQuestionEvaluatorTargets,
     onValidation,
     onRetry

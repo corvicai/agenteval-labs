@@ -63,7 +63,7 @@
         </div>
         <div class="tab-panel-footer">
           <div class="sidebar-action-grid">
-            <button class="btn btn-secondary btn-sm btn-full-width sidebar-action-btn" @click="handleEditQuestions" :disabled="!currentQuestionSet || isCurrentQSShared">
+            <button class="btn btn-secondary btn-sm btn-full-width sidebar-action-btn" @click="handleEditQuestions" :disabled="!currentQuestionSet">
               ✏️ Edit
             </button>
             <button class="btn btn-secondary btn-sm btn-full-width sidebar-action-btn" @click="handleCloneQuestionSet" :disabled="!currentQuestionSet || !workspaceId || isCurrentQSShared">
@@ -71,14 +71,6 @@
             </button>
             <button class="btn btn-secondary btn-sm btn-full-width sidebar-action-btn" @click="openTransferModal" :disabled="!currentQuestionSet || isCurrentQSShared">
               🔗 Share
-            </button>
-            <button
-              class="btn btn-secondary btn-sm btn-full-width sidebar-action-btn"
-              @click="openCollabInviteModal"
-              :disabled="!currentQuestionSet || isCurrentQSShared"
-              title="Invite collaborator to work on this question set together"
-            >
-              👥 Collab
             </button>
             <button
               class="btn btn-danger btn-sm btn-full-width sidebar-action-btn"
@@ -146,13 +138,6 @@
       @close="closeTransferModal"
     />
 
-    <QuestionSetCollabInviteModal
-      v-if="showCollabInviteModal && currentQuestionSet"
-      :question-set-id="currentQuestionSet.id"
-      :question-set-name="currentQuestionSet.name"
-      @close="showCollabInviteModal = false"
-    />
-
     <ConfirmDialog
       v-model:visible="showDeleteQuestionSetConfirm"
       title="Delete Question Set"
@@ -169,7 +154,6 @@
 import { computed, ref } from 'vue'
 import QuestionEditorModal from './QuestionEditorModal.vue'
 import QuestionSetTransferModal from './QuestionSetTransferModal.vue'
-import QuestionSetCollabInviteModal from './QuestionSetCollabInviteModal.vue'
 import ConfirmDialog from './ConfirmDialog.vue'
 import { capturePostHogEvent } from '../services/posthog.js'
 import wsService from '../services/websocket.js'
@@ -204,9 +188,16 @@ const emit = defineEmits([
 const activeTab = ref('questionSets')
 const showQuestionEditor = ref(false)
 const showTransferModal = ref(false)
+
 const previousQuestionSet = ref(null)
 const showDeleteQuestionSetConfirm = ref(false)
 const isDeletingQuestionSet = ref(false)
+
+// True when the currently selected QS is owned by another user (shared).
+const isCurrentQSShared = computed(() => {
+  if (!props.currentQuestionSet) return false
+  return !!props.currentQuestionSet._shared
+})
 
 const deleteQuestionSetMessage = computed(() => {
   const name = props.currentQuestionSet?.name || 'this question set'
@@ -723,5 +714,44 @@ function onQuestionSetSaved(updated) {
   .sidebar-action-btn-wide {
     grid-column: auto;
   }
+}
+
+/* Question set group labels */
+.qs-group-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #8A94A6;
+  padding: 10px 4px 6px;
+}
+
+.qs-group-shared {
+  margin-top: 8px;
+}
+
+/* Shared QS items get a slightly different accent */
+.qs-item-shared {
+  border-color: #C7D8F0;
+  background: #F0F5FB;
+}
+
+.qs-item-shared.active {
+  background: #E0EDFF;
+  border-color: #5B9CF6;
+}
+
+/* Small badge showing the owner name */
+.qs-owner-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: #2563EB;
+  background: #DBEAFE;
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

@@ -1027,6 +1027,34 @@
   cursor: not-allowed;
 }
 
+.btn-retry-incomplete {
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  color: #166534;
+}
+
+.btn-retry-incomplete:hover:not(:disabled) {
+  background: #dcfce7;
+  border-color: #4ade80;
+}
+
+.btn-retry-incomplete-eval {
+  background: #f5f3ff;
+  border-color: #c4b5fd;
+  color: #5b21b6;
+}
+
+.btn-retry-incomplete-eval:hover:not(:disabled) {
+  background: #ede9fe;
+  border-color: #a78bfa;
+}
+
+.btn-retry-incomplete:disabled,
+.btn-retry-incomplete-eval:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .btn-inline-count {
   display: inline-flex;
   align-items: center;
