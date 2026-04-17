@@ -115,7 +115,7 @@ func (h *RunHandler) StartRun(c echo.Context) error {
 	for _, cat := range qsData.Categories {
 		totalTasks += len(cat.Questions)
 	}
-	totalTasks = totalTasks * len(agents)
+	totalTasks *= len(agents)
 
 	// Create run record
 	var createdByUserID *uuid.UUID

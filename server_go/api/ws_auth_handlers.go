@@ -7,6 +7,7 @@ import (
 
 	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/middleware"
+	"benchmarking-platform/internal/validation"
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
@@ -244,7 +245,21 @@ func (h *Hub) handleWsRegister(c *Connection, env models.Envelope) {
 		}
 	}
 
-	// 2. Validate Email Uniqueness
+	// 2. Validate inputs
+	if err := validation.ValidateUserName(req.Name); err != nil {
+		c.SendError(env.CorrelationID, err.Error())
+		return
+	}
+	if err := validation.ValidateEmail(req.Email); err != nil {
+		c.SendError(env.CorrelationID, err.Error())
+		return
+	}
+	if err := validation.ValidatePassword(req.Password); err != nil {
+		c.SendError(env.CorrelationID, err.Error())
+		return
+	}
+
+	// 3. Validate Email Uniqueness
 	var existing models.User
 	if err := h.db.Where("email = ?", req.Email).First(&existing).Error; err == nil {
 		c.SendError(env.CorrelationID, "email already registered")
@@ -269,7 +284,8 @@ func (h *Hub) handleWsRegister(c *Connection, env models.Envelope) {
 	// 3. Handle Organization Linking/Creation
 	var orgID uuid.UUID
 
-	if role == "manager" && req.InviteCode == "" {
+	switch {
+	case role == "manager" && req.InviteCode == "":
 		// Public Manager Registration (New Org)
 		if req.OrganizationName == "" {
 			tx.Rollback()
@@ -288,7 +304,7 @@ func (h *Hub) handleWsRegister(c *Connection, env models.Envelope) {
 			return
 		}
 		orgID = org.ID
-	} else if req.InviteCode != "" {
+	case req.InviteCode != "":
 		// Registration via Invite
 		if invite.IsNewOrg {
 			if req.OrganizationName == "" {
@@ -320,7 +336,7 @@ func (h *Hub) handleWsRegister(c *Connection, env models.Envelope) {
 			orgID = *invite.OrganizationID
 			role = invite.Role
 		}
-	} else {
+	default:
 		tx.Rollback()
 		c.SendError(env.CorrelationID, "common users must use an invite code")
 		return
@@ -707,8 +723,8 @@ func (h *Hub) handleCreateOrganization(c *Connection, env models.Envelope) {
 		return
 	}
 
-	if req.Name == "" {
-		c.SendError(env.CorrelationID, "organization name is required")
+	if err := validation.ValidateOrgName(req.Name); err != nil {
+		c.SendError(env.CorrelationID, err.Error())
 		return
 	}
 

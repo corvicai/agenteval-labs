@@ -10,6 +10,10 @@ linters:
     - ineffassign
     - unused
     - gosimple
+    - gosec     # security anti-patterns (hardcoded creds, weak rand, etc.)
+    - gocritic  # code-smell and style checks
+    - errname   # error types must end with "Error"
+    - makezero  # detect unintentionally zero-length slice appends
 
 linters-settings:
   errcheck:
@@ -38,6 +42,15 @@ linters-settings:
       # gorm soft helpers where zero-value result is acceptable.
       - (*gorm.io/gorm.Association).Find
 
+  gosec:
+    excludes:
+      # Already covered by errcheck — no need to double-report.
+      - G104
+      # Standard Go idiom: `1 << uint(i)` for exponential backoff.
+      # The retry counter is always small (≤ maxRetries ≤ 10), so no real
+      # overflow risk; the linter does not understand the invariant.
+      - G115
+
 issues:
   exclude-rules:
     # Test helpers commonly ignore teardown errors and assertion helpers.
@@ -51,3 +64,24 @@ issues:
       text: "field `db` is unused"
       linters:
         - unused
+
+    # Dev tools under cmd/ use math/rand for synthetic test-data generation
+    # (fake names, dummy passwords). Cryptographic randomness is not needed
+    # there; the tools are never deployed to production.
+    - path: ^cmd/
+      linters:
+        - gosec
+
+    # gocritic style nits in standalone CLI entry-points (exitAfterDefer,
+    # ifElseChain) are non-actionable without restructuring the entire main().
+    - path: ^cmd/
+      linters:
+        - gocritic
+
+    # G101: "REQ_CHANGE_PASSWORD" is a WebSocket message-type constant, not a
+    # credential. This is a known gosec false positive on string literals that
+    # happen to contain "PASSWORD".
+    - path: api/websocket\.go
+      text: "G101"
+      linters:
+        - gosec
