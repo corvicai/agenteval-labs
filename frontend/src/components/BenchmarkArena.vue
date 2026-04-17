@@ -2162,6 +2162,55 @@ onMounted(async () => {
   })
 })
 
+// Plan 24 Camada 3 — after restoreActiveRun, patch in any run results that
+// arrived during the disconnect but weren't covered by the event buffer.
+// Uses REQ_GET_RUN_PROGRESS with the stored progress cursor so we only fetch
+// the delta (not the entire result set).
+async function reconcileRunProgressDelta(runId) {
+  if (!runId || !isRunning.value) return
+  const sinceTs = wsStore.getLastProgressTs(runId)
+  // Only call if we have a cursor; without one we'd duplicate whatever
+  // restoreActiveRun already loaded.
+  if (!sinceTs) return
+  try {
+    const resp = await wsStore.getRunProgress(runId, sinceTs)
+    const deltaResults = Array.isArray(resp?.results_since) ? resp.results_since : []
+    if (deltaResults.length === 0) return
+    let merged = 0
+    for (const r of deltaResults) {
+      const agentId = r.agent_id
+      const questionId = r.question_id
+      if (!agentId || !questionId) continue
+      if (!runResults.value[agentId]) runResults.value[agentId] = {}
+      const existing = runResults.value[agentId][questionId]
+      // Skip if already resolved (non-loading with answer/error)
+      if (existing && !existing.loading && (existing.answer || existing.error)) continue
+      runResults.value[agentId] = {
+        ...runResults.value[agentId],
+        [questionId]: {
+          id: r.id,
+          loading: false,
+          success: r.status === 'success',
+          answer: r.answer || '',
+          error: r.error || '',
+          duration: (r.duration_ms || 0) / 1000,
+          timestamp: r.created_at || new Date().toISOString(),
+          evaluations: r.evaluations || [],
+          metadata: r.metadata || null,
+          targetRunResultId: null
+        }
+      }
+      merged++
+    }
+    if (merged > 0) {
+      console.log(`[Arena] reconcileRunProgressDelta: merged ${merged} delta result(s) for run ${runId}`)
+    }
+  } catch (e) {
+    // Non-fatal: run will still render with whatever was loaded by restoreActiveRun
+    console.warn('[Arena] reconcileRunProgressDelta failed:', e?.message || e)
+  }
+}
+
 // Watch isSynced (not isConnected) so we only attempt state restoration after
 // syncState() has finished populating recentRuns, agents, and questionSets.
 // Watching isConnected caused a race where restoreActiveRun read stale data.
@@ -2170,6 +2219,8 @@ watch(() => wsState.isSynced, async (synced) => {
   const activeRunId = localStorage.getItem('activeRunId')
   if (activeRunId) {
     await restoreActiveRun(activeRunId)
+    // Plan 24 Camada 3: patch in delta results missed during disconnect
+    await reconcileRunProgressDelta(activeRunId)
   } else if (currentQuestionSet.value?.id && !isRunning.value) {
     const questionSetId = String(currentQuestionSet.value.id)
     const latestRunId = String(getRecentRunIdForQS(questionSetId) || '')

@@ -137,6 +137,10 @@ type Agent struct {
 	Position       int           `gorm:"default:0" json:"position"`
 	MaxConcurrency int           `gorm:"default:5" json:"max_concurrency"` // Max parallel requests (default: 5)
 	CreatedAt      time.Time     `json:"created_at"`
+	// ConfigStatus is a computed-only field (never stored). Set by the sync
+	// handler when a config fails to decrypt. Frontend uses it to show a
+	// "credentials lost — please re-enter" badge.
+	ConfigStatus string `gorm:"-" json:"config_status,omitempty"`
 }
 
 type QuestionSet struct {
@@ -176,6 +180,11 @@ type RunResult struct {
 	DurationMs  int            `json:"duration_ms"`
 	Evaluations []Evaluation   `json:"evaluations,omitempty"`
 	CreatedAt   time.Time      `json:"created_at"`
+	// TargetRunResultID is a computed (non-persisted) field set by API handlers
+	// for evaluator results. It identifies the primary RunResult that this
+	// evaluator task evaluated, enabling the frontend to detect stale evaluations
+	// after a primary-answer retry.
+	TargetRunResultID *uuid.UUID `gorm:"-" json:"target_run_result_id,omitempty"`
 }
 
 type Evaluation struct {
