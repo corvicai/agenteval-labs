@@ -1,7 +1,9 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 
 	dbcompat "benchmarking-platform/internal/db"
 	"benchmarking-platform/models"
@@ -63,4 +65,47 @@ func (h *Hub) getQuestionSetAccess(db *gorm.DB, userID, questionSetID uuid.UUID)
 	default:
 		return accessEditor, qs, workspace, nil
 	}
+}
+
+// sensitiveConfigKeys are substrings that identify sensitive agent config fields.
+// Any config key whose lower-case form contains one of these is redacted.
+var sensitiveConfigKeys = []string{"token", "api_key", "secret", "password"}
+
+// redactAgentConfig returns a copy of the agent with sensitive config fields
+// replaced by a masked value ("xx****xx" or "****"). Safe to call on agents
+// from any workspace — used when collaborators (non-owners) need to see which
+// agents are available without exposing credentials.
+func redactAgentConfig(agent models.Agent) models.Agent {
+	var cfg map[string]any
+	if err := json.Unmarshal(agent.Config, &cfg); err != nil {
+		// If we can't parse the config, return an agent with empty config.
+		agent.Config = models.EncryptedJSON(`{}`)
+		return agent
+	}
+
+	redacted := make(map[string]any, len(cfg))
+	for k, v := range cfg {
+		lower := strings.ToLower(k)
+		isSensitive := false
+		for _, sk := range sensitiveConfigKeys {
+			if strings.Contains(lower, sk) {
+				isSensitive = true
+				break
+			}
+		}
+		if isSensitive {
+			if val, ok := v.(string); ok && len(val) > 4 {
+				redacted[k] = val[:2] + "****" + val[len(val)-2:]
+			} else {
+				redacted[k] = "****"
+			}
+		} else {
+			redacted[k] = v
+		}
+	}
+
+	if b, err := json.Marshal(redacted); err == nil {
+		agent.Config = models.EncryptedJSON(b)
+	}
+	return agent
 }

@@ -264,27 +264,36 @@ func (h *Hub) handleAcceptQuestionSetCollabInvite(c *Connection, env models.Enve
 		role = invite.Role
 		questionSetID = invite.QuestionSetID
 
-		// Upsert collaborator: on conflict re-activate (clear revoked_at, update accepted_at)
 		now := time.Now().UTC()
-		collab := models.QuestionSetCollaborator{
-			ID:              uuid.New(),
-			QuestionSetID:   invite.QuestionSetID,
-			UserID:          c.UserID,
-			Role:            role,
-			InvitedByUserID: invite.CreatedByUserID,
-			AcceptedAt:      &now,
-		}
 
-		if err := tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "question_set_id"}, {Name: "user_id"}},
-			DoUpdates: clause.Assignments(map[string]any{
-				"role":              role,
+		// Upsert collaborator: try to find an existing row first.
+		var existing models.QuestionSetCollaborator
+		findErr := tx.Where("question_set_id = ? AND user_id = ?", invite.QuestionSetID, c.UserID).
+			First(&existing).Error
+
+		if findErr == nil {
+			// Row exists — re-activate it.
+			if err := tx.Model(&existing).Updates(map[string]any{
+				"role":               role,
 				"invited_by_user_id": invite.CreatedByUserID,
-				"accepted_at":       now,
-				"revoked_at":        nil,
-			}),
-		}).Create(&collab).Error; err != nil {
-			return err
+				"accepted_at":        now,
+				"revoked_at":         nil,
+			}).Error; err != nil {
+				return err
+			}
+		} else {
+			// New row.
+			collab := models.QuestionSetCollaborator{
+				ID:              uuid.New(),
+				QuestionSetID:   invite.QuestionSetID,
+				UserID:          c.UserID,
+				Role:            role,
+				InvitedByUserID: invite.CreatedByUserID,
+				AcceptedAt:      &now,
+			}
+			if err := tx.Create(&collab).Error; err != nil {
+				return err
+			}
 		}
 
 		// Mark invite as accepted
@@ -475,17 +484,12 @@ func (h *Hub) handleRevokeQuestionSetCollaborator(c *Connection, env models.Enve
 	h.InvalidateAudienceCache(questionSetID)
 
 	// Notify the revoked user so their UI can remove the shared QS.
-	revokedPayload, _ := json.Marshal(models.Envelope{
-		Type: EvtCollaboratorRevoked,
-		Payload: func() json.RawMessage {
-			b, _ := json.Marshal(map[string]any{
-				"question_set_id": questionSetID.String(),
-				"user_id":         revokedUserID.String(),
-			})
-			return b
-		}(),
+	// Routed through SendEventToUser so the event lands in the replay buffer
+	// and survives a transient reconnect on the recipient side.
+	_ = h.SendEventToUser(revokedUserID, EvtCollaboratorRevoked, "", map[string]any{
+		"question_set_id": questionSetID.String(),
+		"user_id":         revokedUserID.String(),
 	})
-	h.BroadcastToUser(revokedUserID, revokedPayload)
 
 	logger.Info("[COLLAB] Owner %s revoked collaborator %s from QS %s", c.UserID, revokedUserID, questionSetID)
 	c.SendResponse(DataResponse, env.CorrelationID, map[string]any{
