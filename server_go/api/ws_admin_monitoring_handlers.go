@@ -16,6 +16,7 @@ import (
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 const adminDebugFailureSampleLimit = 8
@@ -528,4 +529,21 @@ func parseAdminRunTimestamp(raw string, fallback time.Time) time.Time {
 	}
 
 	return fallback
+}
+
+// encryptionKeyHealthForAdmin returns an AdminDebugKeyStatus for use in the
+// sync state response sent to admin users. It reuses buildAdminDebugKeyStatus
+// (already used by handleAdminDebugInfo) so the data is consistent.
+// Returns nil when the health is "match" (nothing to surface) or if the check fails.
+func encryptionKeyHealthForAdmin(db *gorm.DB) (*models.AdminDebugKeyStatus, error) {
+	health, err := service.NewEncryptionKeyService(db).InspectCurrentKeyHealth()
+	if err != nil {
+		return nil, err
+	}
+	status := buildAdminDebugKeyStatus(health)
+	// Only include the health payload when there is something to warn about.
+	if status.StateStatus == "match" || status.StateStatus == "" {
+		return nil, nil
+	}
+	return &status, nil
 }

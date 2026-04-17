@@ -327,7 +327,8 @@ func (r *goRunner) executeOpenAI(ctx context.Context, req ExecutionRequest) Exec
 		}
 
 		var inputPayload any
-		if imageData != nil {
+		switch {
+		case imageData != nil:
 			dataURL, err := buildImageDataURL(imageData)
 			if err != nil {
 				return ExecutionResponse{Success: false, Error: err.Error(), Metadata: durationMeta(start)}
@@ -340,9 +341,9 @@ func (r *goRunner) executeOpenAI(ctx context.Context, req ExecutionRequest) Exec
 					},
 				},
 			}
-		} else if isEvaluatorTask {
+		case isEvaluatorTask:
 			inputPayload = fmt.Sprintf("RESPONSE TO EVALUATE:\n%s\n\n---\nCONTEXT:\nOriginal Question: %s\nExpected Answer: %s\n", questionText, fallbackString(originalQuestion, "N/A"), fallbackString(expectedAnswer, "N/A"))
-		} else {
+		default:
 			inputPayload = questionText
 		}
 		promptSent = map[string]any{
@@ -355,7 +356,8 @@ func (r *goRunner) executeOpenAI(ctx context.Context, req ExecutionRequest) Exec
 		resultText, rawResponse, err = callOpenAIResponses(ctx, apiKey, projectID, promptID, promptVersion, inputPayload)
 	} else {
 		var inputPayload any
-		if imageData != nil {
+		switch {
+		case imageData != nil:
 			dataURL, err := buildImageDataURL(imageData)
 			if err != nil {
 				return ExecutionResponse{Success: false, Error: err.Error(), Metadata: durationMeta(start)}
@@ -368,10 +370,10 @@ func (r *goRunner) executeOpenAI(ctx context.Context, req ExecutionRequest) Exec
 					},
 				},
 			}
-		} else if isEvaluatorTask {
+		case isEvaluatorTask:
 			questionText = buildEvaluationPrompt(questionText, originalQuestion, expectedAnswer)
 			inputPayload = questionText
-		} else {
+		default:
 			inputPayload = questionText
 		}
 
@@ -1032,7 +1034,7 @@ func mockMCPAnswer() string {
 		"AI bias occurs when training data reflects societal prejudices.",
 		"Alignment ensures AI systems act according to human values and intentions.",
 	}
-	return answers[rand.Intn(len(answers))]
+	return answers[rand.Intn(len(answers))] //nolint:gosec // G404: synthetic test-answer picker; cryptographic randomness not needed
 }
 
 func mockOpenAIAnswer(question string) string {

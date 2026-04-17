@@ -1633,14 +1633,15 @@ func (e *Engine) RerunTask(runID uuid.UUID, agentID uuid.UUID, questionID string
 				Order("id DESC")
 
 			tx := query.Limit(1).Find(&targetResult)
-			if tx.Error == nil && tx.RowsAffected > 0 {
+			switch {
+			case tx.Error == nil && tx.RowsAffected > 0:
 				taskAgentAnswer = targetResult.Answer
 				taskQuestionText = targetResult.Answer
 				taskTargetRunResultID = targetResult.ID
 				logger.Debug("[RERUN] Found specific result: %s (Ans len: %d)", targetResult.ID, len(taskAgentAnswer))
-			} else if tx.Error != nil {
+			case tx.Error != nil:
 				logger.Warn("[RERUN] Specific target lookup failed: %v", tx.Error)
-			} else {
+			default:
 				logger.Debug("[RERUN] Specific target result not found for run=%s agent=%s q=%s", run.ID, targetAgentID, targetQuestionID)
 			}
 		}

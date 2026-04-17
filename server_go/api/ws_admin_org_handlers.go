@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"benchmarking-platform/internal/logger"
+	"benchmarking-platform/internal/validation"
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
@@ -35,7 +36,18 @@ func (h *Hub) handleAdminGetOrganizations(c *Connection, env models.Envelope) {
 		}
 	}
 
-	query := h.db.Model(&models.Organization{})
+	// Pagination defaults
+	pageSize := filter.PageSize
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 50
+	}
+	page := filter.Page
+	if page < 0 {
+		page = 0
+	}
+	offset := page * pageSize
+
+	baseQuery := h.db.Model(&models.Organization{})
 	if filter.TimeRange != "" {
 		threshold := time.Now().UTC()
 		switch filter.TimeRange {
@@ -46,11 +58,19 @@ func (h *Hub) handleAdminGetOrganizations(c *Connection, env models.Envelope) {
 		case "1w":
 			threshold = threshold.Add(-7 * 24 * time.Hour)
 		}
-		query = query.Where("created_at >= ?", threshold)
+		baseQuery = baseQuery.Where("created_at >= ?", threshold)
 	}
 
+	// Count total matching records (without pagination)
+	var total int64
+	baseQuery.Count(&total)
+
 	var orgs []models.Organization
-	query.Preload("Manager").Order("created_at DESC").Find(&orgs)
+	baseQuery.Preload("Manager").
+		Order("created_at DESC").
+		Limit(pageSize).
+		Offset(offset).
+		Find(&orgs)
 
 	result := make([]map[string]any, len(orgs))
 	for i, org := range orgs {
@@ -84,7 +104,12 @@ func (h *Hub) handleAdminGetOrganizations(c *Connection, env models.Envelope) {
 		}
 	}
 
-	c.SendResponse(DataAdminOrganizations, env.CorrelationID, result)
+	c.SendResponse(DataAdminOrganizations, env.CorrelationID, map[string]any{
+		"organizations": result,
+		"total":         total,
+		"page":          page,
+		"page_size":     pageSize,
+	})
 }
 
 func (h *Hub) handleAdminGetOrgProfile(c *Connection, env models.Envelope) {
@@ -182,6 +207,11 @@ func (h *Hub) handleAdminCreateOrg(c *Connection, env models.Envelope) {
 		return
 	}
 
+	if err := validation.ValidateOrgName(req.Name); err != nil {
+		c.SendError(env.CorrelationID, err.Error())
+		return
+	}
+
 	var managerID *uuid.UUID
 	if req.ManagerID != "" {
 		if id, err := uuid.Parse(req.ManagerID); err == nil {
@@ -242,6 +272,10 @@ func (h *Hub) handleAdminUpdateOrg(c *Connection, env models.Envelope) {
 	}
 
 	if req.Name != "" {
+		if err := validation.ValidateOrgName(req.Name); err != nil {
+			c.SendError(env.CorrelationID, err.Error())
+			return
+		}
 		org.Name = req.Name
 	}
 

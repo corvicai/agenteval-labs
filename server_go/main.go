@@ -60,19 +60,36 @@ func loadAppRevisionInfo() appRevisionInfo {
 // shouldBlockStartupForEncryptionHealth returns true (with reason) when production
 // should refuse to start due to an unrecoverable encryption key problem.
 //
-// "mismatch" (key fingerprint changed) is handled by auto-promoting the current key
-// in main, so it does NOT block here — the server starts with a loud warning.
+// "mismatch" (key fingerprint changed) blocks by default in production unless
+// ENCRYPTION_KEY_AUTO_PROMOTE=true is explicitly set. This forces operators to
+// make a conscious choice: either perform a proper key rotation (recommended) or
+// accept that data encrypted with the old key will become unreadable.
 //
 // "sentinel_failed" means the stored fingerprint matches but the sentinel ciphertext
 // cannot be decrypted. This indicates key corruption or DB tampering and is always fatal.
-func shouldBlockStartupForEncryptionHealth(appEnv string, health service.EncryptionKeyHealth) (bool, string) {
+func shouldBlockStartupForEncryptionHealth(appEnv string, health service.EncryptionKeyHealth, autoPromote bool) (bool, string) {
 	if strings.TrimSpace(appEnv) != "production" {
 		return false, ""
 	}
 	if health.StateStatus == "sentinel_failed" {
 		return true, health.StateSummary
 	}
+	if health.StateStatus == "mismatch" && !autoPromote {
+		return true, "ENCRYPTION_KEY fingerprint mismatch — the current key does not match the last known active fingerprint. " +
+			"Options: (1) restore the original key, " +
+			"(2) set ENCRYPTION_KEY_PREVIOUS=<old_key> + ENCRYPTION_KEY_ROTATE_ON_START=true for safe rotation (recommended), " +
+			"or (3) set ENCRYPTION_KEY_AUTO_PROMOTE=true to accept that agents encrypted with the old key will need re-entering credentials"
+	}
 	return false, ""
+}
+
+func parseEncryptionAutoPromoteFlag(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func hostOnly(raw string) string {
@@ -218,7 +235,8 @@ func main() {
 	}
 
 	allowedStr := os.Getenv("ALLOWED_ORIGINS")
-	if allowedStr != "" {
+	switch {
+	case allowedStr != "":
 		// Explicit allowlist: restrict CORS regardless of APP_ENV.
 		// Set this in Cloud Run (both dev and prod) via Pulumi config.
 		origins := strings.Split(allowedStr, ",")
@@ -227,9 +245,9 @@ func main() {
 		}
 		corsConfig.AllowOrigins = origins
 		logger.Info("[SECURITY] CORS restricted to: %s", allowedStr)
-	} else if os.Getenv("APP_ENV") == "production" {
+	case os.Getenv("APP_ENV") == "production":
 		log.Fatal("[SECURITY] FATAL: ALLOWED_ORIGINS environment variable must be set in production")
-	} else {
+	default:
 		corsConfig.AllowOrigins = []string{"*"}
 		logger.Info("[SECURITY] Running in local dev mode - CORS: Allow All")
 	}
@@ -302,7 +320,8 @@ func main() {
 		logger.Warn("[SECURITY] ENCRYPTION_KEY not set, using development fallback key")
 	} else {
 		key, format, err := security.ParseEncryptionKey(encryptionKey)
-		if err != nil {
+		switch {
+		case err != nil:
 			if os.Getenv("APP_ENV") == "production" {
 				log.Fatalf("[SECURITY] FATAL: %v", err)
 			}
@@ -322,7 +341,7 @@ func main() {
 				ParsedBytes:     len(encryptionKey),
 				ValidationError: err.Error(),
 			})
-		} else if format == "hex" {
+		case format == "hex":
 			security.SetEncryptionKeyRuntimeStatus(security.EncryptionKeyRuntimeStatus{
 				Status:      "loaded",
 				Source:      "environment",
@@ -333,7 +352,7 @@ func main() {
 				ParsedBytes: len(key),
 			})
 			logger.Warn("[SECURITY] ENCRYPTION_KEY loaded from hex-encoded secret (%d chars -> %d bytes)", len(encryptionKey), len(key))
-		} else {
+		default:
 			security.SetEncryptionKeyRuntimeStatus(security.EncryptionKeyRuntimeStatus{
 				Status:      "loaded",
 				Source:      "environment",
@@ -365,9 +384,13 @@ func main() {
 		if err != nil {
 			logger.Warn("[SECURITY] Failed to reconcile encryption key state: %v", err)
 		} else if health.StateStatus == "mismatch" {
-			// Key fingerprint changed (e.g. rotation without ENCRYPTION_KEY_PREVIOUS, or key recovery).
-			// Auto-promote the current key so the server can start. Previously encrypted data
-			// that cannot be decrypted with the new key will surface as _error markers.
+			autoPromote := parseEncryptionAutoPromoteFlag(os.Getenv("ENCRYPTION_KEY_AUTO_PROMOTE"))
+			if blocked, reason := shouldBlockStartupForEncryptionHealth(os.Getenv("APP_ENV"), health, autoPromote); blocked {
+				log.Fatalf("[SECURITY] FATAL: %s", reason)
+			}
+			// Auto-promote is either requested or we are not in production.
+			// Proceed but emit a loud warning so operators are aware data loss
+			// may have occurred for agents encrypted with the previous key.
 			current, observeErr := encryptionKeyService.ObserveCurrentKey()
 			if observeErr != nil {
 				logger.Warn("[SECURITY] Key mismatch detected but cannot read current key for auto-promote: %v", observeErr)
@@ -375,8 +398,17 @@ func main() {
 				logger.Warn("[SECURITY] Key mismatch auto-promote failed: %v", promoteErr)
 			} else {
 				logger.Warn("[SECURITY] ENCRYPTION_KEY fingerprint mismatch — current key auto-promoted as active. Agents encrypted with the previous key will require re-entering credentials.")
+				encryptionKeyService.AppendKeyStateHistory(
+					"auto_promoted",
+					health.StoredFingerprintPrefix,
+					health.ObservedFingerprintPrefix,
+					"mismatch",
+					"match",
+					"startup_auto_promote",
+					"",
+				)
 			}
-		} else if blocked, reason := shouldBlockStartupForEncryptionHealth(os.Getenv("APP_ENV"), health); blocked {
+		} else if blocked, reason := shouldBlockStartupForEncryptionHealth(os.Getenv("APP_ENV"), health, false); blocked {
 			log.Fatalf("[SECURITY] FATAL: %s. The active ENCRYPTION_KEY cannot verify the stored sentinel — possible key corruption or DB tampering. Use ENCRYPTION_KEY_PREVIOUS + ENCRYPTION_KEY_ROTATE_ON_START for proper key rotation.", reason)
 		} else {
 			logger.Info("[SECURITY] %s", health.StateSummary)

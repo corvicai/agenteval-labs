@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"benchmarking-platform/internal/logger"
+	"benchmarking-platform/internal/validation"
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
@@ -38,7 +39,18 @@ func (h *Hub) handleAdminGetUsers(c *Connection, env models.Envelope) {
 		}
 	}
 
-	query := h.db.Model(&models.User{})
+	// Pagination defaults
+	pageSize := filter.PageSize
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 50
+	}
+	page := filter.Page
+	if page < 0 {
+		page = 0
+	}
+	offset := page * pageSize
+
+	baseQuery := h.db.Model(&models.User{})
 	if filter.TimeRange != "" {
 		threshold := time.Now().UTC()
 		switch filter.TimeRange {
@@ -49,13 +61,19 @@ func (h *Hub) handleAdminGetUsers(c *Connection, env models.Envelope) {
 		case "1w":
 			threshold = threshold.Add(-7 * 24 * time.Hour)
 		}
-		query = query.Where("created_at >= ?", threshold)
+		baseQuery = baseQuery.Where("created_at >= ?", threshold)
 	}
 
+	// Count total matching records (without pagination)
+	var total int64
+	baseQuery.Count(&total)
+
 	var users []models.User
-	query.Preload("Workspaces.User").
+	baseQuery.Preload("Workspaces.User").
 		Preload("InvitedBy").
 		Order("created_at DESC").
+		Limit(pageSize).
+		Offset(offset).
 		Find(&users)
 
 	// Map to response format
@@ -69,7 +87,6 @@ func (h *Hub) handleAdminGetUsers(c *Connection, env models.Envelope) {
 		safeUser.UserOrgs = nil
 
 		for j := range u.Workspaces {
-			// Fix User
 			u.Workspaces[j].User = safeUser
 		}
 
@@ -87,11 +104,16 @@ func (h *Hub) handleAdminGetUsers(c *Connection, env models.Envelope) {
 			"created_at":      u.CreatedAt,
 			"last_login_at":   u.LastLoginAt,
 			"workspaces":      u.Workspaces,
-			"invited_by_name": inviterName, // Safe access
+			"invited_by_name": inviterName,
 		}
 	}
 
-	c.SendResponse(DataAdminUsers, env.CorrelationID, result)
+	c.SendResponse(DataAdminUsers, env.CorrelationID, map[string]any{
+		"users":     result,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
 }
 
 func (h *Hub) handleAdminGetUserProfile(c *Connection, env models.Envelope) {
@@ -211,6 +233,27 @@ func (h *Hub) handleAdminCreateUser(c *Connection, env models.Envelope) {
 	if err := json.Unmarshal([]byte(env.Payload), &req); err != nil {
 		c.SendError(env.CorrelationID, "invalid payload: "+err.Error())
 		return
+	}
+
+	if err := validation.ValidateUserName(req.Name); err != nil {
+		c.SendError(env.CorrelationID, err.Error())
+		return
+	}
+	if err := validation.ValidateEmail(req.Email); err != nil {
+		c.SendError(env.CorrelationID, err.Error())
+		return
+	}
+	if req.Password != "" {
+		if err := validation.ValidatePassword(req.Password); err != nil {
+			c.SendError(env.CorrelationID, err.Error())
+			return
+		}
+	}
+	if req.WorkspaceName != "" {
+		if err := validation.ValidateWorkspaceName(req.WorkspaceName); err != nil {
+			c.SendError(env.CorrelationID, err.Error())
+			return
+		}
 	}
 
 	// Check if email exists
@@ -355,6 +398,20 @@ func (h *Hub) handleAdminUpdateUser(c *Connection, env models.Envelope) {
 		return
 	}
 
+	// Validate before applying
+	if req.Name != "" {
+		if err := validation.ValidateUserName(req.Name); err != nil {
+			c.SendError(env.CorrelationID, err.Error())
+			return
+		}
+	}
+	if req.Email != "" {
+		if err := validation.ValidateEmail(req.Email); err != nil {
+			c.SendError(env.CorrelationID, err.Error())
+			return
+		}
+	}
+
 	// Update fields
 	if req.Name != "" {
 		targetUser.Name = req.Name
@@ -371,11 +428,9 @@ func (h *Hub) handleAdminUpdateUser(c *Connection, env models.Envelope) {
 		if req.IsSuspended != nil {
 			targetUser.IsSuspended = *req.IsSuspended
 		}
-	} else {
-		if req.IsAdmin != nil || req.IsSuspended != nil {
-			c.SendError(env.CorrelationID, "access denied: only admins can modify administrative flags")
-			return
-		}
+	} else if req.IsAdmin != nil || req.IsSuspended != nil {
+		c.SendError(env.CorrelationID, "access denied: only admins can modify administrative flags")
+		return
 	}
 
 	if err := h.db.Save(&targetUser).Error; err != nil {

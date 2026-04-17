@@ -8,6 +8,7 @@ import (
 
 	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/internal/middleware"
+	"benchmarking-platform/internal/validation"
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
@@ -111,6 +112,11 @@ func (h *Hub) handleCreateWorkspace(c *Connection, env models.Envelope) {
 		return
 	}
 
+	if err := validation.ValidateWorkspaceName(payload.Name); err != nil {
+		c.SendError(env.CorrelationID, err.Error())
+		return
+	}
+
 	ws := models.Workspace{
 		ID:     uuid.New(),
 		Name:   payload.Name,
@@ -201,8 +207,28 @@ func (h *Hub) handleUpdateAgent(c *Connection, env models.Envelope) {
 			c.SendError(env.CorrelationID, "agent configuration is undecryptable; provide new credentials to fix")
 			return
 		}
+		// Quarantine the raw ciphertext BEFORE overwriting — last-resort recovery archive.
+		var rawCiphertext string
+		h.db.Raw("SELECT COALESCE(config, '') FROM agents WHERE id = ?", agentID).Scan(&rawCiphertext)
+		if rawCiphertext != "" {
+			quarantine := models.AgentConfigQuarantine{
+				ID:                 uuid.New(),
+				AgentID:            agentID,
+				AgentName:          agent.Name,
+				WorkspaceID:        agent.WorkspaceID,
+				OriginalCiphertext: rawCiphertext,
+				QuarantineReason:   "decryption_failed",
+				Action:             "overwrite",
+				ActorUserID:        &c.UserID,
+			}
+			if qErr := h.db.Create(&quarantine).Error; qErr != nil {
+				logger.Warn("[WS][UPDATE_AGENT] Failed to quarantine agent config agent_id=%s: %v", agentID, qErr)
+			} else {
+				logger.Info("[WS][UPDATE_AGENT] Quarantined undecryptable config quarantine_id=%s agent_id=%s", quarantine.ID, agentID)
+			}
+		}
 		// Otherwise proceed with update - new config will overwrite the corrupted one
-		logger.Info("[WS][UPDATE_AGENT] Overwriting undecryptable config for agent_id=%s", agentID)
+		logger.Warn("[WS][UPDATE_AGENT] Overwriting undecryptable config for agent_id=%s actor_user_id=%s", agentID, c.UserID)
 	}
 
 	agent.Name = payload.Name
@@ -371,6 +397,30 @@ func (h *Hub) handleDeleteAgent(c *Connection, env models.Envelope) {
 	// Force mode: delete without loading the agent (bypasses decryption errors).
 	if payload.Force {
 		tx := h.db.Begin()
+
+		// Quarantine the raw ciphertext BEFORE the delete — last-resort recovery archive.
+		var rawCiphertext string
+		h.db.Raw("SELECT COALESCE(config, '') FROM agents WHERE id = ?", agentID).Scan(&rawCiphertext)
+		var agentNameForAudit string
+		h.db.Raw("SELECT COALESCE(name, '') FROM agents WHERE id = ?", agentID).Scan(&agentNameForAudit)
+		if rawCiphertext != "" {
+			quarantine := models.AgentConfigQuarantine{
+				ID:                 uuid.New(),
+				AgentID:            agentID,
+				AgentName:          agentNameForAudit,
+				WorkspaceID:        ownerWorkspaceID,
+				OriginalCiphertext: rawCiphertext,
+				QuarantineReason:   "decryption_failed",
+				Action:             "force_delete",
+				ActorUserID:        &c.UserID,
+			}
+			if qErr := h.db.Create(&quarantine).Error; qErr != nil {
+				logger.Warn("[WS][DELETE_AGENT] Failed to quarantine agent config agent_id=%s: %v", agentID, qErr)
+			} else {
+				logger.Info("[WS][DELETE_AGENT] Quarantined undecryptable config quarantine_id=%s agent_id=%s", quarantine.ID, agentID)
+			}
+		}
+		logger.Warn("[WS][DELETE_AGENT] Force-deleting agent agent_id=%s agent_name=%q actor_user_id=%s workspace_id=%s", agentID, agentNameForAudit, c.UserID, ownerWorkspaceID)
 
 		if err := tx.Where("agent_id = ?", agentID).Delete(&models.QuestionSetAgent{}).Error; err != nil {
 			tx.Rollback()
