@@ -17,6 +17,60 @@ import (
 	"gorm.io/gorm"
 )
 
+// injectEvaluatorTargetIDsLite fills TargetRunResultID for evaluator
+// RunResultLite entries using a lookup over the primary results already present
+// in the slice. No extra DB round-trip is required.
+func injectEvaluatorTargetIDsLite(results []models.RunResultLite) {
+	primary := make(map[string]uuid.UUID, len(results))
+	for _, r := range results {
+		if !strings.HasPrefix(r.QuestionID, "eval-") {
+			primary[r.AgentID.String()+":"+r.QuestionID] = r.ID
+		}
+	}
+	for i := range results {
+		if !strings.HasPrefix(results[i].QuestionID, "eval-") {
+			continue
+		}
+		rest := strings.TrimPrefix(results[i].QuestionID, "eval-")
+		// Format: <36-char UUID> + "-" + questionID
+		if len(rest) <= 36 {
+			continue
+		}
+		targetAgentStr := rest[:36]
+		questionID := rest[37:]
+		if primaryID, ok := primary[targetAgentStr+":"+questionID]; ok {
+			id := primaryID
+			results[i].TargetRunResultID = &id
+		}
+	}
+}
+
+// injectEvaluatorTargetIDsFull is the same but for full RunResult slices
+// (used by handleGetRunDetails).
+func injectEvaluatorTargetIDsFull(results []models.RunResult) {
+	primary := make(map[string]uuid.UUID, len(results))
+	for _, r := range results {
+		if !strings.HasPrefix(r.QuestionID, "eval-") {
+			primary[r.AgentID.String()+":"+r.QuestionID] = r.ID
+		}
+	}
+	for i := range results {
+		if !strings.HasPrefix(results[i].QuestionID, "eval-") {
+			continue
+		}
+		rest := strings.TrimPrefix(results[i].QuestionID, "eval-")
+		if len(rest) <= 36 {
+			continue
+		}
+		targetAgentStr := rest[:36]
+		questionID := rest[37:]
+		if primaryID, ok := primary[targetAgentStr+":"+questionID]; ok {
+			id := primaryID
+			results[i].TargetRunResultID = &id
+		}
+	}
+}
+
 func normalizeResultEvaluationsForDisplay(result *models.RunResult) {
 	if result == nil || len(result.Evaluations) == 0 {
 		return
@@ -76,6 +130,7 @@ func ensureAgentSyncConfigs(agents []models.Agent) (hadDecryptionErrors bool) {
 		if json.Unmarshal(agents[i].Config, &m) == nil {
 			if _, bad := m["_error"]; bad {
 				agents[i].Config = models.EncryptedJSON([]byte(`{}`))
+				agents[i].ConfigStatus = "needs_recredentials"
 				hadDecryptionErrors = true
 			}
 		}
@@ -280,7 +335,9 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 		h.BroadcastEvent(runWorkspaceID, "runs", "created", run)
 	}
 
-	c.SendResponse(DataResponse, env.CorrelationID, run)
+	if err := h.cacheAndSendResponse(c, DataResponse, env.CorrelationID, run); err != nil {
+		logger.Warn("[WS] handleStartRun: send failed: %v", err)
+	}
 }
 
 func (h *Hub) handleRerunTask(c *Connection, env models.Envelope) {
@@ -327,10 +384,12 @@ func (h *Hub) handleRerunTask(c *Connection, env models.Envelope) {
 		return
 	}
 
-	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{
+	if err := h.cacheAndSendResponse(c, DataResponse, env.CorrelationID, map[string]string{
 		"status":   "queued",
 		"retry_id": retryID,
-	})
+	}); err != nil {
+		logger.Warn("[WS] handleRerunTask: send failed: %v", err)
+	}
 }
 
 func (h *Hub) handleCancelRun(c *Connection, env models.Envelope) {
@@ -346,7 +405,9 @@ func (h *Hub) handleCancelRun(c *Connection, env models.Envelope) {
 		return
 	}
 	h.engine.CancelRun(runID)
-	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "cancelled"})
+	if err := h.cacheAndSendResponse(c, DataResponse, env.CorrelationID, map[string]string{"status": "cancelled"}); err != nil {
+		logger.Warn("[WS] handleCancelRun: send failed: %v", err)
+	}
 }
 
 func (h *Hub) handleSyncState(c *Connection, env models.Envelope) {
@@ -369,10 +430,8 @@ func (h *Hub) handleSyncState(c *Connection, env models.Envelope) {
 			return
 		}
 		ensureAgentSyncConfigs(payload.Agents)
-	} else {
-		if ensureAgentSyncConfigs(payload.Agents) {
-			payload.Warnings = append(payload.Warnings, "Some agent configs could not be decrypted; returning agent metadata without config.")
-		}
+	} else if ensureAgentSyncConfigs(payload.Agents) {
+		payload.Warnings = append(payload.Warnings, "Some agent configs could not be decrypted; returning agent metadata without config.")
 	}
 
 	// 1b. Get Shared Agents (Plano 28) — agents the user was granted
@@ -499,9 +558,14 @@ func (h *Hub) handleSyncState(c *Connection, env models.Envelope) {
 	if sharedErr == nil && len(sharedRows) > 0 {
 		payload.SharedQuestionSets = make([]models.SharedQuestionSet, 0, len(sharedRows))
 		for _, row := range sharedRows {
-			qsID, _ := uuid.Parse(row.ID)
-			ownerUserID, _ := uuid.Parse(row.OwnerUserID)
-			ownerWsID, _ := uuid.Parse(row.OwnerWorkspaceID)
+			qsID, qsIDErr := uuid.Parse(row.ID)
+			ownerUserID, ownerUserErr := uuid.Parse(row.OwnerUserID)
+			ownerWsID, ownerWsErr := uuid.Parse(row.OwnerWorkspaceID)
+			if qsIDErr != nil || ownerUserErr != nil || ownerWsErr != nil {
+				logger.Warn("[WS] SyncState: skipping shared QS row with unparseable UUIDs: qs=%q user=%q ws=%q",
+					row.ID, row.OwnerUserID, row.OwnerWorkspaceID)
+				continue
+			}
 			// Load the full QS (with Client + Agents)
 			var fullQS models.QuestionSet
 			if loadErr := h.db.Preload("Client").Preload("Agents").First(&fullQS, "id = ?", qsID).Error; loadErr != nil {
@@ -604,6 +668,17 @@ func (h *Hub) handleSyncState(c *Connection, env models.Envelope) {
 	logger.Debug("[WS] SyncState completed for workspace: %s (Agents: %d, Sets: %d, Runs: %d)",
 		c.WorkspaceID, len(payload.Agents), len(payload.QuestionSets), len(payload.RecentRuns))
 
+	// Include encryption health for admin users so the admin panel can show a
+	// persistent banner without the operator needing to navigate to the debug tab.
+	if c.UserID != uuid.Nil && h.db != nil {
+		var user models.User
+		if err := h.db.Select("is_admin, email").First(&user, "id = ?", c.UserID).Error; err == nil && user.HasAdminAccess() {
+			if encHealth, ehErr := encryptionKeyHealthForAdmin(h.db); ehErr == nil && encHealth != nil {
+				payload.EncryptionHealth = encHealth
+			}
+		}
+	}
+
 	c.SendResponse(DataState, env.CorrelationID, payload)
 }
 
@@ -644,6 +719,7 @@ func (h *Hub) handleGetRunDetails(c *Connection, env models.Envelope) {
 		return
 	}
 	response.Results = orchestrator.CollapseRunResultsToLatest(response.Results)
+	injectEvaluatorTargetIDsFull(response.Results)
 	normalizeResultsEvaluationsForDisplay(response.Results)
 
 	// 4. Collect Agent info
@@ -766,6 +842,7 @@ func (h *Hub) handleGetRunLite(c *Connection, env models.Envelope) {
 		}
 	}
 	results = orchestrator.CollapseRunResultLitesToLatest(results)
+	injectEvaluatorTargetIDsLite(results)
 
 	// Fetch Evaluations existence (to set HasEvaluations flag)
 	// Optimize: Get all result IDs that have evaluations
@@ -933,6 +1010,7 @@ func (h *Hub) handleGetLatestRunByQuestionSet(c *Connection, env models.Envelope
 		}
 	}
 	results = orchestrator.CollapseRunResultLitesToLatest(results)
+	injectEvaluatorTargetIDsLite(results)
 
 	var resultIDsWithEvals []uuid.UUID
 	h.db.Model(&models.Evaluation{}).

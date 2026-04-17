@@ -144,7 +144,8 @@ export function useArenaRunResultsLoader(options = {}) {
           timestamp: res.created_at || existing.timestamp,
           evaluations: mergedEvaluations,
           humanValidation: mergedEvaluations?.find((evaluation) => evaluation.rater_type === 'user')?.rating ?? existing.humanValidation ?? null,
-          metadata: existing.metadata ?? null
+          metadata: existing.metadata ?? null,
+          targetRunResultId: res.target_run_result_id || existing.targetRunResultId || null
         }
         return
       }
@@ -160,7 +161,8 @@ export function useArenaRunResultsLoader(options = {}) {
         timestamp: res.created_at,
         evaluations: cached ? (cached.evaluations || []) : [],
         humanValidation: cached ? cached.evaluations?.find((evaluation) => evaluation.rater_type === 'user')?.rating : null,
-        metadata: null
+        metadata: null,
+        targetRunResultId: res.target_run_result_id || null
       }
 
       if (!cached) allResultIds.push(res.id)

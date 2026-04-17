@@ -145,9 +145,43 @@ func (s *StatsService) ComputeStats(scope string, scopeID *uuid.UUID) (*models.A
 		Group("run_results.agent_id").
 		Scan(&agentRows)
 
+	// Plan 9 — preload all agents and workspaces in two bulk IN queries
+	// instead of 2×N individual round-trips.
+	agentIDs := make([]uuid.UUID, 0, len(agentRows))
 	for _, row := range agentRows {
-		var agent models.Agent
-		if err := s.db.First(&agent, "id = ?", row.AgentID).Error; err != nil {
+		agentIDs = append(agentIDs, row.AgentID)
+	}
+
+	var agentsList []models.Agent
+	if len(agentIDs) > 0 {
+		s.db.Where("id IN ?", agentIDs).Find(&agentsList)
+	}
+	agentMap := make(map[uuid.UUID]models.Agent, len(agentsList))
+	for _, a := range agentsList {
+		agentMap[a.ID] = a
+	}
+
+	wsIDs := make([]uuid.UUID, 0, len(agentsList))
+	seen := make(map[uuid.UUID]bool, len(agentsList))
+	for _, a := range agentsList {
+		if !seen[a.WorkspaceID] {
+			wsIDs = append(wsIDs, a.WorkspaceID)
+			seen[a.WorkspaceID] = true
+		}
+	}
+
+	var workspacesList []models.Workspace
+	if len(wsIDs) > 0 {
+		s.db.Preload("User").Where("id IN ?", wsIDs).Find(&workspacesList)
+	}
+	wsMap := make(map[uuid.UUID]models.Workspace, len(workspacesList))
+	for _, ws := range workspacesList {
+		wsMap[ws.ID] = ws
+	}
+
+	for _, row := range agentRows {
+		agent, ok := agentMap[row.AgentID]
+		if !ok {
 			continue
 		}
 
@@ -172,10 +206,9 @@ func (s *StatsService) ComputeStats(scope string, scopeID *uuid.UUID) (*models.A
 			ap.NegativeRate = float64(row.EvalDislikes+row.EvalWrongs) / float64(row.EvalTotal)
 		}
 
-		var workspace models.Workspace
-		if s.db.Preload("User").First(&workspace, "id = ?", agent.WorkspaceID).Error == nil {
-			if workspace.User.ID != uuid.Nil {
-				ap.Owner = workspace.User.Name
+		if ws, found := wsMap[agent.WorkspaceID]; found {
+			if ws.User.ID != uuid.Nil {
+				ap.Owner = ws.User.Name
 			} else {
 				ap.Owner = "System"
 			}

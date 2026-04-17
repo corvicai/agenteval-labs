@@ -101,6 +101,9 @@ const (
 	ReqDeleteRun                   = "REQ_DELETE_RUN"
 	ReqDeleteAllRuns               = "REQ_DELETE_ALL_RUNS"
 	ReqGetMissedEvents             = "REQ_GET_MISSED_EVENTS"
+	ReqPing                        = "REQ_PING"
+	ReqGetRunProgress              = "REQ_GET_RUN_PROGRESS"
+	ReqGetPendingResponse          = "REQ_GET_PENDING_RESPONSE"
 
 	// WebAuthn Request types
 	ReqWebAuthnRegisterBegin  = "REQ_WEBAUTHN_REGISTER_BEGIN"
@@ -171,7 +174,10 @@ const (
 	DataRunLite          = "DATA_RUN_LITE"
 	DataResultDetails    = "DATA_RESULT_DETAILS"
 	DataRetryStatus      = "DATA_RETRY_STATUS"
-	DataMissedEvents     = "DATA_MISSED_EVENTS"
+	DataMissedEvents      = "DATA_MISSED_EVENTS"
+	DataPong              = "DATA_PONG"
+	DataRunProgress       = "DATA_RUN_PROGRESS"
+	DataPendingResponse   = "DATA_PENDING_RESPONSE"
 
 	// Admin Data types
 	DataAdminUsers         = "DATA_ADMIN_USERS"
@@ -270,6 +276,11 @@ type Hub struct {
 	// so clients can resume after a transient disconnect without triggering
 	// a full REQ_SYNC_STATE.
 	eventBuffer *EventBuffer
+
+	// Short-lived cache of non-idempotent command responses keyed by
+	// correlation_id (Plan 24, Layer 4). Allows the frontend to recover a
+	// response that was sent while the client was briefly disconnected.
+	responseCache *ResponseCache
 }
 
 // HubInterface defines the methods required for broadcasting (to avoid import cycles in handlers)
@@ -330,6 +341,7 @@ func NewHub(db *gorm.DB, engine *orchestrator.Engine, jwtSecret string, fb *fire
 		agentAudienceCache: make(map[uuid.UUID]cachedAgentAudience),
 		runQSCache:         make(map[uuid.UUID]cachedRunQS),
 		eventBuffer:        NewEventBuffer(2000, 2*time.Minute),
+		responseCache:      NewResponseCache(90 * time.Second),
 	}
 
 	rpID := os.Getenv("RP_ID")
@@ -429,6 +441,31 @@ func (h *Hub) BroadcastToAll(msg []byte) {
 // EventBuffer exposes the hub's replay buffer so handlers (REQ_GET_MISSED_EVENTS)
 // can consult it without reaching into unexported state.
 func (h *Hub) EventBuffer() *EventBuffer { return h.eventBuffer }
+
+// cacheAndSendResponse sends a DATA_* response to the connection and
+// simultaneously caches it in the response cache keyed by correlationID.
+// Use this instead of c.SendResponse for non-idempotent, slow commands
+// (CMD_START_RUN, CMD_RERUN_TASK, etc.) so the frontend can recover the
+// response via REQ_GET_PENDING_RESPONSE after a brief disconnect (Plan 24, Layer 4).
+func (h *Hub) cacheAndSendResponse(c *Connection, msgType, correlationID string, payload any) error {
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	if correlationID != "" && h.responseCache != nil {
+		h.responseCache.Store(correlationID, msgType, payloadBytes)
+	}
+	env := models.Envelope{
+		Type:          msgType,
+		CorrelationID: correlationID,
+		Payload:       payloadBytes,
+	}
+	msg, err := json.Marshal(env)
+	if err != nil {
+		return err
+	}
+	return c.safeSend(msg)
+}
 
 // buildAndBufferEvent marshals payload + envelope, stamps an EventID, and
 // appends the resulting message into the replay buffer. It returns the

@@ -583,7 +583,11 @@ func (h *Hub) handleGetQuestionSetAgentEnvelope(c *Connection, env models.Envelo
 	isCollaborator := false
 	if !user.IsAdmin && c.WorkspaceID != uuid.Nil && meta.WorkspaceID != c.WorkspaceID {
 		// Check if the user is an active collaborator on this QS.
-		access, _, _, _ := h.getQuestionSetAccess(h.db, c.UserID, qsID)
+		access, _, _, accessErr := h.getQuestionSetAccess(h.db, c.UserID, qsID)
+		if accessErr != nil {
+			c.SendError(env.CorrelationID, "failed to verify question set access")
+			return
+		}
 		if access < accessEditor {
 			c.SendError(env.CorrelationID, "workspace mismatch")
 			return

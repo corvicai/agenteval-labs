@@ -123,7 +123,8 @@ export function useArenaRunRestoration(options = {}) {
               timestamp: res.created_at,
               evaluations: res.evaluations || [],
               metadata: res.metadata || null,
-              humanValidation: res.evaluations?.find((e) => e.rater_type === 'user')?.rating
+              humanValidation: res.evaluations?.find((e) => e.rater_type === 'user')?.rating,
+              targetRunResultId: res.target_run_result_id || null
             }
           })
           runResults.value = restored
@@ -183,7 +184,8 @@ export function useArenaRunRestoration(options = {}) {
               timestamp: res.created_at,
               evaluations: res.evaluations || [],
               metadata: res.metadata || null,
-              humanValidation: res.evaluations?.find((e) => e.rater_type === 'user')?.rating
+              humanValidation: res.evaluations?.find((e) => e.rater_type === 'user')?.rating,
+              targetRunResultId: res.target_run_result_id || null
             }
           })
         }

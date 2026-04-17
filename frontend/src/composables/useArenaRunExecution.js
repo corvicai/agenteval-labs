@@ -261,7 +261,12 @@ export function useArenaRunExecution(options = {}) {
         duration: data.duration_ms / 1000,
         timestamp: new Date().toISOString(),
         evaluations: data.evaluations || [],
-        metadata: data.metadata || null
+        metadata: data.metadata || null,
+        // Evaluator results carry the ID of the primary result they evaluated.
+        // Stored here so getIncompleteRetryTargets can detect stale evaluations
+        // after a primary-answer retry (auto-eval won't re-trigger when prior
+        // eval results already exist for the run).
+        targetRunResultId: data.target_run_result_id || null
       }
     }
 
@@ -428,8 +433,14 @@ export function useArenaRunExecution(options = {}) {
 
   function getRetryEligibleAgents(kind = 'primary') {
     const mergedAgents = typeof getMergedAgents === 'function' ? getMergedAgents() : []
+    const runAgentIds = currentRun.value?.agentIds
+    const runAgentSet = runAgentIds?.length > 0 ? new Set(runAgentIds) : null
     return mergedAgents.filter((agent) => {
       if (!agent.enabled) return false
+      // Restrict to agents that actually participated in this run so that a
+      // newly-added agent does not appear as "missing" and get queued into an
+      // already-completed historical run (history mutation).
+      if (runAgentSet && !runAgentSet.has(agent.id)) return false
       const isEvaluator = isEvaluatorAgentObject(agent)
       if (kind === 'evaluator') return isEvaluator
       if (kind === 'all') return true
@@ -694,7 +705,18 @@ export function useArenaRunExecution(options = {}) {
         applicablePrimaries.forEach((primary) => {
           const canonicalResultKey = `eval-${primary.id}-${qIdStr}`
           const existingEvalResult = agentResults[canonicalResultKey]
-          if (existingEvalResult && !existingEvalResult.error) return  // eval done — skip
+          if (existingEvalResult && !existingEvalResult.error) {
+            // Only skip if the eval actually targets the *current* primary result.
+            // After a primary-answer retry the primary result gets a new ID; if
+            // targetRunResultId is known and doesn't match, the eval is stale and
+            // must be re-run (auto-eval won't trigger because evalResultCount > 0).
+            const knownTarget = existingEvalResult.targetRunResultId
+            const currentPrimary = runResults.value[primary.id]?.[qIdStr]?.id
+            if (!knownTarget || !currentPrimary || knownTarget === currentPrimary) {
+              return  // eval done and up-to-date (or staleness is undetectable) — skip
+            }
+            // fall through: eval is stale
+          }
           if (existingEvalResult?.loading || existingEvalResult?.queued) return  // in-flight — skip
           deduped.set(`${agent.id}::${canonicalResultKey}`, {
             agentId: agent.id,

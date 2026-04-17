@@ -27,7 +27,8 @@ func (h *Hub) handleCreateEvaluation(c *Connection, env models.Envelope) {
 	var ratingCode int
 	var rating string
 
-	if req.RatingCode != nil {
+	switch {
+	case req.RatingCode != nil:
 		ratingCode = *req.RatingCode
 		// Map back to rating string for compatibility
 		switch ratingCode {
@@ -43,7 +44,7 @@ func (h *Hub) handleCreateEvaluation(c *Connection, env models.Envelope) {
 			c.SendError(env.CorrelationID, "invalid rating_code")
 			return
 		}
-	} else if req.Rating != "" {
+	case req.Rating != "":
 		rating = req.Rating
 		switch rating {
 		case "like":
@@ -58,7 +59,7 @@ func (h *Hub) handleCreateEvaluation(c *Connection, env models.Envelope) {
 			c.SendError(env.CorrelationID, "invalid rating")
 			return
 		}
-	} else {
+	default:
 		c.SendError(env.CorrelationID, "rating or rating_code is required")
 		return
 	}
@@ -147,7 +148,9 @@ func (h *Hub) handleRunEvaluators(c *Connection, env models.Envelope) {
 		return
 	}
 
-	c.SendResponse(DataResponse, env.CorrelationID, map[string]string{"status": "evaluators queued"})
+	if err := h.cacheAndSendResponse(c, DataResponse, env.CorrelationID, map[string]string{"status": "evaluators queued"}); err != nil {
+		logger.Warn("[WS] handleRunEvaluators: send failed: %v", err)
+	}
 }
 
 func (h *Hub) handleGetSpyPayload(c *Connection, env models.Envelope) {

@@ -189,10 +189,16 @@ type SyncStatePayload struct {
 	RecentRuns         []Run               `json:"recent_runs"`
 	ActiveRunHydration *ActiveRunHydration `json:"active_run_hydration,omitempty"`
 	Warnings           []string            `json:"warnings,omitempty"`
+	// EncryptionHealth is only populated for admin users. Contains the current
+	// key health so the admin panel can surface a banner without waiting for
+	// the operator to navigate to the debug tab.
+	EncryptionHealth *AdminDebugKeyStatus `json:"encryption_health,omitempty"`
 }
 
 type AdminFilterPayload struct {
 	TimeRange string `json:"time_range"`
+	Page      int    `json:"page"`       // 0-based page index
+	PageSize  int    `json:"page_size"`  // records per page; 0 → default 50, max 100
 }
 
 type AdminProfilePayload struct {
@@ -384,16 +390,20 @@ type RunLiteResponse struct {
 }
 
 type RunResultLite struct {
-	ID             uuid.UUID `json:"id"`
-	RunID          uuid.UUID `json:"run_id"`
-	AgentID        uuid.UUID `json:"agent_id"`
-	QuestionID     string    `json:"question_id"`
-	Status         string    `json:"status"`
-	ContentHash    string    `json:"content_hash"`
-	Error          string    `json:"error,omitempty"`
-	DurationMs     int       `json:"duration_ms"`
-	CreatedAt      time.Time `json:"created_at"`
-	HasEvaluations bool      `json:"has_evaluations"`
+	ID               uuid.UUID  `json:"id"`
+	RunID            uuid.UUID  `json:"run_id"`
+	AgentID          uuid.UUID  `json:"agent_id"`
+	QuestionID       string     `json:"question_id"`
+	Status           string     `json:"status"`
+	ContentHash      string     `json:"content_hash"`
+	Error            string     `json:"error,omitempty"`
+	DurationMs       int        `json:"duration_ms"`
+	CreatedAt        time.Time  `json:"created_at"`
+	HasEvaluations   bool       `json:"has_evaluations"`
+	// TargetRunResultID is set for evaluator results only. It identifies the
+	// primary RunResult that this evaluator evaluated so the frontend can detect
+	// stale evaluations after a primary-answer retry.
+	TargetRunResultID *uuid.UUID `json:"target_run_result_id,omitempty"`
 }
 
 type GetResultDetailsPayload struct {
