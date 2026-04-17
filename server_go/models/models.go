@@ -152,6 +152,19 @@ type QuestionSet struct {
 	Data      datatypes.JSON     `gorm:"type:jsonb;not null" json:"data"`
 	Agents    []QuestionSetAgent `gorm:"foreignKey:QuestionSetID" json:"agents,omitempty"`
 	CreatedAt time.Time          `json:"created_at"`
+
+	// Transient sharing metadata — populated by handlers when this QS is
+	// serialized for a specific user. Never persisted. IsShared is true only
+	// when the target user is not the owner but has accepted collaborator
+	// access. Frontend uses these fields to pick the correct agent list
+	// (owner_agents) and authorization path (role) without maintaining any
+	// client-side flag of its own.
+	IsShared         bool       `gorm:"-" json:"is_shared,omitempty"`
+	OwnerUserID      *uuid.UUID `gorm:"-" json:"owner_user_id,omitempty"`
+	OwnerName        string     `gorm:"-" json:"owner_name,omitempty"`
+	OwnerWorkspaceID *uuid.UUID `gorm:"-" json:"owner_workspace_id,omitempty"`
+	OwnerAgents      []Agent    `gorm:"-" json:"owner_agents,omitempty"`
+	Role             string     `gorm:"-" json:"role,omitempty"`
 }
 
 type Run struct {

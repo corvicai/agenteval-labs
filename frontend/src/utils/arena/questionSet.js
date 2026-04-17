@@ -67,6 +67,53 @@ export function resolveQuestionSetSelection({
   return null
 }
 
+// isQuestionSetShared centralizes "is this QS shared from another user?"
+// Prefers the server-authoritative `is_shared` field (populated by enriched
+// backend handlers) and falls back to the legacy client-side `_shared` flag
+// that LeftSidebar sets when the user clicks a shared QS in the sidebar.
+export function isQuestionSetShared(questionSet) {
+  if (!questionSet) return false
+  return Boolean(questionSet.is_shared || questionSet._shared)
+}
+
+// getSharedOwnerAgents returns the redacted owner agents attached to a shared
+// QS, regardless of field casing/source (server vs. local sidebar injection).
+export function getSharedOwnerAgents(questionSet) {
+  if (!questionSet) return []
+  if (Array.isArray(questionSet.owner_agents)) return questionSet.owner_agents
+  if (Array.isArray(questionSet.ownerAgents)) return questionSet.ownerAgents
+  return []
+}
+
+const SHARING_FIELDS = [
+  'is_shared',
+  'owner_user_id',
+  'owner_name',
+  'owner_workspace_id',
+  'owner_agents',
+  'role',
+  // Legacy client-side marker kept for backwards compatibility.
+  '_shared',
+]
+
+// preserveSharingMetadata copies sharing-related fields from `previous` onto
+// `next` for fields that `next` does not explicitly provide. This prevents
+// non-enriched broadcasts (e.g. generic data-changed payloads) from wiping
+// out the authoritative sharing state the server already sent on a richer
+// handler like GetRunDetails/GetRunLite.
+function preserveSharingMetadata(next, previous) {
+  if (!next || !previous) return next
+  const merged = { ...next }
+  for (const field of SHARING_FIELDS) {
+    const nextHas = Object.prototype.hasOwnProperty.call(next, field) && next[field] !== undefined && next[field] !== null
+    const prevHas = Object.prototype.hasOwnProperty.call(previous, field) && previous[field] !== undefined && previous[field] !== null
+    if (!nextHas && prevHas) {
+      merged[field] = previous[field]
+    }
+  }
+  return merged
+}
+
 export function mergeQuestionSetForUI(nextSet, previousSet = null) {
   if (!nextSet) return null
   const nextAgents = getQuestionSetAgents(nextSet)
@@ -76,15 +123,15 @@ export function mergeQuestionSetForUI(nextSet, previousSet = null) {
 
   // Keep local overrides only when incoming payload is partial (no "agents" field).
   if (!hasExplicitAgents && previousAgents.length > 0) {
-    return { ...nextSet, agents: previousAgents }
+    return preserveSharingMetadata({ ...nextSet, agents: previousAgents }, sameSet)
   }
 
   // Preserve explicit empty array when backend confirms no active agents.
   if (hasExplicitAgents && nextAgents.length === 0) {
-    return { ...nextSet, agents: [] }
+    return preserveSharingMetadata({ ...nextSet, agents: [] }, sameSet)
   }
 
-  return nextSet
+  return preserveSharingMetadata(nextSet, sameSet)
 }
 
 export function getQuestionCount(set) {

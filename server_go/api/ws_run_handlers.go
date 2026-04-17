@@ -590,6 +590,19 @@ func (h *Hub) handleSyncState(c *Connection, env models.Envelope) {
 				redactedOwnerAgents[i] = redactAgentConfig(a)
 			}
 
+			// Populate the transient sharing metadata on the embedded QS too,
+			// so clients can treat any SharedQuestionSet exactly like an
+			// enriched standalone QuestionSet (is_shared=true, owner_agents,
+			// role, …) without special-casing the sidebar payload shape.
+			fullQS.IsShared = true
+			sharedOwnerUserID := ownerUserID
+			sharedOwnerWsID := ownerWsID
+			fullQS.OwnerUserID = &sharedOwnerUserID
+			fullQS.OwnerName = row.OwnerName
+			fullQS.OwnerWorkspaceID = &sharedOwnerWsID
+			fullQS.OwnerAgents = redactedOwnerAgents
+			fullQS.Role = row.Role
+
 			payload.SharedQuestionSets = append(payload.SharedQuestionSets, models.SharedQuestionSet{
 				QuestionSet:      fullQS,
 				OwnerUserID:      ownerUserID,
@@ -708,6 +721,10 @@ func (h *Hub) handleGetRunDetails(c *Connection, env models.Envelope) {
 		c.SendError(env.CorrelationID, "question set not found")
 		return
 	}
+	// Attach server-authoritative sharing metadata (is_shared, owner_agents,
+	// role, …) so collaborators see the correct agent list on the client
+	// without relying on any frontend-side flag.
+	h.enrichQuestionSetSharing(h.db, &response.QuestionSet, c.UserID)
 
 	// 3. Get Results (including evaluations)
 	if err := h.db.Preload("Evaluations").
@@ -792,6 +809,7 @@ func (h *Hub) handleGetRunLite(c *Connection, env models.Envelope) {
 	// Fetch QuestionSet
 	var qs models.QuestionSet
 	h.db.Preload("Client").Preload("Agents").First(&qs, "id = ?", run.QuestionSetID)
+	h.enrichQuestionSetSharing(h.db, &qs, c.UserID)
 
 	// Fetch Results (Lite: Select specific columns only)
 	// We need 'answer' to compute hash, but we won't send it.
@@ -962,6 +980,7 @@ func (h *Hub) handleGetLatestRunByQuestionSet(c *Connection, env models.Envelope
 
 	var qs models.QuestionSet
 	h.db.Preload("Client").Preload("Agents").First(&qs, "id = ?", run.QuestionSetID)
+	h.enrichQuestionSetSharing(h.db, &qs, c.UserID)
 
 	type ResultScan struct {
 		ID         uuid.UUID

@@ -196,7 +196,9 @@ const isDeletingQuestionSet = ref(false)
 // True when the currently selected QS is owned by another user (shared).
 const isCurrentQSShared = computed(() => {
   if (!props.currentQuestionSet) return false
-  return !!props.currentQuestionSet._shared
+  // Prefer server-authoritative is_shared; keep _shared as legacy fallback
+  // for payloads that haven't been refreshed via an enriched handler yet.
+  return !!(props.currentQuestionSet.is_shared || props.currentQuestionSet._shared)
 })
 
 const deleteQuestionSetMessage = computed(() => {

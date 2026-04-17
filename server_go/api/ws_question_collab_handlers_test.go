@@ -500,3 +500,100 @@ func TestBroadcastToQuestionSetAudience_SkipsRevoked(t *testing.T) {
 		// expected: no message
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestEnrichQuestionSetSharing
+//
+// Exercises the server-side helper that replaces the old client-side
+// `_shared` inference: for owners the QS must be unchanged; for accepted
+// collaborators it must be marked `is_shared=true` with owner metadata and
+// redacted owner agents.
+// ---------------------------------------------------------------------------
+
+func TestEnrichQuestionSetSharing_OwnerUnchanged(t *testing.T) {
+	setup()
+
+	owner, _, _, qs, _ := createQuestionSetTestFixture(t, "enrich-owner")
+
+	hub := NewHub(db, nil, "test-secret", nil)
+	qsCopy := qs
+	hub.enrichQuestionSetSharing(db, &qsCopy, owner.ID)
+
+	assert.False(t, qsCopy.IsShared, "owner view must not be flagged shared")
+	assert.Nil(t, qsCopy.OwnerUserID)
+	assert.Empty(t, qsCopy.OwnerName)
+	assert.Empty(t, qsCopy.OwnerAgents)
+	assert.Empty(t, qsCopy.Role)
+}
+
+func TestEnrichQuestionSetSharing_CollaboratorEnriched(t *testing.T) {
+	setup()
+
+	owner, ownerWs, _, qs, _ := createQuestionSetTestFixture(t, "enrich-owner-src")
+	collab, _, _, _, _ := createQuestionSetTestFixture(t, "enrich-collab")
+
+	// Owner has one agent in their workspace — it should come back redacted.
+	ownerAgent := models.Agent{
+		ID:           uuid.New(),
+		WorkspaceID:  ownerWs.ID,
+		Name:         "owner-agent",
+		ProviderType: "openai",
+		Config:       models.EncryptedJSON(`{"api_key":"super-secret-key","temperature":0.7}`),
+	}
+	require.NoError(t, db.Create(&ownerAgent).Error)
+
+	now := time.Now()
+	require.NoError(t, db.Create(&models.QuestionSetCollaborator{
+		ID:              uuid.New(),
+		QuestionSetID:   qs.ID,
+		UserID:          collab.ID,
+		Role:            "editor",
+		InvitedByUserID: owner.ID,
+		AcceptedAt:      &now,
+	}).Error)
+
+	hub := NewHub(db, nil, "test-secret", nil)
+	qsCopy := qs
+	hub.enrichQuestionSetSharing(db, &qsCopy, collab.ID)
+
+	assert.True(t, qsCopy.IsShared, "collaborator view must be flagged shared")
+	require.NotNil(t, qsCopy.OwnerUserID)
+	assert.Equal(t, owner.ID, *qsCopy.OwnerUserID)
+	assert.Equal(t, owner.Name, qsCopy.OwnerName)
+	require.NotNil(t, qsCopy.OwnerWorkspaceID)
+	assert.Equal(t, ownerWs.ID, *qsCopy.OwnerWorkspaceID)
+	assert.Equal(t, "editor", qsCopy.Role)
+
+	require.Len(t, qsCopy.OwnerAgents, 1)
+	var cfg map[string]any
+	require.NoError(t, json.Unmarshal(qsCopy.OwnerAgents[0].Config, &cfg))
+	assert.NotEqual(t, "super-secret-key", cfg["api_key"], "owner agent secrets must be redacted")
+}
+
+func TestEnrichQuestionSetSharing_RevokedCollaboratorUnchanged(t *testing.T) {
+	setup()
+
+	owner, _, _, qs, _ := createQuestionSetTestFixture(t, "enrich-rev-owner")
+	collab, _, _, _, _ := createQuestionSetTestFixture(t, "enrich-rev-collab")
+
+	now := time.Now()
+	revokedAt := now.Add(time.Second)
+	require.NoError(t, db.Create(&models.QuestionSetCollaborator{
+		ID:              uuid.New(),
+		QuestionSetID:   qs.ID,
+		UserID:          collab.ID,
+		Role:            "editor",
+		InvitedByUserID: owner.ID,
+		AcceptedAt:      &now,
+		RevokedAt:       &revokedAt,
+	}).Error)
+
+	hub := NewHub(db, nil, "test-secret", nil)
+	qsCopy := qs
+	hub.enrichQuestionSetSharing(db, &qsCopy, collab.ID)
+
+	assert.False(t, qsCopy.IsShared, "revoked collaborator must not see shared metadata")
+	assert.Nil(t, qsCopy.OwnerUserID)
+	assert.Empty(t, qsCopy.OwnerAgents)
+	assert.Empty(t, qsCopy.Role)
+}

@@ -1,5 +1,6 @@
 import { getRecentRunIdForQuestionSet, getCachedRunForQuestionSet, setCachedRunForQuestionSet } from '../utils/arena/cache.js'
 import { collectResultIDsForQuestion } from '../utils/arena/results.js'
+import { resolveRunAgentIdsStrict } from '../utils/arena/runs.js'
 
 export function useArenaRunResultsLoader(options = {}) {
   const {
@@ -103,7 +104,16 @@ export function useArenaRunResultsLoader(options = {}) {
       return
     }
 
-    currentRun.value = data.run
+    // Derive which agents actually participated in this run so the run-membership
+    // guard in getRetryEligibleAgents can filter correctly. Without this, the guard
+    // (runAgentSet) stays null and ALL workspace agents become retry candidates,
+    // causing phantom "missing" targets for agents that were never in this run.
+    // Strict (results-only) — deliberately ignores currently-enabled QS agents
+    // so a newly-added agent cannot leak into a completed run's agentIds and
+    // mutate history via the retry flow.
+    const agentIds = resolveRunAgentIdsStrict(data)
+
+    currentRun.value = { ...data.run, agentIds }
     const skeletonResults = {}
     const allResultIds = []
 

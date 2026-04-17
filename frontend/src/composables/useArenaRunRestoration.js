@@ -21,6 +21,7 @@ export function useArenaRunRestoration(options = {}) {
     fetchLatestResultsForQS,
     mergeQuestionSetForUI,
     resolveRunAgentIds,
+    resolveRunAgentIdsStrict,
     extractQuestionIdsFromQuestionSet
   } = options
 
@@ -144,7 +145,14 @@ export function useArenaRunRestoration(options = {}) {
           currentQuestionSet.value = mergeQuestionSetForUI(data.question_set, currentQuestionSet.value)
         }
 
-        const runAgentIds = resolveRunAgentIds(data)
+        // Completed/cancelled run branch — derive agentIds strictly from what
+        // actually participated (results + server-built agents map). Ignoring
+        // the current QS agents prevents newly-added agents from leaking into
+        // a historical run's membership set and mutating history via retry.
+        const strictResolver = typeof resolveRunAgentIdsStrict === 'function'
+          ? resolveRunAgentIdsStrict
+          : resolveRunAgentIds
+        const runAgentIds = strictResolver(data)
         const questionIds = extractQuestionIdsFromQuestionSet(data.question_set)
         const restored = {}
 

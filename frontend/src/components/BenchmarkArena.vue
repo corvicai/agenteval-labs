@@ -534,12 +534,12 @@ import { useWSStore } from '../stores/wsStore'
 import { extractTextOnly } from '../utils/chatHelpers.js'
 import { getContentPreviewText, processContent } from '../utils/markdown.js'
 import { isEvaluatorAgentObject, toAgentID, uniqueStringIDs, mergeAgentIDs } from '../utils/arena/agents.js'
-import { mergeQuestionSetForUI, getQuestionSetListSyncSignature, getQuestionSetSyncSignature, getRunQuestionSetID } from '../utils/arena/questionSet.js'
+import { mergeQuestionSetForUI, getQuestionSetListSyncSignature, getQuestionSetSyncSignature, getRunQuestionSetID, isQuestionSetShared, getSharedOwnerAgents } from '../utils/arena/questionSet.js'
 import { extractScoreOutOfTen, truncatePreviewText, extractQuestionIdsFromQuestionSet, parseEvaluatorTaskQuestionID } from '../utils/arena/parsing.js'
 import { calculateStats, calculateAverageEvaluationScore, formatDuration } from '../utils/arena/stats.js'
 import { flattenQuestionSetQuestions, hasQuestionBeenRun as hasQuestionBeenRunUtil, getQuestionStatus as getQuestionStatusUtil, isQuestionLoading as isQuestionLoadingUtil, getQuestionStatusText as getQuestionStatusTextUtil, getQuestionStatusTooltip as getQuestionStatusTooltipUtil } from '../utils/arena/questions.js'
 import { getPrimaryResponseEntry as getPrimaryResponseEntryUtil, getQuestionResponse as getQuestionResponseUtil, getQuestionEvaluation as getQuestionEvaluationUtil } from '../utils/arena/responses.js'
-import { splitSelectedAgents as splitSelectedAgentsUtil, resolveRunAgentIds as resolveRunAgentIdsUtil } from '../utils/arena/runs.js'
+import { splitSelectedAgents as splitSelectedAgentsUtil, resolveRunAgentIds as resolveRunAgentIdsUtil, resolveRunAgentIdsStrict as resolveRunAgentIdsStrictUtil } from '../utils/arena/runs.js'
 import { saveRunProgress as saveRunProgressUtil, loadRunProgress as loadRunProgressUtil, clearRunProgress as clearRunProgressUtil, hasLoadingResults as hasLoadingResultsUtil, waitForResultsToLoad as waitForResultsToLoadUtil } from '../utils/arena/progress.js'
 import { getAgentResults as getAgentResultsUtil } from '../utils/arena/results.js'
 import { registerArenaWsEvents } from '../utils/arena/wsBindings.js'
@@ -724,6 +724,7 @@ const {
   fetchLatestResultsForQS,
   mergeQuestionSetForUI,
   resolveRunAgentIds: resolveRunAgentIdsUtil,
+  resolveRunAgentIdsStrict: resolveRunAgentIdsStrictUtil,
   extractQuestionIdsFromQuestionSet
 })
 
@@ -792,7 +793,7 @@ watch(questionSetListSyncKey, () => {
 
   // If the current QS is a shared one, don't look it up in own question sets.
   // A separate watcher (sharedQuestionSetListSyncKey) handles shared QS updates.
-  if (currentQuestionSet.value._shared) {
+  if (isQuestionSetShared(currentQuestionSet.value)) {
     return
   }
 
@@ -814,7 +815,7 @@ watch(questionSetListSyncKey, () => {
 watch(sharedQuestionSetListSyncKey, () => {
   const sharedSets = Array.isArray(props.sharedQuestionSets) ? props.sharedQuestionSets : []
 
-  if (!currentQuestionSet.value?._shared) return
+  if (!isQuestionSetShared(currentQuestionSet.value)) return
 
   const updated = sharedSets.find(s => s.id === currentQuestionSet.value.id)
   if (updated) {
@@ -1309,8 +1310,10 @@ const mergedAgents = computed(() => {
 
   // For shared QSs, use the owner's agents (redacted, sent by backend in
   // owner_agents). The collaborator's own agents are irrelevant here.
-  if (qs?._shared) {
-    const ownerAgents = Array.isArray(qs.owner_agents) ? qs.owner_agents : []
+  // Source of truth is the server-sent is_shared flag; we fall back to the
+  // legacy client `_shared` marker only when the server did not enrich.
+  if (isQuestionSetShared(qs)) {
+    const ownerAgents = getSharedOwnerAgents(qs)
     if (ownerAgents.length === 0) return []
 
     // Apply QS-level overrides (enabled/position) if present.

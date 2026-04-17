@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	dbcompat "benchmarking-platform/internal/db"
+	"benchmarking-platform/internal/logger"
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
@@ -108,4 +109,71 @@ func redactAgentConfig(agent models.Agent) models.Agent {
 		agent.Config = models.EncryptedJSON(b)
 	}
 	return agent
+}
+
+// enrichQuestionSetSharing populates the transient sharing metadata on qs
+// when the target user is an accepted collaborator (not the owner). For
+// owners (or users with no access) it is a no-op — the QS is serialized
+// exactly as it would have been before, preserving backwards compatibility.
+//
+// This centralizes what used to be a client-side inference (the `_shared`
+// flag) so every handler that returns a QS to a user emits the same, server
+// authoritative view: is_shared, owner_*, owner_agents (redacted), role.
+// Frontend consumers should treat these fields as the source of truth.
+//
+// Errors are non-fatal — a best-effort log is emitted and the QS is returned
+// without enrichment. Callers never need to branch on enrichment outcomes.
+func (h *Hub) enrichQuestionSetSharing(db *gorm.DB, qs *models.QuestionSet, userID uuid.UUID) {
+	if qs == nil || qs.ID == uuid.Nil || userID == uuid.Nil {
+		return
+	}
+
+	access, _, ownerWorkspace, err := h.getQuestionSetAccess(db, userID, qs.ID)
+	if err != nil {
+		logger.Debug("[WS] enrichQuestionSetSharing: access lookup failed user=%s qs=%s err=%v",
+			userID, qs.ID, err)
+		return
+	}
+	if access == accessNone || access == accessOwner {
+		return
+	}
+
+	var owner models.User
+	if err := db.First(&owner, "id = ?", ownerWorkspace.UserID).Error; err != nil {
+		logger.Warn("[WS] enrichQuestionSetSharing: could not load owner user=%s qs=%s err=%v",
+			ownerWorkspace.UserID, qs.ID, err)
+		return
+	}
+
+	var ownerAgents []models.Agent
+	if err := db.Where("workspace_id = ?", ownerWorkspace.ID).
+		Order("position ASC, created_at ASC").
+		Find(&ownerAgents).Error; err != nil {
+		logger.Warn("[WS] enrichQuestionSetSharing: could not load owner agents qs=%s err=%v",
+			qs.ID, err)
+	}
+	redacted := make([]models.Agent, len(ownerAgents))
+	for i, a := range ownerAgents {
+		redacted[i] = redactAgentConfig(a)
+	}
+
+	var role string
+	switch access {
+	case accessEditor:
+		role = "editor"
+	case accessViewer:
+		role = "viewer"
+	default:
+		role = "editor"
+	}
+
+	ownerUserID := ownerWorkspace.UserID
+	ownerWsID := ownerWorkspace.ID
+
+	qs.IsShared = true
+	qs.OwnerUserID = &ownerUserID
+	qs.OwnerName = owner.Name
+	qs.OwnerWorkspaceID = &ownerWsID
+	qs.OwnerAgents = redacted
+	qs.Role = role
 }

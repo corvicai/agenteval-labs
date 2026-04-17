@@ -76,6 +76,35 @@ export function resolveRunAgentIds(data) {
   return Array.from(ids).filter(Boolean)
 }
 
+// Strict variant for (completed/historical) runs: only sources that reflect
+// what actually participated. Intentionally skips data.question_set.agents
+// (the CURRENT QS config) so a newly-added agent does not leak into a past
+// run's agentIds and mutate history via the retry flow.
+export function resolveRunAgentIdsStrict(data) {
+  const ids = new Set()
+
+  const runAgentIds = data?.run?.agent_ids || data?.run?.agentIds
+  if (Array.isArray(runAgentIds)) {
+    runAgentIds.forEach((id) => {
+      if (id) ids.add(String(id))
+    })
+  }
+
+  if (Array.isArray(data?.results)) {
+    data.results.forEach((res) => {
+      if (res?.agent_id) ids.add(String(res.agent_id))
+    })
+  }
+
+  if (data?.agents && typeof data.agents === 'object' && !Array.isArray(data.agents)) {
+    Object.keys(data.agents).forEach((id) => {
+      if (id) ids.add(String(id))
+    })
+  }
+
+  return Array.from(ids).filter(Boolean)
+}
+
 export function resolveRetryStatusItems(response) {
   if (Array.isArray(response?.items)) return response.items
   if (Array.isArray(response)) return response
