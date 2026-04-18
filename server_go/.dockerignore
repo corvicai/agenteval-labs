@@ -1,0 +1,31 @@
+# Build artifacts
+.tmp_go_cache
+main
+*.exe
+*.test
+*.out
+
+# Secrets & dev-only files
+firebase-service-account.json
+cookies.txt
+.env
+.env.*
+
+# Logs
+*.log
+
+# OS / IDE
+.DS_Store
+._*
+.vscode
+.idea
+*.swp
+*.swo
+
+# VCS
+.git
+.gitignore
+
+# Docker artifacts that don't belong inside the image
+Dockerfile*
+.dockerignore

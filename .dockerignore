@@ -1,0 +1,68 @@
+
+# Git / VCS
+.git
+.github
+.gitignore
+.gitattributes
+
+# OS junk
+.DS_Store
+._*
+Thumbs.db
+
+# Editors / IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Local Claude / agent tooling
+.agent
+.claude
+
+# Env files & secrets — must NEVER enter the build context
+.env
+.env.*
+*.env
+.mutagen.yml
+**/firebase-service-account.json
+**/cookies.txt
+
+# Database backups / dumps / migrations test artifacts
+*.sql
+*.sql.gz
+*.dump
+backup_*
+migration_*
+postgres_data
+seed_config.json
+
+# Logs / downloaded telemetry
+*.log
+downloaded-logs-*.json
+
+# Build artifacts (the big offenders)
+**/node_modules
+frontend/dist
+server_go/main
+server_go/*.exe
+server_go/*.test
+server_go/.tmp_go_cache
+
+# Compose files — only used for local dev
+docker-compose*.yml
+docker-compose*.yaml
+
+# Docs / housekeeping (not needed inside container builds)
+docs
+LICENSE
+README.md
+diff_tool
+maintenance
+ops
+infra/releng
+
+# Allow what the Dockerfiles actually need.
+# (Re-includes after broad excludes.)
+!server_go/migrations
+!server_go/migrations/**

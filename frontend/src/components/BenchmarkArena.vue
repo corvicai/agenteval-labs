@@ -85,24 +85,24 @@
           <span class="btn-inline-count">{{ failedEvaluatorRetryCount }}</span>
         </button>
         <button
-          v-if="incompletePrimaryRetryCount > 0"
+          v-if="activePrimaryRetryCount > 0"
           class="btn btn-secondary btn-retry-incomplete"
-          @click="retryIncompletePrimaryResults"
+          @click="retryActivePrimaryResults"
           :disabled="!canRetryIncompletePrimary"
           :title="retryIncompletePrimaryTitle"
         >
-          🔄 Retry Missing &amp; Failed
-          <span class="btn-inline-count">{{ incompletePrimaryRetryCount }}</span>
+          🔄 {{ isFilterActive ? 'Retry Filtered' : 'Retry Missing &amp; Failed' }}
+          <span class="btn-inline-count">{{ activePrimaryRetryCount }}</span>
         </button>
         <button
-          v-if="incompleteEvaluatorRetryCount > 0 && hasEnabledEvaluators"
+          v-if="activeEvaluatorRetryCount > 0 && hasEnabledEvaluators"
           class="btn btn-secondary btn-retry-incomplete btn-retry-incomplete-eval"
-          @click="retryIncompleteEvaluatorResults"
+          @click="retryActiveEvaluatorResults"
           :disabled="!canRetryIncompleteEvaluators"
           :title="retryIncompleteEvaluatorTitle"
         >
-          🔄 Retry Missing Evaluations
-          <span class="btn-inline-count">{{ incompleteEvaluatorRetryCount }}</span>
+          🔄 {{ isFilterActive ? 'Retry Filtered Evals' : 'Retry Missing Evaluations' }}
+          <span class="btn-inline-count">{{ activeEvaluatorRetryCount }}</span>
         </button>
         <button
           v-if="hasEnabledEvaluators"
@@ -151,6 +151,8 @@
           <option value="running">Running ({{ questionFilterCounts.running }})</option>
           <option v-if="showEvaluationScoreFilters" value="low_score">Below 5/10 ({{ questionFilterCounts.low_score }})</option>
           <option v-if="showEvaluationScoreFilters" value="critical_score">Below 1/10 ({{ questionFilterCounts.critical_score }})</option>
+          <option v-if="showEvaluationScoreFilters" value="eval_error">Eval Error ({{ questionFilterCounts.eval_error }})</option>
+          <option v-if="showEvaluationScoreFilters" value="zero_score">Score = 0 ({{ questionFilterCounts.zero_score }})</option>
         </select>
       </div>
     </div>
@@ -1038,6 +1040,25 @@ function questionHasEvaluationBelowThreshold(questionId, threshold) {
   return score != null && score < threshold
 }
 
+function questionHasEvalError(questionId) {
+  const qIdStr = String(questionId)
+  for (const agentId in runResults.value || {}) {
+    const agentResults = runResults.value[agentId] || {}
+    for (const [resultKey, result] of Object.entries(agentResults)) {
+      if (!String(resultKey).startsWith('eval-')) continue
+      const parsed = parseEvaluatorTaskQuestionID(String(resultKey))
+      if (!parsed || String(parsed.questionId) !== qIdStr) continue
+      if (result?.error) return true
+    }
+  }
+  return false
+}
+
+function questionHasZeroScore(questionId) {
+  const score = getQuestionEvaluationScoreValue(questionId)
+  return score != null && score === 0
+}
+
 function matchesQuestionFilter(questionId, filter = questionFilter.value) {
   switch (filter) {
     case 'error':
@@ -1048,6 +1069,10 @@ function matchesQuestionFilter(questionId, filter = questionFilter.value) {
       return questionHasEvaluationBelowThreshold(questionId, 5)
     case 'critical_score':
       return questionHasEvaluationBelowThreshold(questionId, 1)
+    case 'eval_error':
+      return questionHasEvalError(questionId)
+    case 'zero_score':
+      return questionHasZeroScore(questionId)
     default:
       return true
   }
@@ -1058,12 +1083,16 @@ const questionFilterCounts = computed(() => {
   let running = 0
   let lowScore = 0
   let criticalScore = 0
+  let evalError = 0
+  let zeroScore = 0
 
   flatQuestions.value.forEach((question) => {
     if (questionHasErrorState(question.id)) error++
     if (questionHasRunningState(question.id)) running++
     if (questionHasEvaluationBelowThreshold(question.id, 5)) lowScore++
     if (questionHasEvaluationBelowThreshold(question.id, 1)) criticalScore++
+    if (questionHasEvalError(question.id)) evalError++
+    if (questionHasZeroScore(question.id)) zeroScore++
   })
 
   return {
@@ -1071,7 +1100,9 @@ const questionFilterCounts = computed(() => {
     error,
     running,
     low_score: lowScore,
-    critical_score: criticalScore
+    critical_score: criticalScore,
+    eval_error: evalError,
+    zero_score: zeroScore
   }
 })
 
@@ -1844,6 +1875,10 @@ function getQuestionFilterLabel(filter = questionFilter.value) {
       return 'questions below 5/10'
     case 'critical_score':
       return 'questions below 1/10'
+    case 'eval_error':
+      return 'questions with evaluator error'
+    case 'zero_score':
+      return 'questions with score = 0'
     default:
       return 'visible questions'
   }
@@ -1936,7 +1971,7 @@ watch(selectedQuestionId, (newId) => {
 
 watch(showEvaluationScoreFilters, (visible) => {
   if (visible) return
-  if (questionFilter.value === 'low_score' || questionFilter.value === 'critical_score') {
+  if (['low_score', 'critical_score', 'eval_error', 'zero_score'].includes(questionFilter.value)) {
     questionFilter.value = 'all'
   }
 }, { immediate: true })
@@ -1973,6 +2008,8 @@ const {
   retryFailedEvaluatorResults,
   retryIncompletePrimaryResults,
   retryIncompleteEvaluatorResults,
+  retrySpecificTargets,
+  getAllRetryTargetsForQuestions,
   getFailedRetryTargets,
   getIncompleteRetryTargets,
   getQuestionEvaluatorTargets,
@@ -2037,12 +2074,45 @@ const canRetryFailedEvaluators = computed(() => {
   return !!currentRun.value?.id && failedEvaluatorRetryCount.value > 0 && !isRunning.value
 })
 
+// When a filter is active, restrict incomplete-retry targets to the visible
+// (filtered) questions only so the "Retry Filtered" button is scoped.
+const isFilterActive = computed(() => questionFilter.value !== 'all')
+
+// Force-retry targets: ALL filtered questions regardless of completion state.
+// These power the "Retry Filtered" / "Re-eval Filtered" buttons which must
+// appear even when all questions completed (e.g. score=0 filter).
+const filteredAllPrimaryTargets = computed(() => {
+  if (!isFilterActive.value || !currentRun.value) return []
+  return getAllRetryTargetsForQuestions(
+    filteredQuestionEntries.value.map((e) => e.question.id),
+    'primary'
+  )
+})
+
+const filteredAllEvaluatorTargets = computed(() => {
+  if (!isFilterActive.value || !currentRun.value) return []
+  return getAllRetryTargetsForQuestions(
+    filteredQuestionEntries.value.map((e) => e.question.id),
+    'evaluator'
+  )
+})
+
+// When filter is active, active counts come from the full force-retry set so
+// the button appears even for completed-but-low-score questions.
+const activePrimaryRetryCount = computed(() =>
+  isFilterActive.value ? filteredAllPrimaryTargets.value.length : incompletePrimaryRetryCount.value
+)
+
+const activeEvaluatorRetryCount = computed(() =>
+  isFilterActive.value ? filteredAllEvaluatorTargets.value.length : incompleteEvaluatorRetryCount.value
+)
+
 const canRetryIncompletePrimary = computed(() => {
-  return !!currentRun.value?.id && incompletePrimaryRetryCount.value > 0 && !isRunning.value
+  return !!currentRun.value?.id && activePrimaryRetryCount.value > 0 && !isRunning.value
 })
 
 const canRetryIncompleteEvaluators = computed(() => {
-  return !!currentRun.value?.id && incompleteEvaluatorRetryCount.value > 0 && !isRunning.value
+  return !!currentRun.value?.id && activeEvaluatorRetryCount.value > 0 && !isRunning.value
 })
 
 const retryFailedPrimaryTitle = computed(() => {
@@ -2060,16 +2130,34 @@ const retryFailedEvaluatorTitle = computed(() => {
 const retryIncompletePrimaryTitle = computed(() => {
   if (!currentRun.value?.id) return 'No run available to retry'
   if (isRunning.value) return 'Wait for the current run or retry activity to finish'
-  const c = incompletePrimaryRetryCount.value
-  return `Retry ${c} missing or failed agent result${c === 1 ? '' : 's'}`
+  const c = activePrimaryRetryCount.value
+  const scope = isFilterActive.value ? 'filtered' : 'missing or failed'
+  return `Retry ${c} ${scope} agent result${c === 1 ? '' : 's'}`
 })
 
 const retryIncompleteEvaluatorTitle = computed(() => {
   if (!currentRun.value?.id) return 'No run available to retry'
   if (isRunning.value) return 'Wait for the current run or retry activity to finish'
-  const c = incompleteEvaluatorRetryCount.value
-  return `Retry ${c} missing or failed evaluator result${c === 1 ? '' : 's'}`
+  const c = activeEvaluatorRetryCount.value
+  const scope = isFilterActive.value ? 'filtered' : 'missing or failed'
+  return `Retry ${c} ${scope} evaluator result${c === 1 ? '' : 's'}`
 })
+
+async function retryActivePrimaryResults() {
+  if (isFilterActive.value) {
+    await retrySpecificTargets(filteredAllPrimaryTargets.value)
+  } else {
+    await retryIncompletePrimaryResults()
+  }
+}
+
+async function retryActiveEvaluatorResults() {
+  if (isFilterActive.value) {
+    await retrySpecificTargets(filteredAllEvaluatorTargets.value)
+  } else {
+    await retryIncompleteEvaluatorResults()
+  }
+}
 
 function getQuestionEvaluatorRetryCount(questionId) {
   return getQuestionEvaluatorTargets(questionId).length

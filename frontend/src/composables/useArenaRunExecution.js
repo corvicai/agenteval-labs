@@ -773,6 +773,66 @@ export function useArenaRunExecution(options = {}) {
     await retryIncompleteResults('evaluator')
   }
 
+  // Retry an explicit, pre-computed list of targets (same mechanics as
+  // retryIncompleteResults but works with any externally-filtered target set).
+  // Used by "Retry Filtered" when the UI question filter is active.
+  async function retrySpecificTargets(targets) {
+    if (!currentRun.value || !targets || targets.length === 0) return
+
+    const batchStamp = Date.now()
+    const localRetryIds = new Map()
+
+    targets.forEach((target, index) => {
+      const localRetryId = `local-filtered-${target.agentId}-${target.resultKey}-${batchStamp}-${index}`
+      const targetKey = `${target.agentId}::${target.resultKey}::${target.targetAgentId || ''}`
+      localRetryIds.set(targetKey, localRetryId)
+      markLocalRetryPending(target.agentId, target.questionId, localRetryId, { resultKey: target.resultKey })
+    })
+
+    for (const target of targets) {
+      const targetKey = `${target.agentId}::${target.resultKey}::${target.targetAgentId || ''}`
+      const localRetryId = localRetryIds.get(targetKey)
+      await rerunQuestion(target.agentId, target.questionId, localRetryId, {
+        resultKey: target.resultKey,
+        targetAgentId: target.targetAgentId
+      })
+    }
+  }
+
+  // Build retry targets for an explicit set of question IDs regardless of
+  // whether those questions already have results (force-retry). Used when the
+  // user has applied a question filter and wants to re-run everything visible.
+  //
+  //   kind='primary'   → one target per (primaryAgent × question) — skips in-flight only
+  //   kind='evaluator' → uses getQuestionEvaluatorTargets per question — skips in-flight only
+  function getAllRetryTargetsForQuestions(questionIds, kind = 'primary') {
+    if (!currentRun.value || !questionIds || questionIds.length === 0) return []
+    const qIdSet = new Set(questionIds.map(String))
+    const targets = []
+
+    if (kind === 'evaluator') {
+      qIdSet.forEach((qIdStr) => {
+        const qTargets = getQuestionEvaluatorTargets(qIdStr)
+        qTargets.forEach((t) => {
+          const existing = runResults.value[t.agentId]?.[t.resultKey]
+          if (existing?.loading || existing?.queued) return
+          targets.push(t)
+        })
+      })
+      return targets
+    }
+
+    const primaryAgents = getRetryEligibleAgents('primary')
+    qIdSet.forEach((qIdStr) => {
+      primaryAgents.forEach((agent) => {
+        const result = runResults.value[agent.id]?.[qIdStr]
+        if (result?.loading || result?.queued) return
+        targets.push({ agentId: agent.id, questionId: qIdStr, resultKey: qIdStr, targetAgentId: '' })
+      })
+    })
+    return targets
+  }
+
   async function rateResult(resultId, rating) {
     try {
       return await wsService.createEvaluation(resultId, rating)
@@ -827,6 +887,8 @@ export function useArenaRunExecution(options = {}) {
     getIncompleteRetryTargets,
     retryIncompletePrimaryResults,
     retryIncompleteEvaluatorResults,
+    retrySpecificTargets,
+    getAllRetryTargetsForQuestions,
     getQuestionEvaluatorTargets,
     onValidation,
     onRetry
