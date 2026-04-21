@@ -362,6 +362,7 @@ export function useArenaRunExecution(options = {}) {
     if (runResults.value[agentId] && runResults.value[agentId][resultKey]) {
       runResults.value[agentId][resultKey].loading = true
       runResults.value[agentId][resultKey].error = null
+      runResults.value[agentId][resultKey].placeholder = false
     }
 
     const flatQuestions = typeof getFlatQuestions === 'function' ? getFlatQuestions() : []
@@ -459,7 +460,8 @@ export function useArenaRunExecution(options = {}) {
       ...(runResults.value[agentId][resultKey] || {}),
       loading: true,
       queued: false,
-      error: null
+      error: null,
+      placeholder: false
     }
   }
 
@@ -680,7 +682,9 @@ export function useArenaRunExecution(options = {}) {
         enabledAgents.forEach((agent) => {
           if (isEvaluatorAgentObject(agent)) return
           const result = runResults.value[agent.id]?.[qIdStr]
-          if (result && !result.error) return  // completed successfully — skip
+          // Skeleton placeholders (restored active runs) are missing results,
+          // not completed ones — they must stay eligible for "Retry Missing".
+          if (result && !result.error && !result.placeholder) return  // completed successfully — skip
           if (result?.error) return  // errored — handled by "Retry Failed", not here
           if (result?.loading || result?.queued) return  // in-flight — skip
           targets.push({ agentId: agent.id, questionId: qIdStr, resultKey: qIdStr, targetAgentId: '' })

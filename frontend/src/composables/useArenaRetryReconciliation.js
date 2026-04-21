@@ -51,7 +51,8 @@ export function useArenaRetryReconciliation(options = {}) {
       ...(runResults.value[agentId][resultKey] || {}),
       loading: true,
       queued: item?.status === 'queued',
-      error: null
+      error: null,
+      placeholder: false
     }
   }
 
