@@ -54,6 +54,26 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 	case ReqGetPendingResponse:
 		h.handleGetPendingResponse(c, env)
 
+	// Run Comparison handlers
+	case ReqCompareRuns:
+		h.handleCompareRuns(c, env)
+	case ReqCreateComparison:
+		h.handleCreateComparison(c, env)
+	case ReqListComparisons:
+		h.handleListComparisons(c, env)
+	case ReqGetComparison:
+		h.handleGetComparison(c, env)
+	case ReqDeleteComparison:
+		h.handleDeleteComparison(c, env)
+	case ReqListComparisonTemplates:
+		h.handleListComparisonTemplates(c, env)
+	case ReqCreateComparisonTemplate:
+		h.handleCreateComparisonTemplate(c, env)
+	case ReqUpdateComparisonTemplate:
+		h.handleUpdateComparisonTemplate(c, env)
+	case ReqDeleteComparisonTemplate:
+		h.handleDeleteComparisonTemplate(c, env)
+
 	// Dev/Auth handlers
 	case ReqDevGetManagers:
 		h.handleDevGetManagers(c, env)

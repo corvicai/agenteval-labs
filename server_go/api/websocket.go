@@ -196,6 +196,27 @@ const (
 	// WebAuthn Data types
 	DataWebAuthnRegisterOptions = "DATA_WEBAUTHN_REGISTER_OPTIONS"
 	DataWebAuthnLoginOptions    = "DATA_WEBAUTHN_LOGIN_OPTIONS"
+
+	// Run Comparison definitions
+	ReqCompareRuns                = "REQ_COMPARE_RUNS"
+	ReqCreateComparison           = "REQ_CREATE_COMPARISON"
+	ReqListComparisons            = "REQ_LIST_COMPARISONS"
+	ReqGetComparison              = "REQ_GET_COMPARISON"
+	ReqDeleteComparison           = "REQ_DELETE_COMPARISON"
+	ReqListComparisonTemplates    = "REQ_LIST_COMPARISON_TEMPLATES"
+	ReqCreateComparisonTemplate   = "REQ_CREATE_COMPARISON_TEMPLATE"
+	ReqUpdateComparisonTemplate   = "REQ_UPDATE_COMPARISON_TEMPLATE"
+	ReqDeleteComparisonTemplate   = "REQ_DELETE_COMPARISON_TEMPLATE"
+
+	ResCompareRuns                = "RES_COMPARE_RUNS"
+	ResCreateComparison           = "RES_CREATE_COMPARISON"
+	ResListComparisons            = "RES_LIST_COMPARISONS"
+	ResGetComparison              = "RES_GET_COMPARISON"
+	ResDeleteComparison           = "RES_DELETE_COMPARISON"
+	ResListComparisonTemplates    = "RES_LIST_COMPARISON_TEMPLATES"
+	ResCreateComparisonTemplate   = "RES_CREATE_COMPARISON_TEMPLATE"
+	ResUpdateComparisonTemplate   = "RES_UPDATE_COMPARISON_TEMPLATE"
+	ResDeleteComparisonTemplate   = "RES_DELETE_COMPARISON_TEMPLATE"
 )
 
 // Message types - Events
