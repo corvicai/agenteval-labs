@@ -3,6 +3,7 @@ import App from './App.vue'
 import './style.css'
 import { config } from './config.js'
 import { capturePostHogAppLoaded, initPostHog } from './services/posthog.js'
+import './utils/echarts-setup.js'
 
 console.log('AgentEval Revision:', {
   commit: config.APP_REVISION || config.GIT_COMMIT || 'unknown',
