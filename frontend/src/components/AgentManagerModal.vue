@@ -100,7 +100,18 @@
                   <label>Token</label>
                   <input v-model="agent.config.token" type="password" placeholder="Token..." @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
                 </div>
-                
+
+                <div class="field">
+                  <label>Tool Name (Optional)</label>
+                  <input v-model="agent.config.mcp_tool_name" placeholder="query" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  <small class="field-hint">MCP tool to invoke. Leave empty for default <code>query</code>.</small>
+                </div>
+                <div class="field">
+                  <label>Query Argument (Optional)</label>
+                  <input v-model="agent.config.mcp_query_arg" placeholder="query_content" @focus="startEditing" @blur="saveAgent(agent); stopEditing()" @input="markPendingChanges(agent)" />
+                  <small class="field-hint">Argument name that receives the question. Leave empty for default <code>query_content</code>.</small>
+                </div>
+
                 <div v-if="isDev" class="alert alert-info mt-2 full-width">
                   <strong>💡 Dev Tip:</strong> Set Token to <code>MOCK</code> to simulate responses.
                 </div>
@@ -680,6 +691,8 @@ function normalizeConfig(rawConfig, providerType) {
       mode: 'http',
       endpoint: '',
       token: '',
+      mcp_tool_name: '',
+      mcp_query_arg: '',
       ...config
     }
   } else if (providerType === 'nvidia') {
@@ -1081,7 +1094,7 @@ async function addAgent(providerType) {
   if (!props.workspaceId) return
   
   const defaultConfigs = {
-    mcp: { mode: 'http', endpoint: '', token: '' },
+    mcp: { mode: 'http', endpoint: '', token: '', mcp_tool_name: '', mcp_query_arg: '' },
     nvidia: { api_key: '', model: 'meta/llama-3.1-8b-instruct', base_url: '', system_prompt: '' },
     anthropic: {
       anthropic_api_key: '',
