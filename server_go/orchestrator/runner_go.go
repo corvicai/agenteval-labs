@@ -150,7 +150,7 @@ func (r *goRunner) callMCP(ctx context.Context, endpoint, token, question string
 		Timeout: runnerTaskTimeout,
 		Transport: &authTransport{
 			token: token,
-			base:  http.DefaultTransport,
+			base:  guardedHTTPTransport(),
 		},
 	}
 
@@ -1216,7 +1216,7 @@ func callOpenAIWithBaseURLAndHeaders(ctx context.Context, apiKey, projectID, bas
 		req.Header.Set(k, v)
 	}
 
-	client := &http.Client{Timeout: runnerTaskTimeout}
+	client := &http.Client{Timeout: runnerTaskTimeout, Transport: guardedHTTPTransport()}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", nil, err
@@ -1262,7 +1262,7 @@ func callAnthropicMessages(ctx context.Context, apiKey, baseURL, version string,
 	req.Header.Set("anthropic-version", version)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: runnerTaskTimeout}
+	client := &http.Client{Timeout: runnerTaskTimeout, Transport: guardedHTTPTransport()}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", nil, err
