@@ -69,6 +69,14 @@ func (r *goRunner) executeMCP(ctx context.Context, req ExecutionRequest) Executi
 	start := time.Now()
 	endpoint := firstNonEmptyString(req.Config, "endpoint")
 	token := firstNonEmptyString(req.Config, "token")
+	toolName := firstNonEmptyString(req.Config, "mcp_tool_name", "tool_name")
+	if toolName == "" {
+		toolName = "query"
+	}
+	queryArg := firstNonEmptyString(req.Config, "mcp_query_arg", "query_arg")
+	if queryArg == "" {
+		queryArg = "query_content"
+	}
 	questionText := resolveQuestionText(req.Payload)
 
 	if endpoint == "" {
@@ -109,7 +117,7 @@ func (r *goRunner) executeMCP(ctx context.Context, req ExecutionRequest) Executi
 			return ExecutionResponse{Success: false, Error: ctx.Err().Error(), Metadata: errorMeta(start, ctx.Err(), nil)}
 		}
 
-		result, metadata, err := r.callMCP(ctx, endpoint, token, questionText, retry)
+		result, metadata, err := r.callMCP(ctx, endpoint, token, toolName, queryArg, questionText, retry)
 		if err == nil {
 			result.Metadata = metadata
 			result.Metadata["duration_ms"] = int(time.Since(start).Milliseconds())
@@ -143,7 +151,7 @@ func (r *goRunner) executeMCP(ctx context.Context, req ExecutionRequest) Executi
 	return ExecutionResponse{Success: false, Error: "Max retries exceeded", Metadata: durationMeta(start)}
 }
 
-func (r *goRunner) callMCP(ctx context.Context, endpoint, token, question string, retry int) (ExecutionResponse, map[string]any, error) {
+func (r *goRunner) callMCP(ctx context.Context, endpoint, token, toolName, queryArg, question string, retry int) (ExecutionResponse, map[string]any, error) {
 	client := mcp.NewClient(&mcp.Implementation{Name: "agenteval-go-runner", Version: "v1.0.0"}, nil)
 
 	httpClient := &http.Client{
@@ -202,9 +210,9 @@ func (r *goRunner) callMCP(ctx context.Context, endpoint, token, question string
 	}()
 
 	res, err := session.CallTool(connCtx, &mcp.CallToolParams{
-		Name: "query",
+		Name: toolName,
 		Arguments: map[string]any{
-			"query_content": question,
+			queryArg: question,
 		},
 	})
 	close(progressStop)
