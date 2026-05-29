@@ -406,6 +406,16 @@ func (h *Hub) handleWsRegister(c *Connection, env models.Envelope) {
 }
 
 func (h *Hub) handleWsBootstrapAdmin(c *Connection, env models.Envelope) {
+	// Refuse to mint an admin once one already exists. Mirrors the REST
+	// /auth/bootstrap-admin guard; without it, any unauthenticated client could
+	// create an admin account at any point in the app's lifetime (privilege escalation).
+	var adminCount int64
+	models.AdminScope(h.db.Model(&models.User{})).Count(&adminCount)
+	if adminCount > 0 {
+		c.SendError(env.CorrelationID, "Admin already exists")
+		return
+	}
+
 	var req struct {
 		Name             string `json:"name"`
 		Email            string `json:"email"`
