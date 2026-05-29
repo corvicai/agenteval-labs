@@ -53,3 +53,4 @@ ops/nginx/.basic-auth-hosts.map
 downloaded-logs-*.json
 *.dump
 docs/improvement-plans.md
+tmp
