@@ -716,6 +716,13 @@ func (h *Hub) handleGetRunDetails(c *Connection, env models.Envelope) {
 		return
 	}
 
+	// Authorize: only the question set's owner or an accepted collaborator may
+	// read this run (prevents cross-tenant IDOR via guessed run IDs).
+	if access, _, _, aerr := h.getQuestionSetAccess(h.db, c.UserID, response.Run.QuestionSetID); aerr != nil || access == accessNone {
+		c.SendError(env.CorrelationID, "access denied")
+		return
+	}
+
 	// 2. Get Question Set
 	if err := h.db.Preload("Client").Preload("Agents").First(&response.QuestionSet, "id = ?", response.Run.QuestionSetID).Error; err != nil {
 		c.SendError(env.CorrelationID, "question set not found")
@@ -803,6 +810,13 @@ func (h *Hub) handleGetRunLite(c *Connection, env models.Envelope) {
 	var run models.Run
 	if err := h.db.First(&run, "id = ?", runID).Error; err != nil {
 		c.SendError(env.CorrelationID, "run not found")
+		return
+	}
+
+	// Authorize: only the question set's owner or an accepted collaborator may
+	// read this run (prevents cross-tenant IDOR via guessed run IDs).
+	if access, _, _, aerr := h.getQuestionSetAccess(h.db, c.UserID, run.QuestionSetID); aerr != nil || access == accessNone {
+		c.SendError(env.CorrelationID, "access denied")
 		return
 	}
 
@@ -1098,9 +1112,38 @@ func (h *Hub) handleGetResultDetails(c *Connection, env models.Envelope) {
 		c.SendError(env.CorrelationID, "failed to fetch details")
 		return
 	}
+
+	// Authorize: keep only results whose run the caller may read (owner or
+	// accepted collaborator of the run's question set). Prevents reading other
+	// tenants' answers by guessing result IDs.
+	results = h.filterAuthorizedResults(c.UserID, results)
+
 	normalizeResultsEvaluationsForDisplay(results)
 
 	c.SendResponse(DataResultDetails, env.CorrelationID, models.ResultDetailsResponse{Results: results})
+}
+
+// filterAuthorizedResults returns only the results whose run the user may read
+// (owner or accepted collaborator of the run's question set). Results are
+// grouped by run so access is resolved once per run.
+func (h *Hub) filterAuthorizedResults(userID uuid.UUID, results []models.RunResult) []models.RunResult {
+	runAllowed := make(map[uuid.UUID]bool)
+	authorized := results[:0]
+	for _, r := range results {
+		allowed, known := runAllowed[r.RunID]
+		if !known {
+			var run models.Run
+			if err := h.db.Select("id", "question_set_id").First(&run, "id = ?", r.RunID).Error; err == nil {
+				access, _, _, aerr := h.getQuestionSetAccess(h.db, userID, run.QuestionSetID)
+				allowed = aerr == nil && access != accessNone
+			}
+			runAllowed[r.RunID] = allowed
+		}
+		if allowed {
+			authorized = append(authorized, r)
+		}
+	}
+	return authorized
 }
 
 func (h *Hub) handleGetRetryStatus(c *Connection, env models.Envelope) {
