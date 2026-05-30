@@ -659,9 +659,12 @@ export function useArenaRunExecution(options = {}) {
     await retryFailedResults('evaluator')
   }
 
-  // Returns all targets that need re-running: error OR never run (no result yet).
-  // For primary: any question/agent combo with no result or an error result.
-  // For evaluator: any question that has a primary answer but no evaluator result (or error).
+  // Returns targets that still need a run but are NOT outright failures — those
+  // are handled separately by getFailedRetryTargets ("Retry Failed"). Keeping the
+  // two sets disjoint is what makes "Retry Missing" and "Retry Failed" non-overlapping.
+  // For primary: question/agent combos with no result yet (never run).
+  // For evaluator: questions with a primary answer but no evaluator result, plus
+  // stale evaluations (the eval points at a superseded primary answer).
   function getIncompleteRetryTargets(kind = 'primary') {
     if (!currentRun.value) return []
 
@@ -676,6 +679,7 @@ export function useArenaRunExecution(options = {}) {
           if (isEvaluatorAgentObject(agent)) return
           const result = runResults.value[agent.id]?.[qIdStr]
           if (result && !result.error) return  // completed successfully — skip
+          if (result?.error) return  // errored — handled by "Retry Failed", not here
           if (result?.loading || result?.queued) return  // in-flight — skip
           targets.push({ agentId: agent.id, questionId: qIdStr, resultKey: qIdStr, targetAgentId: '' })
         })
@@ -718,6 +722,7 @@ export function useArenaRunExecution(options = {}) {
             // fall through: eval is stale
           }
           if (existingEvalResult?.loading || existingEvalResult?.queued) return  // in-flight — skip
+          if (existingEvalResult?.error) return  // errored — handled by "Retry Failed", not here
           deduped.set(`${agent.id}::${canonicalResultKey}`, {
             agentId: agent.id,
             questionId: qIdStr,
@@ -740,8 +745,8 @@ export function useArenaRunExecution(options = {}) {
     const targets = getIncompleteRetryTargets(kind)
     if (targets.length === 0) {
       showAlert(kind === 'evaluator'
-        ? 'No missing or failed evaluator results found.'
-        : 'No missing or failed results found.')
+        ? 'No missing evaluator results found.'
+        : 'No missing results found.')
       return
     }
 

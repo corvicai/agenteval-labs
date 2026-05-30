@@ -91,7 +91,7 @@
           :disabled="!canRetryIncompletePrimary"
           :title="retryIncompletePrimaryTitle"
         >
-          🔄 {{ isFilterActive ? 'Retry Filtered' : 'Retry Missing &amp; Failed' }}
+          🔄 {{ isFilterActive ? 'Retry Filtered' : 'Retry Missing' }}
           <span class="btn-inline-count">{{ activePrimaryRetryCount }}</span>
         </button>
         <button
@@ -2131,7 +2131,7 @@ const retryIncompletePrimaryTitle = computed(() => {
   if (!currentRun.value?.id) return 'No run available to retry'
   if (isRunning.value) return 'Wait for the current run or retry activity to finish'
   const c = activePrimaryRetryCount.value
-  const scope = isFilterActive.value ? 'filtered' : 'missing or failed'
+  const scope = isFilterActive.value ? 'filtered' : 'missing'
   return `Retry ${c} ${scope} agent result${c === 1 ? '' : 's'}`
 })
 
@@ -2139,7 +2139,7 @@ const retryIncompleteEvaluatorTitle = computed(() => {
   if (!currentRun.value?.id) return 'No run available to retry'
   if (isRunning.value) return 'Wait for the current run or retry activity to finish'
   const c = activeEvaluatorRetryCount.value
-  const scope = isFilterActive.value ? 'filtered' : 'missing or failed'
+  const scope = isFilterActive.value ? 'filtered' : 'missing'
   return `Retry ${c} ${scope} evaluator result${c === 1 ? '' : 's'}`
 })
 
