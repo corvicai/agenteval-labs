@@ -241,9 +241,11 @@ export const processContent = (rawString) => {
   const detectedImages = hasBase64Images(working)
   const extractedImages = detectedImages ? extractBase64Images(working) : []
 
-  // If has markdown or images, render as HTML
+  // If has markdown or images, render as HTML. Otherwise still sanitize the
+  // raw content: `html` is bound via v-html by callers, so returning unsanitized
+  // text here is a stored-XSS sink (e.g. `<img src=x onerror=...>`).
   const shouldRender = detectedMarkdown || detectedImages
-  const html = shouldRender ? renderMarkdown(working) : working
+  const html = shouldRender ? renderMarkdown(working) : purify.sanitize(working)
 
   // Plain text version (remove markdown syntax and images)
   let plainText = working

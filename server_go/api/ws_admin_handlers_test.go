@@ -30,9 +30,12 @@ func TestAdminHandlers(t *testing.T) {
 		resp := sendWSRequest(t, adminToken, ReqAdminGetUsers, map[string]string{})
 		assert.Equal(t, DataAdminUsers, resp.Type)
 
-		var payload []any
+		// Handler returns a paginated envelope: {users, total, page, page_size}
+		var payload struct {
+			Users []any `json:"users"`
+		}
 		json.Unmarshal(resp.Payload, &payload)
-		assert.GreaterOrEqual(t, len(payload), 1)
+		assert.GreaterOrEqual(t, len(payload.Users), 1)
 	})
 
 	t.Run("CreateUser", func(t *testing.T) {
