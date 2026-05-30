@@ -89,6 +89,15 @@ func (h *Hub) handleGetWorkspaceStats(c *Connection, env models.Envelope) {
 		return
 	}
 
+	// Authorize: only the workspace owner (or an admin) may read its stats.
+	if _, err := h.loadOwnedWorkspace(h.db, c.UserID, wsID); err != nil {
+		var user models.User
+		if dbErr := h.db.First(&user, "id = ?", c.UserID).Error; dbErr != nil || !user.IsAdmin {
+			c.SendError(env.CorrelationID, "access denied")
+			return
+		}
+	}
+
 	const WorkspaceCacheTTL = 5 * time.Minute
 
 	if !req.Force {
