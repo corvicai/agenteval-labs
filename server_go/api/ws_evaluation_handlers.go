@@ -8,9 +8,15 @@ import (
 	"benchmarking-platform/models"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 func (h *Hub) handleCreateEvaluation(c *Connection, env models.Envelope) {
+	if !c.IsAuthenticated || c.UserID == uuid.Nil {
+		c.SendError(env.CorrelationID, "authentication required")
+		return
+	}
+
 	var req models.CreateEvaluationPayload
 	if err := json.Unmarshal([]byte(env.Payload), &req); err != nil {
 		c.SendError(env.CorrelationID, "invalid payload: "+err.Error())
@@ -80,6 +86,24 @@ func (h *Hub) handleCreateEvaluation(c *Connection, env models.Envelope) {
 		score = &defaultScore
 	}
 
+	var runResult models.RunResult
+	if err := h.db.Select("id", "run_id").First(&runResult, "id = ?", resultID).Error; err != nil {
+		c.SendError(env.CorrelationID, "run result not found")
+		return
+	}
+
+	var run models.Run
+	if err := h.db.Select("id", "question_set_id", "workspace_id").First(&run, "id = ?", runResult.RunID).Error; err != nil {
+		c.SendError(env.CorrelationID, "run not found")
+		return
+	}
+
+	access, _, _, accessErr := h.getQuestionSetAccess(h.db, c.UserID, run.QuestionSetID)
+	if accessErr != nil || !canReadQuestionSet(access) {
+		c.SendError(env.CorrelationID, "access denied")
+		return
+	}
+
 	eval := models.Evaluation{
 		ID:          uuid.New(),
 		RunResultID: resultID,
@@ -91,7 +115,13 @@ func (h *Hub) handleCreateEvaluation(c *Connection, env models.Envelope) {
 		Comments:    req.Comments,
 	}
 
-	if err := h.db.Create(&eval).Error; err != nil {
+	if err := h.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("run_result_id = ? AND rater_type = ? AND rater_id = ?", resultID, "user", c.UserID).
+			Delete(&models.Evaluation{}).Error; err != nil {
+			return err
+		}
+		return tx.Create(&eval).Error
+	}); err != nil {
 		c.SendError(env.CorrelationID, "failed to create evaluation: "+err.Error())
 		return
 	}
@@ -105,13 +135,7 @@ func (h *Hub) handleCreateEvaluation(c *Connection, env models.Envelope) {
 		Action:   "updated",
 		Data:     eval,
 	}
-	var runRow struct {
-		RunID uuid.UUID `gorm:"column:run_id"`
-	}
-	if err := h.db.Raw(`SELECT run_id FROM run_results WHERE id = ? LIMIT 1`, resultID).Scan(&runRow).Error; err != nil || runRow.RunID == uuid.Nil {
-		logger.Warn("[WS] handleCreateEvaluation: could not resolve run for result %s: %v", resultID, err)
-		h.BroadcastEvent(c.WorkspaceID, EvtDataChanged, "", dataChanged)
-	} else if sendErr := h.SendEventForRun(runRow.RunID, EvtDataChanged, "", dataChanged); sendErr != nil {
+	if sendErr := h.SendEventForRun(run.ID, EvtDataChanged, "", dataChanged); sendErr != nil {
 		logger.Warn("[WS] handleCreateEvaluation: SendEventForRun failed, falling back to workspace broadcast: %v", sendErr)
 		h.BroadcastEvent(c.WorkspaceID, EvtDataChanged, "", dataChanged)
 	}
@@ -120,6 +144,11 @@ func (h *Hub) handleCreateEvaluation(c *Connection, env models.Envelope) {
 }
 
 func (h *Hub) handleRunEvaluators(c *Connection, env models.Envelope) {
+	if !c.IsAuthenticated || c.UserID == uuid.Nil {
+		c.SendError(env.CorrelationID, "authentication required")
+		return
+	}
+
 	var req models.RunEvaluatorsPayload
 	if err := json.Unmarshal([]byte(env.Payload), &req); err != nil {
 		c.SendError(env.CorrelationID, "invalid payload: "+err.Error())
@@ -132,15 +161,42 @@ func (h *Hub) handleRunEvaluators(c *Connection, env models.Envelope) {
 		return
 	}
 
+	var run models.Run
+	if err := h.db.Select("id", "question_set_id").First(&run, "id = ?", runID).Error; err != nil {
+		c.SendError(env.CorrelationID, "run not found")
+		return
+	}
+	if access, _, _, accessErr := h.getQuestionSetAccess(h.db, c.UserID, run.QuestionSetID); accessErr != nil || !canWriteQuestionSet(access) {
+		c.SendError(env.CorrelationID, "access denied")
+		return
+	}
+
 	var selectedEvaluatorIDs []uuid.UUID
+	seenEvaluatorIDs := make(map[uuid.UUID]struct{}, len(req.EvaluatorAgentIDs))
 	for _, idStr := range req.EvaluatorAgentIDs {
-		if id, parseErr := uuid.Parse(idStr); parseErr == nil {
+		id, parseErr := uuid.Parse(idStr)
+		if parseErr != nil {
+			c.SendError(env.CorrelationID, "invalid evaluator_agent_id")
+			return
+		}
+		if _, seen := seenEvaluatorIDs[id]; !seen {
+			seenEvaluatorIDs[id] = struct{}{}
 			selectedEvaluatorIDs = append(selectedEvaluatorIDs, id)
 		}
 	}
 	if len(selectedEvaluatorIDs) == 0 {
 		c.SendError(env.CorrelationID, "failed to run evaluators: no evaluator agents selected")
 		return
+	}
+
+	for _, evaluatorID := range selectedEvaluatorIDs {
+		if access, _, _, accessErr := h.getAgentAccess(h.db, c.UserID, evaluatorID); accessErr != nil {
+			c.SendError(env.CorrelationID, "failed to verify evaluator access")
+			return
+		} else if access == agentAccessNone {
+			c.SendError(env.CorrelationID, "evaluator agent is not accessible to you")
+			return
+		}
 	}
 
 	if err := h.engine.RunEvaluators(runID, selectedEvaluatorIDs); err != nil {

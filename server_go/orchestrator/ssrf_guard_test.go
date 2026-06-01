@@ -60,3 +60,13 @@ func TestSSRFDialControl(t *testing.T) {
 		t.Errorf("expected dial to public IP to be allowed, got %v", err)
 	}
 }
+
+func TestSSRFProtectionActiveUsesAppEnv(t *testing.T) {
+	t.Setenv("K_SERVICE", "")
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("n", "")
+
+	if !ssrfProtectionActive() {
+		t.Fatal("expected SSRF protection to be active when APP_ENV=production")
+	}
+}

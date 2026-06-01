@@ -139,6 +139,11 @@ func ensureAgentSyncConfigs(agents []models.Agent) (hadDecryptionErrors bool) {
 }
 
 func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
+	if !c.IsAuthenticated || c.UserID == uuid.Nil {
+		c.SendError(env.CorrelationID, "authentication required")
+		return
+	}
+
 	var payload models.StartRunPayload
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
 		c.SendError(env.CorrelationID, "invalid payload")
@@ -152,10 +157,27 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 	}
 
 	var agentIDs []uuid.UUID
+	seenAgentIDs := make(map[uuid.UUID]struct{}, len(payload.AgentIDs))
 	for _, idStr := range payload.AgentIDs {
-		if id, err := uuid.Parse(idStr); err == nil {
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			c.SendError(env.CorrelationID, "invalid agent_id")
+			return
+		}
+		if _, seen := seenAgentIDs[id]; !seen {
+			seenAgentIDs[id] = struct{}{}
 			agentIDs = append(agentIDs, id)
 		}
+	}
+
+	access, _, ownerWs, accessErr := h.getQuestionSetAccess(h.db, c.UserID, qsID)
+	if accessErr != nil {
+		c.SendError(env.CorrelationID, "question set not found")
+		return
+	}
+	if !canWriteQuestionSet(access) {
+		c.SendError(env.CorrelationID, "access denied")
+		return
 	}
 
 	// Validate Agent Credentials
@@ -163,6 +185,10 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 		var agents []models.Agent
 		if err := h.db.Find(&agents, agentIDs).Error; err != nil {
 			c.SendError(env.CorrelationID, "failed to load agents for validation")
+			return
+		}
+		if len(agents) != len(agentIDs) {
+			c.SendError(env.CorrelationID, "one or more selected agents were not found")
 			return
 		}
 
@@ -310,7 +336,7 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 	// create runs they can't read back (they'd query the owner's workspace
 	// while the run sits orphaned in the collaborator's workspace).
 	runWorkspaceID := c.WorkspaceID
-	if access, _, ownerWs, aErr := h.getQuestionSetAccess(h.db, c.UserID, qsID); aErr == nil && access != accessNone && access != accessOwner {
+	if access != accessOwner {
 		runWorkspaceID = ownerWs.ID
 		logger.Debug("[WS] handleStartRun: routing shared-QS run to owner workspace user=%s qs=%s access=%d ownerWs=%s",
 			c.UserID, qsID, access, ownerWs.ID)
@@ -341,6 +367,11 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 }
 
 func (h *Hub) handleRerunTask(c *Connection, env models.Envelope) {
+	if !c.IsAuthenticated || c.UserID == uuid.Nil {
+		c.SendError(env.CorrelationID, "authentication required")
+		return
+	}
+
 	var payload models.RerunTaskPayload
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
 		c.SendError(env.CorrelationID, "invalid payload")
@@ -355,6 +386,16 @@ func (h *Hub) handleRerunTask(c *Connection, env models.Envelope) {
 	agentID, err := uuid.Parse(payload.AgentID)
 	if err != nil {
 		c.SendError(env.CorrelationID, "invalid agent_id")
+		return
+	}
+
+	var run models.Run
+	if err := h.db.Select("id", "question_set_id").First(&run, "id = ?", runID).Error; err != nil {
+		c.SendError(env.CorrelationID, "run not found")
+		return
+	}
+	if access, _, _, accessErr := h.getQuestionSetAccess(h.db, c.UserID, run.QuestionSetID); accessErr != nil || !canWriteQuestionSet(access) {
+		c.SendError(env.CorrelationID, "access denied")
 		return
 	}
 
@@ -393,6 +434,11 @@ func (h *Hub) handleRerunTask(c *Connection, env models.Envelope) {
 }
 
 func (h *Hub) handleCancelRun(c *Connection, env models.Envelope) {
+	if !c.IsAuthenticated || c.UserID == uuid.Nil {
+		c.SendError(env.CorrelationID, "authentication required")
+		return
+	}
+
 	var payload models.CancelRunPayload
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
 		c.SendError(env.CorrelationID, "invalid payload")
@@ -404,6 +450,17 @@ func (h *Hub) handleCancelRun(c *Connection, env models.Envelope) {
 		c.SendError(env.CorrelationID, "invalid run_id")
 		return
 	}
+
+	var run models.Run
+	if err := h.db.Select("id", "question_set_id").First(&run, "id = ?", runID).Error; err != nil {
+		c.SendError(env.CorrelationID, "run not found")
+		return
+	}
+	if access, _, _, accessErr := h.getQuestionSetAccess(h.db, c.UserID, run.QuestionSetID); accessErr != nil || !canWriteQuestionSet(access) {
+		c.SendError(env.CorrelationID, "access denied")
+		return
+	}
+
 	h.engine.CancelRun(runID)
 	if err := h.cacheAndSendResponse(c, DataResponse, env.CorrelationID, map[string]string{"status": "cancelled"}); err != nil {
 		logger.Warn("[WS] handleCancelRun: send failed: %v", err)
@@ -411,6 +468,19 @@ func (h *Hub) handleCancelRun(c *Connection, env models.Envelope) {
 }
 
 func (h *Hub) handleSyncState(c *Connection, env models.Envelope) {
+	if !c.IsAuthenticated || c.UserID == uuid.Nil {
+		c.SendError(env.CorrelationID, "authentication required")
+		return
+	}
+	if c.WorkspaceID == uuid.Nil {
+		c.SendError(env.CorrelationID, "no workspace selected")
+		return
+	}
+	if _, err := h.loadOwnedWorkspace(h.db, c.UserID, c.WorkspaceID); err != nil {
+		c.SendError(env.CorrelationID, "workspace not found or access denied")
+		return
+	}
+
 	var payload models.SyncStatePayload
 
 	logger.Debug("[WS] SyncState requested for workspace: %s", c.WorkspaceID)
@@ -718,7 +788,7 @@ func (h *Hub) handleGetRunDetails(c *Connection, env models.Envelope) {
 
 	// Authorize: only the question set's owner or an accepted collaborator may
 	// read this run (prevents cross-tenant IDOR via guessed run IDs).
-	if access, _, _, aerr := h.getQuestionSetAccess(h.db, c.UserID, response.Run.QuestionSetID); aerr != nil || access == accessNone {
+	if access, _, _, aerr := h.getQuestionSetAccess(h.db, c.UserID, response.Run.QuestionSetID); aerr != nil || !canReadQuestionSet(access) {
 		c.SendError(env.CorrelationID, "access denied")
 		return
 	}
@@ -815,7 +885,7 @@ func (h *Hub) handleGetRunLite(c *Connection, env models.Envelope) {
 
 	// Authorize: only the question set's owner or an accepted collaborator may
 	// read this run (prevents cross-tenant IDOR via guessed run IDs).
-	if access, _, _, aerr := h.getQuestionSetAccess(h.db, c.UserID, run.QuestionSetID); aerr != nil || access == accessNone {
+	if access, _, _, aerr := h.getQuestionSetAccess(h.db, c.UserID, run.QuestionSetID); aerr != nil || !canReadQuestionSet(access) {
 		c.SendError(env.CorrelationID, "access denied")
 		return
 	}
@@ -963,7 +1033,7 @@ func (h *Hub) handleGetLatestRunByQuestionSet(c *Connection, env models.Envelope
 	if access == accessNone && ownerWs.ID != uuid.Nil && ownerWs.ID == c.WorkspaceID {
 		access = accessOwner
 	}
-	if access == accessNone {
+	if !canReadQuestionSet(access) {
 		logger.Warn("[WS] GetLatestRunByQS: rejected user=%s qs=%s (no access) connWs=%s ownerWs=%s",
 			c.UserID, qsID, c.WorkspaceID, ownerWs.ID)
 		c.SendError(env.CorrelationID, "not authorized")
@@ -1135,7 +1205,7 @@ func (h *Hub) filterAuthorizedResults(userID uuid.UUID, results []models.RunResu
 			var run models.Run
 			if err := h.db.Select("id", "question_set_id").First(&run, "id = ?", r.RunID).Error; err == nil {
 				access, _, _, aerr := h.getQuestionSetAccess(h.db, userID, run.QuestionSetID)
-				allowed = aerr == nil && access != accessNone
+				allowed = aerr == nil && canReadQuestionSet(access)
 			}
 			runAllowed[r.RunID] = allowed
 		}

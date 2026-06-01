@@ -68,6 +68,14 @@ func (h *Hub) getQuestionSetAccess(db *gorm.DB, userID, questionSetID uuid.UUID)
 	}
 }
 
+func canReadQuestionSet(access accessMode) bool {
+	return access == accessOwner || access == accessEditor || access == accessViewer
+}
+
+func canWriteQuestionSet(access accessMode) bool {
+	return access == accessOwner || access == accessEditor
+}
+
 // sensitiveConfigKeys are substrings that identify sensitive agent config fields.
 // Any config key whose lower-case form contains one of these is redacted.
 var sensitiveConfigKeys = []string{"token", "api_key", "secret", "password"}

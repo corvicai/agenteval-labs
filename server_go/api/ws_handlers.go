@@ -10,6 +10,12 @@ import (
 func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 	logger.Debug("[WS] Handling message: %s (CorrelationID: %s)", env.Type, env.CorrelationID)
 
+	if !c.IsAuthenticated && !isWSMessageAllowedWithoutAuth(env.Type) {
+		logger.Warn("[WS] Rejected unauthenticated message: %s", env.Type)
+		c.SendError(env.CorrelationID, "authentication required")
+		return
+	}
+
 	switch env.Type {
 	case ReqGetManagerStats:
 		h.handleGetManagerStats(c, env)
@@ -228,21 +234,26 @@ func (h *Hub) HandleWSMessage(c *Connection, env models.Envelope) {
 		h.handleCheckDBPerf(c, env)
 
 	default:
-		// Authentication Guard
-		if !c.IsAuthenticated {
-			// Check if message is in the allowlist for unauthenticated connections
-			switch env.Type {
-			case ReqAuth, ReqCheckAdminExists, ReqWsBootstrapAdmin, ReqWsLogin, ReqWsRegister:
-				// Allow these
-			default:
-				logger.Warn("[WS] Rejected unauthenticated message: %s", env.Type)
-				c.SendError(env.CorrelationID, "authentication required")
-				return
-			}
-		}
-
 		logger.Warn("[WS] Unknown message type: %s", env.Type)
 		c.SendError(env.CorrelationID, "unknown message type")
+	}
+}
+
+func isWSMessageAllowedWithoutAuth(messageType string) bool {
+	switch messageType {
+	case ReqAuth,
+		ReqCheckAdminExists,
+		ReqWsBootstrapAdmin,
+		ReqWsLogin,
+		ReqWsRegister,
+		ReqWebAuthnLoginBegin,
+		ReqWebAuthnLoginFinish,
+		ReqDevGetManagers,
+		ReqDevLogin,
+		ReqPing:
+		return true
+	default:
+		return false
 	}
 }
 
