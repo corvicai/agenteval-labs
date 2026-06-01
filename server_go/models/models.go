@@ -202,9 +202,9 @@ type RunResult struct {
 
 type Evaluation struct {
 	ID          uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
-	RunResultID uuid.UUID `gorm:"type:uuid;not null" json:"run_result_id"`
-	RaterType   string    `gorm:"not null" json:"rater_type"` // 'user', 'agent'
-	RaterID     uuid.UUID `gorm:"type:uuid" json:"rater_id"`
+	RunResultID uuid.UUID `gorm:"type:uuid;not null;uniqueIndex:idx_evaluations_result_rater" json:"run_result_id"`
+	RaterType   string    `gorm:"not null;uniqueIndex:idx_evaluations_result_rater" json:"rater_type"` // 'user', 'agent'
+	RaterID     uuid.UUID `gorm:"type:uuid;uniqueIndex:idx_evaluations_result_rater" json:"rater_id"`
 	Rating      string    `gorm:"not null" json:"rating"` // 'like', 'dislike', 'valid', 'wrong'
 	RatingCode  *int      `json:"rating_code"`            // 1=like, 2=valid, 3=dislike, 4=wrong
 	Score       *int      `json:"score"`                  // Optional numerical score

@@ -190,9 +190,10 @@ func TestEvaluationHandler_List(t *testing.T) {
 			ID:          uuid.New(),
 			RunResultID: runResultID,
 			RaterType:   "user",
+			RaterID:     uuid.New(),
 			Rating:      "like",
 		}
-		db.Create(&eval)
+		require.NoError(t, db.Create(&eval).Error)
 	}
 
 	e := echo.New()

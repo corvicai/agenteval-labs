@@ -48,14 +48,13 @@ func ssrfDialControl(network, address string, _ syscall.RawConn) error {
 }
 
 // ssrfProtectionActive reports whether SSRF protection should be enforced.
-// Enabled in production — Cloud Run sets K_SERVICE, and the app's environment
-// variable ("n") is "production". Disabled in local/dev so agents pointed at
-// localhost / private hosts keep working.
+// Enabled in production — Cloud Run sets K_SERVICE, and APP_ENV is "production".
+// Disabled in local/dev so agents pointed at localhost / private hosts keep working.
 func ssrfProtectionActive() bool {
 	if os.Getenv("K_SERVICE") != "" {
 		return true
 	}
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("n")), "production")
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("APP_ENV")), "production")
 }
 
 // guardedHTTPTransport returns a RoundTripper that refuses connections to
