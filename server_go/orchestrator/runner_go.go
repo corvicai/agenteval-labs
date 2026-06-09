@@ -1018,6 +1018,29 @@ func IsMockAPIKey(apiKey string) bool {
 	return isMockAPIKey(apiKey)
 }
 
+// IsProductionAppEnv reports whether APP_ENV marks this process as production.
+// The comparison is normalized (case-insensitive, surrounding whitespace
+// ignored) to match how the runner resolves its own environment.
+func IsProductionAppEnv() bool {
+	return strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV"))) == "production"
+}
+
+// ConfigUsesMockCredential reports whether any credential-like field in config
+// holds a mock/dry-run placeholder value.
+func ConfigUsesMockCredential(config map[string]any) bool {
+	for k, v := range config {
+		lower := strings.ToLower(k)
+		if !strings.Contains(lower, "api_key") && !strings.Contains(lower, "token") &&
+			!strings.Contains(lower, "secret") && !strings.Contains(lower, "password") {
+			continue
+		}
+		if s, ok := v.(string); ok && isMockAPIKey(s) {
+			return true
+		}
+	}
+	return false
+}
+
 func mockMCPAnswer() string {
 	answers := []string{
 		"The answer is correct according to the logic provided.",

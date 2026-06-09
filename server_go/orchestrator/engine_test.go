@@ -1045,6 +1045,84 @@ func TestValidateEvaluatorConfig_DecryptionFailedMarker(t *testing.T) {
 	assert.NotContains(t, err.Error(), "is not configured")
 }
 
+// In production a MOCK/DRYRUN evaluator credential must be rejected up front:
+// the runner refuses to execute it, so allowing it past validation just queues
+// tasks that all fail with "Mock execution is disabled in production".
+func TestValidateEvaluatorConfig_RejectsMockCredentialInProduction(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	engine := NewEngine(db, 0, 0)
+
+	evaluator := models.Agent{
+		ID:           uuid.New(),
+		Name:         "Prod Judge",
+		ProviderType: "evaluator",
+		Config:       models.EncryptedJSON(`{"openai_api_key":"MOCK"}`),
+	}
+
+	t.Run("production rejects a mock credential", func(t *testing.T) {
+		t.Setenv("APP_ENV", "production")
+		err := engine.validateEvaluatorConfig(evaluator)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Prod Judge")
+		assert.Contains(t, err.Error(), "MOCK/DRYRUN")
+	})
+
+	t.Run("APP_ENV is normalized before the comparison", func(t *testing.T) {
+		t.Setenv("APP_ENV", " Production ")
+		err := engine.validateEvaluatorConfig(evaluator)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "MOCK/DRYRUN")
+	})
+
+	t.Run("development keeps allowing mock", func(t *testing.T) {
+		t.Setenv("APP_ENV", "development")
+		require.NoError(t, engine.validateEvaluatorConfig(evaluator))
+	})
+
+	t.Run("production still allows a real credential", func(t *testing.T) {
+		t.Setenv("APP_ENV", "production")
+		real := evaluator
+		real.Config = models.EncryptedJSON(`{"openai_api_key":"sk-real-key"}`)
+		require.NoError(t, engine.validateEvaluatorConfig(real))
+	})
+}
+
+// A question-set override is merged over the base evaluator config at queue
+// time; a mock credential hiding in the override must be rejected in
+// production even when the base credential is real.
+func TestEngine_RunEvaluators_RejectsMockOverrideInProduction(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, qsID := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	primary := createTestAgent(t, db, workspaceID, "Primary", "openai", map[string]any{
+		"api_key": "sk-real-primary", "model": "gpt-4o-mini",
+	})
+	evaluator := createTestAgent(t, db, workspaceID, "Judge", "evaluator", map[string]any{
+		"openai_api_key": "sk-real-evaluator",
+	})
+
+	overrideCfg, err := json.Marshal(map[string]any{"openai_api_key": "sk-MOCK-from-override"})
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qsID, AgentID: evaluator.ID, Enabled: true, Position: 1,
+		Config: models.EncryptedJSON(overrideCfg),
+	}).Error)
+
+	require.NoError(t, db.Create(&models.RunResult{
+		ID: uuid.New(), RunID: runID, AgentID: primary.ID, QuestionID: "q-1",
+		Status: "success", Answer: "4",
+	}).Error)
+
+	engine := NewEngine(db, 0, 0)
+
+	err = engine.RunEvaluators(runID, []uuid.UUID{evaluator.ID})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Judge")
+	assert.Contains(t, err.Error(), "MOCK/DRYRUN")
+}
+
 // When the post-run automatic evaluator pass fails (e.g. the evaluator agent is
 // misconfigured), the failure must be surfaced to the client via an event, not
 // just logged server-side. Otherwise the user sees "the run finished" with no

@@ -1203,6 +1203,12 @@ func (e *Engine) queueEvaluatorTasksForResults(run models.Run, results []models.
 			}
 		}
 
+		// The merged config is what actually executes; a mock credential coming
+		// from a question-set override must be rejected in production too.
+		if IsProductionAppEnv() && ConfigUsesMockCredential(evalConfig) {
+			return fmt.Errorf("Evaluator Agent '%s' uses a MOCK/DRYRUN credential (via question set override), which does not run in production. Set a real API key in Agent Settings.", evaluator.Name)
+		}
+
 		// Keep track of unique agents in this run for debugging
 		runAgents := make(map[uuid.UUID]bool)
 		for _, r := range results {
@@ -1821,10 +1827,19 @@ func (e *Engine) validateEvaluatorConfig(evaluator models.Agent) error {
 	preferredProvider := PreferredEvaluatorProvider(config)
 	resolvedProvider := ResolveEvaluatorProvider(config)
 
-	// If "MOCK" or "DRYRUN" is explicitly present anywhere in the config (case insensitive), we allow it
-	upperConfig := strings.ToUpper(configStr)
-	if strings.Contains(upperConfig, "MOCK") || strings.Contains(upperConfig, "DRYRUN") {
-		return nil
+	// A MOCK/DRYRUN credential substitutes for real configuration in dev/test
+	// only. In production the runner refuses to execute it, so reject it here
+	// instead of queueing evaluator tasks that will all fail.
+	if IsProductionAppEnv() {
+		if ConfigUsesMockCredential(config) {
+			return fmt.Errorf("Evaluator Agent '%s' uses a MOCK/DRYRUN credential, which does not run in production. Set a real API key in Agent Settings.", evaluator.Name)
+		}
+	} else {
+		// If "MOCK" or "DRYRUN" is explicitly present anywhere in the config (case insensitive), we allow it
+		upperConfig := strings.ToUpper(configStr)
+		if strings.Contains(upperConfig, "MOCK") || strings.Contains(upperConfig, "DRYRUN") {
+			return nil
+		}
 	}
 
 	// Otherwise, it must be a real configuration for the selected provider.
