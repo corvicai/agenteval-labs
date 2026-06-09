@@ -1087,6 +1087,49 @@ func TestValidateEvaluatorConfig_RejectsMockCredentialInProduction(t *testing.T)
 	})
 }
 
+// Two workers finishing the last primary tasks call checkRunCompletion
+// concurrently; both used to see "no evaluator results yet" and queue the
+// automatic evaluator pass twice (every answer evaluated twice, total_tasks
+// doubled). The auto pass must be claimed by exactly one completion check.
+func TestEngine_CheckRunCompletion_AutoEvalQueuesOnlyOnce(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, qsID := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	primary := createTestAgent(t, db, workspaceID, "Primary", "openai", mockOpenAIConfig())
+	evaluator := createTestAgent(t, db, workspaceID, "Judge", "evaluator", map[string]any{
+		"openai_api_key": "MOCK",
+	})
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qsID, AgentID: primary.ID, Enabled: true, Position: 0,
+	}).Error)
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qsID, AgentID: evaluator.ID, Enabled: true, Position: 1,
+	}).Error)
+	require.NoError(t, db.Create(&models.RunResult{
+		ID: uuid.New(), RunID: runID, AgentID: primary.ID, QuestionID: "q-1",
+		Status: "success", Answer: "4",
+	}).Error)
+
+	engine := NewEngine(db, 0, 0)
+
+	// Simulate a concurrent completion pass that already owns the auto-eval claim.
+	require.True(t, engine.claimAutoEvaluatorRun(runID))
+	require.False(t, engine.claimAutoEvaluatorRun(runID), "second claim must lose")
+
+	engine.checkRunCompletion(runID)
+
+	var run models.Run
+	require.NoError(t, db.First(&run, "id = ?", runID).Error)
+	assert.Equal(t, 1, run.TotalTasks, "losing pass must not queue another evaluator round")
+	assert.Equal(t, "running", run.Status, "losing pass must not complete the run under the winner")
+
+	// The winner finished (claim released) — the auto pass may then run once.
+	engine.releaseAutoEvaluatorClaim(runID)
+	engine.checkRunCompletion(runID)
+	require.NoError(t, db.First(&run, "id = ?", runID).Error)
+	assert.Equal(t, 2, run.TotalTasks, "auto evaluator pass should queue exactly once")
+}
+
 // A question-set override is merged over the base evaluator config at queue
 // time; a mock credential hiding in the override must be rejected in
 // production even when the base credential is real.

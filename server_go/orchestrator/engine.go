@@ -30,6 +30,7 @@ type Engine struct {
 	runCancels      map[uuid.UUID]context.CancelFunc
 	agentSemaphores map[uuid.UUID]chan struct{} // Per-agent concurrency control
 	retryStates     map[string]retryState
+	evalAutoClaims  map[uuid.UUID]bool // Runs whose automatic evaluator pass is owned by a completion check
 	mu              sync.RWMutex
 	eventCallback   func(workspaceID uuid.UUID, eventType string, correlationID string, payload any)
 }
@@ -108,7 +109,28 @@ func NewEngine(db *gorm.DB, workers int, queueSize int) *Engine {
 		runCancels:      make(map[uuid.UUID]context.CancelFunc),
 		agentSemaphores: make(map[uuid.UUID]chan struct{}),
 		retryStates:     make(map[string]retryState),
+		evalAutoClaims:  make(map[uuid.UUID]bool),
 	}
+}
+
+// claimAutoEvaluatorRun marks the automatic post-run evaluator pass as owned
+// by the calling completion check. Workers finishing the last primary tasks
+// concurrently would otherwise both see "no evaluator results yet" and queue
+// every evaluator task twice. Returns false when another pass already owns it.
+func (e *Engine) claimAutoEvaluatorRun(runID uuid.UUID) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.evalAutoClaims[runID] {
+		return false
+	}
+	e.evalAutoClaims[runID] = true
+	return true
+}
+
+func (e *Engine) releaseAutoEvaluatorClaim(runID uuid.UUID) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.evalAutoClaims, runID)
 }
 
 func (e *Engine) PingRunner() error {
@@ -552,8 +574,17 @@ func (e *Engine) checkRunCompletion(runID uuid.UUID) {
 					logger.Warn("[EVAL] Failed to resolve selected evaluators for run %s: %v", runID, selectErr)
 				}
 				if len(selectedEvaluatorIDs) > 0 {
+					if !e.claimAutoEvaluatorRun(runID) {
+						// Another completion pass is queueing the evaluators right
+						// now; completing the run here would race its total_tasks
+						// update and double-queue the evaluator tasks.
+						return
+					}
 					previousTotalTasks := run.TotalTasks
 					if err := e.RunEvaluators(runID, selectedEvaluatorIDs); err != nil {
+						// Allow a later completion pass (e.g. after a task rerun)
+						// to retry the auto pass, as before.
+						e.releaseAutoEvaluatorClaim(runID)
 						lowerErr := strings.ToLower(err.Error())
 						// Benign outcomes for the AUTO pass: nothing to evaluate is
 						// already visible to the user as failed cells.
@@ -605,6 +636,7 @@ func (e *Engine) checkRunCompletion(runID uuid.UUID) {
 			})
 		}
 
+		e.releaseAutoEvaluatorClaim(runID)
 		e.cancelRunContext(runID)
 	}
 }
