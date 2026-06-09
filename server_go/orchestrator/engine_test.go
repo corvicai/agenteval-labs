@@ -1022,3 +1022,56 @@ func TestEngine_StartRun_UsesGlobalCredentialsWhenOverrideConfigIsEmpty(t *testi
 	assert.Equal(t, int64(0), errorCount)
 
 }
+
+// When the post-run automatic evaluator pass fails (e.g. the evaluator agent is
+// misconfigured), the failure must be surfaced to the client via an event, not
+// just logged server-side. Otherwise the user sees "the run finished" with no
+// evaluations and no explanation of why.
+func TestEngine_CheckRunCompletion_EmitsRunErrorWhenAutoEvaluatorFails(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, qsID := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	// Primary agent (non-evaluator) attached to the question set.
+	primary := createTestAgent(t, db, workspaceID, "Primary", "anthropic", mockOpenAIConfig())
+	// Evaluator agent with an empty config -> validateEvaluatorConfig fails.
+	evaluator := createTestAgent(t, db, workspaceID, "Bad Evaluator", "evaluator", map[string]any{})
+
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qsID, AgentID: primary.ID, Enabled: true, Position: 0,
+	}).Error)
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qsID, AgentID: evaluator.ID, Enabled: true, Position: 1,
+	}).Error)
+
+	// One completed primary result so the run counts as complete (TotalTasks=1).
+	require.NoError(t, db.Create(&models.RunResult{
+		ID: uuid.New(), RunID: runID, AgentID: primary.ID, QuestionID: "q-1",
+		Status: "success", Answer: "4",
+	}).Error)
+
+	engine := NewEngine(db, 0, 0)
+
+	errCh := make(chan map[string]any, 1)
+	engine.SetEventCallback(func(wsID uuid.UUID, eventType string, corrID string, payload any) {
+		if eventType != "EVT_RUN_ERROR" {
+			return
+		}
+		if data, ok := payload.(map[string]any); ok {
+			select {
+			case errCh <- data:
+			default:
+			}
+		}
+	})
+
+	engine.checkRunCompletion(runID)
+
+	select {
+	case payload := <-errCh:
+		assert.Equal(t, runID.String(), payload["run_id"])
+		msg, _ := payload["error"].(string)
+		assert.Contains(t, msg, "Bad Evaluator", "error event should carry the real failure reason")
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected EVT_RUN_ERROR when the automatic evaluator pass fails")
+	}
+}

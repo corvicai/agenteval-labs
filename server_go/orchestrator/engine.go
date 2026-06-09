@@ -550,6 +550,12 @@ func (e *Engine) checkRunCompletion(runID uuid.UUID) {
 					if err := e.RunEvaluators(runID, selectedEvaluatorIDs); err != nil {
 						if !strings.Contains(strings.ToLower(err.Error()), "no evaluator agents available") {
 							logger.Warn("[EVAL] Auto-run failed for run %s: %v", runID, err)
+							if e.eventCallback != nil {
+								e.eventCallback(run.WorkspaceID, "EVT_RUN_ERROR", runID.String(), map[string]any{
+									"run_id": runID.String(),
+									"error":  "Evaluator auto-run failed: " + err.Error(),
+								})
+							}
 						}
 					} else {
 						var refreshed models.Run
