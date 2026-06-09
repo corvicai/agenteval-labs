@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Build stage
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 ARG VITE_GIT_COMMIT=unknown
 ENV VITE_GIT_COMMIT=$VITE_GIT_COMMIT
 
