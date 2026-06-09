@@ -170,8 +170,6 @@ func (h *Hub) handleUpdateAgent(c *Connection, env models.Envelope) {
 		return
 	}
 
-	configJSON, _ := json.Marshal(payload.Config)
-
 	var agent models.Agent
 	if err := h.db.First(&agent, "id = ?", agentID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -230,6 +228,10 @@ func (h *Hub) handleUpdateAgent(c *Connection, env models.Envelope) {
 		// Otherwise proceed with update - new config will overwrite the corrupted one
 		logger.Warn("[WS][UPDATE_AGENT] Overwriting undecryptable config for agent_id=%s actor_user_id=%s", agentID, c.UserID)
 	}
+
+	// Never persist a masked/blank secret over the real stored credential.
+	payload.Config = preserveMaskedSecrets(payload.Config, configMap)
+	configJSON, _ := json.Marshal(payload.Config)
 
 	agent.Name = payload.Name
 	agent.ProviderType = payload.ProviderType
