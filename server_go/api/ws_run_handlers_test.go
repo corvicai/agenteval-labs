@@ -71,44 +71,50 @@ func TestHandleStartRun_DecryptionFailedConfig(t *testing.T) {
 // them per task). Reject them at run start with a clear message instead of
 // queueing tasks that will all fail. Must NOT trigger outside production.
 func TestHandleStartRun_RejectsMockKeyInProduction(t *testing.T) {
-	setup()
-	t.Setenv("APP_ENV", "production")
+	// APP_ENV must be normalized the same way the runner normalizes it:
+	// " Production " (stray case/whitespace) still refuses mock execution.
+	for _, env := range []string{"production", " Production "} {
+		t.Run("APP_ENV="+strings.TrimSpace(env), func(t *testing.T) {
+			setup()
+			t.Setenv("APP_ENV", env)
 
-	user, token := createTestUser(t, false)
+			user, token := createTestUser(t, false)
 
-	workspace := models.Workspace{ID: uuid.New(), UserID: user.ID, Name: "WS"}
-	if err := db.Create(&workspace).Error; err != nil {
-		t.Fatalf("create workspace: %v", err)
-	}
-	client := models.Client{ID: uuid.New(), WorkspaceID: workspace.ID, Name: "C"}
-	if err := db.Create(&client).Error; err != nil {
-		t.Fatalf("create client: %v", err)
-	}
-	qs := models.QuestionSet{ID: uuid.New(), ClientID: client.ID, Name: "QS", Data: []byte(`{}`)}
-	if err := db.Create(&qs).Error; err != nil {
-		t.Fatalf("create question set: %v", err)
-	}
-	agent := models.Agent{
-		ID: uuid.New(), WorkspaceID: workspace.ID, Name: "BMW", ProviderType: "openai",
-		Enabled: true, Config: models.EncryptedJSON(`{"api_key":"MOCK","model":"gpt-4o-mini"}`),
-	}
-	if err := db.Create(&agent).Error; err != nil {
-		t.Fatalf("create agent: %v", err)
-	}
+			workspace := models.Workspace{ID: uuid.New(), UserID: user.ID, Name: "WS"}
+			if err := db.Create(&workspace).Error; err != nil {
+				t.Fatalf("create workspace: %v", err)
+			}
+			client := models.Client{ID: uuid.New(), WorkspaceID: workspace.ID, Name: "C"}
+			if err := db.Create(&client).Error; err != nil {
+				t.Fatalf("create client: %v", err)
+			}
+			qs := models.QuestionSet{ID: uuid.New(), ClientID: client.ID, Name: "QS", Data: []byte(`{}`)}
+			if err := db.Create(&qs).Error; err != nil {
+				t.Fatalf("create question set: %v", err)
+			}
+			agent := models.Agent{
+				ID: uuid.New(), WorkspaceID: workspace.ID, Name: "BMW", ProviderType: "openai",
+				Enabled: true, Config: models.EncryptedJSON(`{"api_key":"MOCK","model":"gpt-4o-mini"}`),
+			}
+			if err := db.Create(&agent).Error; err != nil {
+				t.Fatalf("create agent: %v", err)
+			}
 
-	resp := sendWSRequest(t, token, CmdStartRun, models.StartRunPayload{
-		QuestionSetID: qs.ID.String(),
-		AgentIDs:      []string{agent.ID.String()},
-	})
+			resp := sendWSRequest(t, token, CmdStartRun, models.StartRunPayload{
+				QuestionSetID: qs.ID.String(),
+				AgentIDs:      []string{agent.ID.String()},
+			})
 
-	if resp.Type != EvtError {
-		t.Fatalf("expected %s, got %s (payload: %s)", EvtError, resp.Type, string(resp.Payload))
-	}
-	body := strings.ToLower(string(resp.Payload))
-	if !strings.Contains(body, "mock") || !strings.Contains(body, "production") {
-		t.Fatalf("expected mock-in-production message, got: %s", string(resp.Payload))
-	}
-	if !strings.Contains(string(resp.Payload), "BMW") {
-		t.Fatalf("expected agent name, got: %s", string(resp.Payload))
+			if resp.Type != EvtError {
+				t.Fatalf("expected %s, got %s (payload: %s)", EvtError, resp.Type, string(resp.Payload))
+			}
+			body := strings.ToLower(string(resp.Payload))
+			if !strings.Contains(body, "mock") || !strings.Contains(body, "production") {
+				t.Fatalf("expected mock-in-production message, got: %s", string(resp.Payload))
+			}
+			if !strings.Contains(string(resp.Payload), "BMW") {
+				t.Fatalf("expected agent name, got: %s", string(resp.Payload))
+			}
+		})
 	}
 }
