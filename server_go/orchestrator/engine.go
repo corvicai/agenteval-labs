@@ -868,6 +868,10 @@ func (e *Engine) persistEvaluatorScore(task *Task, evaluatorAnswer string) error
 
 	targetResultID := e.resolveEvaluatorTargetRunResultID(task)
 	if targetResultID == uuid.Nil {
+		// Same silent-failure class as an unparsable score: the evaluator task
+		// looks successful but no Evaluation row will exist.
+		logger.Warn("[EVAL] Could not resolve the target answer for evaluator task (run %s, question %s); no evaluation recorded",
+			task.RunID, task.QuestionID)
 		return nil
 	}
 
