@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -138,6 +139,18 @@ func ensureAgentSyncConfigs(agents []models.Agent) (hadDecryptionErrors bool) {
 	return
 }
 
+func configUsesMockCredential(config map[string]any) bool {
+	for k, v := range config {
+		if !isSensitiveConfigKey(k) {
+			continue
+		}
+		if s, ok := v.(string); ok && orchestrator.IsMockAPIKey(s) {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 	if !c.IsAuthenticated || c.UserID == uuid.Nil {
 		c.SendError(env.CorrelationID, "authentication required")
@@ -220,6 +233,14 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 			var config map[string]interface{}
 			if err := json.Unmarshal(agent.Config, &config); err != nil {
 				continue
+			}
+
+			// Mock/dry-run credentials are simulated in dev but refused at
+			// execution in production. Reject at start with a clear message
+			// instead of queueing tasks that will all fail.
+			if os.Getenv("APP_ENV") == "production" && configUsesMockCredential(config) {
+				c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' uses a MOCK/DRYRUN credential, which does not run in production. Set a real API key in Agent Settings.", agent.Name))
+				return
 			}
 
 			switch agent.ProviderType {

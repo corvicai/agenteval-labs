@@ -1012,6 +1012,12 @@ func isMockAPIKey(apiKey string) bool {
 	return strings.Contains(upper, "MOCK") || strings.Contains(upper, "DRYRUN")
 }
 
+// IsMockAPIKey reports whether a credential is a mock/dry-run placeholder.
+// Mock credentials are simulated in dev/test and refused in production.
+func IsMockAPIKey(apiKey string) bool {
+	return isMockAPIKey(apiKey)
+}
+
 func mockMCPAnswer() string {
 	answers := []string{
 		"The answer is correct according to the logic provided.",
