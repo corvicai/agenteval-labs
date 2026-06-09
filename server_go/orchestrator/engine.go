@@ -548,7 +548,12 @@ func (e *Engine) checkRunCompletion(runID uuid.UUID) {
 				if len(selectedEvaluatorIDs) > 0 {
 					previousTotalTasks := run.TotalTasks
 					if err := e.RunEvaluators(runID, selectedEvaluatorIDs); err != nil {
-						if !strings.Contains(strings.ToLower(err.Error()), "no evaluator agents available") {
+						lowerErr := strings.ToLower(err.Error())
+						// Benign outcomes for the AUTO pass: nothing to evaluate is
+						// already visible to the user as failed cells.
+						benign := strings.Contains(lowerErr, "no evaluator agents available") ||
+							strings.Contains(lowerErr, "no successful answers to evaluate")
+						if !benign {
 							logger.Warn("[EVAL] Auto-run failed for run %s: %v", runID, err)
 							if e.eventCallback != nil {
 								e.eventCallback(run.WorkspaceID, "EVT_RUN_ERROR", runID.String(), map[string]any{
@@ -1151,6 +1156,22 @@ func (e *Engine) queueEvaluatorTasksForResults(run models.Run, results []models.
 
 	logger.Info("[EVAL] Running evaluators for run %s. Results to evaluate: %d", run.ID, len(results))
 
+	// Count results that are evaluable at all (successful, non-empty, and not
+	// produced by an evaluator), so a zero-task outcome can explain itself.
+	eligibleCount := 0
+	for _, r := range results {
+		if r.Status != "success" || strings.TrimSpace(r.Answer) == "" {
+			continue
+		}
+		if _, isEvaluator := evaluatorIDs[r.AgentID]; isEvaluator {
+			continue
+		}
+		eligibleCount++
+	}
+
+	var skipReasons []string
+	notFoundCount := 0
+
 	tasksToQueue := make([]*Task, 0)
 
 	// For each evaluator, create tasks to evaluate each result
@@ -1162,7 +1183,8 @@ func (e *Engine) queueEvaluatorTasksForResults(run models.Run, results []models.
 		var override models.QuestionSetAgent
 		if err := e.db.Where("question_set_id = ? AND agent_id = ?", run.QuestionSetID, evaluator.ID).First(&override).Error; err == nil {
 			if !override.Enabled {
-				continue // Skip if explicitly disabled for this question set
+				skipReasons = append(skipReasons, fmt.Sprintf("evaluator '%s' is disabled for this question set", evaluator.Name))
+				continue
 			}
 			if len(override.Config) > 0 {
 				overrideCfg := decodeConfigJSON(override.Config)
@@ -1195,6 +1217,7 @@ func (e *Engine) queueEvaluatorTasksForResults(run models.Run, results []models.
 
 		if targetAgentID != uuid.Nil && !runAgents[targetAgentID] {
 			logger.Warn("[EVAL] Target agent %s is NOT in this run. Skipping evaluator %s.", targetAgentID, evaluator.Name)
+			skipReasons = append(skipReasons, fmt.Sprintf("evaluator '%s' targets agent %s, which is not part of this run", evaluator.Name, targetAgentID))
 			continue
 		}
 
@@ -1233,6 +1256,7 @@ func (e *Engine) queueEvaluatorTasksForResults(run models.Run, results []models.
 					break
 				}
 				logger.Warn("[EVAL] QuestionID '%s' NOT FOUND in originalQuestions map (size=%d, sample_key='%s')", result.QuestionID, len(originalQuestions), sampleKey)
+				notFoundCount++
 				continue
 			}
 
@@ -1259,7 +1283,16 @@ func (e *Engine) queueEvaluatorTasksForResults(run models.Run, results []models.
 
 	if len(tasksToQueue) == 0 {
 		logger.Info("[EVAL] No evaluator tasks to queue for run %s", run.ID)
-		return nil
+		if eligibleCount == 0 {
+			return fmt.Errorf("no evaluator tasks queued: this run has no successful answers to evaluate")
+		}
+		if notFoundCount > 0 {
+			skipReasons = append(skipReasons, fmt.Sprintf("%d answer(s) skipped because their question no longer exists in the question set", notFoundCount))
+		}
+		if len(skipReasons) > 0 {
+			return fmt.Errorf("no evaluator tasks queued: %s", strings.Join(skipReasons, "; "))
+		}
+		return fmt.Errorf("no evaluator tasks queued")
 	}
 
 	if err := e.db.Model(&models.Run{}).Where("id = ?", run.ID).Updates(map[string]any{

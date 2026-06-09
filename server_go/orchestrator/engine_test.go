@@ -1097,3 +1097,102 @@ func TestEngine_CheckRunCompletion_EmitsRunErrorWhenAutoEvaluatorFails(t *testin
 		t.Fatal("expected EVT_RUN_ERROR when the automatic evaluator pass fails")
 	}
 }
+
+// Manual "Run Evaluators" with nothing evaluable must return an informative
+// error instead of nil — the WS handler reports nil as "evaluators queued",
+// which the user reads as success while nothing will ever happen.
+func TestEngine_RunEvaluators_ErrorsWhenNoSuccessfulResults(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, _ := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	primary := createTestAgent(t, db, workspaceID, "Primary", "openai", mockOpenAIConfig())
+	evaluator := createTestAgent(t, db, workspaceID, "Judge", "evaluator", map[string]any{
+		"openai_api_key": "MOCK",
+	})
+
+	require.NoError(t, db.Create(&models.RunResult{
+		ID: uuid.New(), RunID: runID, AgentID: primary.ID, QuestionID: "q-1",
+		Status: "error", Error: "boom",
+	}).Error)
+
+	engine := NewEngine(db, 0, 0)
+
+	err := engine.RunEvaluators(runID, []uuid.UUID{evaluator.ID})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no successful answers")
+}
+
+func TestEngine_RunEvaluators_ErrorsWhenTargetAgentNotInRun(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, _ := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	primary := createTestAgent(t, db, workspaceID, "Primary", "openai", mockOpenAIConfig())
+	ghostTarget := uuid.New() // agent that is NOT part of this run
+	evaluator := createTestAgent(t, db, workspaceID, "Judge", "evaluator", map[string]any{
+		"openai_api_key":  "MOCK",
+		"target_agent_id": ghostTarget.String(),
+	})
+
+	require.NoError(t, db.Create(&models.RunResult{
+		ID: uuid.New(), RunID: runID, AgentID: primary.ID, QuestionID: "q-1",
+		Status: "success", Answer: "4",
+	}).Error)
+
+	engine := NewEngine(db, 0, 0)
+
+	err := engine.RunEvaluators(runID, []uuid.UUID{evaluator.ID})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Judge")
+	assert.Contains(t, err.Error(), "not part of this run")
+}
+
+// The automatic post-run evaluator pass must stay quiet when there is simply
+// nothing to evaluate (every primary answer failed): the user already sees
+// the failed cells; an extra "evaluator failed" toast would be noise.
+func TestEngine_CheckRunCompletion_NoRunErrorWhenNothingToEvaluate(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, qsID := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	primary := createTestAgent(t, db, workspaceID, "Primary", "openai", mockOpenAIConfig())
+	evaluator := createTestAgent(t, db, workspaceID, "Judge", "evaluator", map[string]any{
+		"openai_api_key": "MOCK",
+	})
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qsID, AgentID: primary.ID, Enabled: true, Position: 0,
+	}).Error)
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qsID, AgentID: evaluator.ID, Enabled: true, Position: 1,
+	}).Error)
+
+	require.NoError(t, db.Create(&models.RunResult{
+		ID: uuid.New(), RunID: runID, AgentID: primary.ID, QuestionID: "q-1",
+		Status: "error", Error: "boom",
+	}).Error)
+
+	engine := NewEngine(db, 0, 0)
+
+	errCh := make(chan map[string]any, 1)
+	engine.SetEventCallback(func(wsID uuid.UUID, eventType string, corrID string, payload any) {
+		if eventType != "EVT_RUN_ERROR" {
+			return
+		}
+		if data, ok := payload.(map[string]any); ok {
+			select {
+			case errCh <- data:
+			default:
+			}
+		}
+	})
+
+	engine.checkRunCompletion(runID)
+
+	select {
+	case payload := <-errCh:
+		t.Fatalf("unexpected EVT_RUN_ERROR for a run with nothing to evaluate: %v", payload)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	var run models.Run
+	require.NoError(t, db.First(&run, "id = ?", runID).Error)
+	assert.Equal(t, "completed_with_errors", run.Status)
+}
