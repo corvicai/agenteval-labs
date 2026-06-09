@@ -880,6 +880,43 @@
                 </table>
               </div>
             </section>
+
+            <section class="debug-card">
+              <div class="debug-card-header">
+                <h4>Recent Run Errors</h4>
+                <span class="filter-count">Showing {{ debugInfo.recent_run_errors?.length || 0 }}</span>
+              </div>
+              <div class="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Agent</th>
+                      <th>Question</th>
+                      <th>Run</th>
+                      <th>Created</th>
+                      <th>Error</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(runErr, index) in debugInfo.recent_run_errors || []" :key="`run-err-${runErr.run_id}-${runErr.question_id}-${index}`">
+                      <td>
+                        <div class="user-info">
+                          <span>{{ runErr.agent_name || shortId(runErr.agent_id) }}</span>
+                          <span v-if="runErr.provider_type" class="user-email">{{ runErr.provider_type }}</span>
+                        </div>
+                      </td>
+                      <td><span class="id-code">{{ runErr.question_id }}</span></td>
+                      <td><span class="id-code">{{ shortId(runErr.run_id) }}</span></td>
+                      <td><span class="date-badge">{{ formatDateTime(runErr.created_at) }}</span></td>
+                      <td class="debug-error-cell">{{ runErr.error }}</td>
+                    </tr>
+                    <tr v-if="!(debugInfo.recent_run_errors || []).length">
+                      <td colspan="5" class="empty-cell">No run errors recorded</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
           </div>
         </template>
       </div>
