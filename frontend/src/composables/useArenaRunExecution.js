@@ -106,7 +106,9 @@ export function useArenaRunExecution(options = {}) {
       }
 
       try {
-        const latest = await wsService.getLatestRunByQuestionSet(targetQuestionSetId, START_RUN_RECOVERY_TIMEOUT_MS)
+        // include_running: the run we are recovering was just created and is
+        // still "running" — the default latest-run query would never see it.
+        const latest = await wsService.getLatestRunByQuestionSet(targetQuestionSetId, START_RUN_RECOVERY_TIMEOUT_MS, true)
         const latestRun = latest?.run
         if (!latestRun?.id) continue
 

@@ -182,3 +182,53 @@ func TestHandleGetLatestRunByQuestionSet_ReturnsEmptyPayloadWhenNoCompletedRunEx
 		t.Fatal("expected websocket response")
 	}
 }
+
+// The start-run recovery probe looks for the run it JUST created — still
+// "running". The default query intentionally skips running runs (results
+// views want finished data), so the recovery caller asks for them explicitly.
+func TestHandleGetLatestRunByQuestionSet_IncludeRunningReturnsActiveRun(t *testing.T) {
+	setup()
+
+	user := models.User{ID: uuid.New(), Name: "Tester", Email: "latest-running@example.com", PasswordHash: "hash"}
+	require.NoError(t, db.Create(&user).Error)
+	workspace := models.Workspace{ID: uuid.New(), UserID: user.ID, Name: "WS"}
+	require.NoError(t, db.Create(&workspace).Error)
+	client := models.Client{ID: uuid.New(), WorkspaceID: workspace.ID, Name: "Client"}
+	require.NoError(t, db.Create(&client).Error)
+	questionSet := models.QuestionSet{ID: uuid.New(), ClientID: client.ID, Name: "QS", Data: []byte(`{}`)}
+	require.NoError(t, db.Create(&questionSet).Error)
+	run := models.Run{ID: uuid.New(), WorkspaceID: workspace.ID, QuestionSetID: questionSet.ID, Status: "running", TotalTasks: 1}
+	require.NoError(t, db.Create(&run).Error)
+
+	hub := NewHub(db, nil, "test-secret", nil)
+	conn := &Connection{ID: uuid.New(), WorkspaceID: workspace.ID, Send: make(chan []byte, 2), Done: make(chan struct{})}
+
+	send := func(includeRunning bool) models.RunLiteResponse {
+		t.Helper()
+		payload, err := json.Marshal(models.GetLatestRunByQSPayload{
+			QuestionSetID:  questionSet.ID.String(),
+			IncludeRunning: includeRunning,
+		})
+		require.NoError(t, err)
+		hub.handleGetLatestRunByQuestionSet(conn, models.Envelope{Type: ReqGetLatestRunByQS, CorrelationID: "corr", Payload: payload})
+		select {
+		case raw := <-conn.Send:
+			var env models.Envelope
+			require.NoError(t, json.Unmarshal(raw, &env))
+			var response models.RunLiteResponse
+			require.NoError(t, json.Unmarshal(env.Payload, &response))
+			return response
+		default:
+			t.Fatal("expected websocket response")
+			return models.RunLiteResponse{}
+		}
+	}
+
+	// Default behavior unchanged: the running run stays invisible.
+	assert.Equal(t, uuid.Nil, send(false).Run.ID)
+
+	// The recovery probe sees it.
+	got := send(true)
+	assert.Equal(t, run.ID, got.Run.ID)
+	assert.Equal(t, "running", got.Run.Status)
+}

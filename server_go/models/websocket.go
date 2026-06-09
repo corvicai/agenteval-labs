@@ -397,6 +397,10 @@ type GetRunLitePayload struct {
 
 type GetLatestRunByQSPayload struct {
 	QuestionSetID string `json:"question_set_id"`
+	// IncludeRunning is set by the start-run recovery probe, which is looking
+	// for the still-running run it just created. Results views leave it unset
+	// so they keep seeing only finished runs.
+	IncludeRunning bool `json:"include_running,omitempty"`
 }
 
 type RunLiteResponse struct {

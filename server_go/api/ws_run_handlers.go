@@ -1059,7 +1059,11 @@ func (h *Hub) handleGetLatestRunByQuestionSet(c *Connection, env models.Envelope
 	runWorkspaceID := ownerWs.ID
 
 	var run models.Run
-	runQuery := h.db.Where("workspace_id = ? AND question_set_id = ? AND status != ?", runWorkspaceID, qsID, "running").
+	scope := h.db.Where("workspace_id = ? AND question_set_id = ?", runWorkspaceID, qsID)
+	if !payload.IncludeRunning {
+		scope = scope.Where("status != ?", "running")
+	}
+	runQuery := scope.
 		Order("created_at desc").
 		Limit(1).
 		Find(&run)

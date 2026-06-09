@@ -942,8 +942,10 @@ class WebSocketService {
         return this.request('REQ_GET_RUN_LITE', { run_id: runId }, timeoutMs)
     }
 
-    getLatestRunByQuestionSet(questionSetId, timeoutMs = WebSocketService.REQUEST_TIMEOUTS.LATEST_RUN_BY_QS) {
-        return this.request('REQ_GET_LATEST_RUN_BY_QS', { question_set_id: questionSetId }, timeoutMs)
+    getLatestRunByQuestionSet(questionSetId, timeoutMs = WebSocketService.REQUEST_TIMEOUTS.LATEST_RUN_BY_QS, includeRunning = false) {
+        const payload = { question_set_id: questionSetId }
+        if (includeRunning) payload.include_running = true
+        return this.request('REQ_GET_LATEST_RUN_BY_QS', payload, timeoutMs)
     }
 
     getResultDetails(resultIds) {
