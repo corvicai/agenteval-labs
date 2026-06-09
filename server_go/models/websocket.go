@@ -312,7 +312,24 @@ type AdminDebugResponse struct {
 	Key               AdminDebugKeyStatus   `json:"key"`
 	Agents            AdminDebugConfigStats `json:"agents"`
 	QuestionSetAgents AdminDebugConfigStats `json:"question_set_agents"`
+	RecentRunErrors   []AdminDebugRunError  `json:"recent_run_errors,omitempty"`
 	GeneratedAt       time.Time             `json:"generated_at"`
+}
+
+// AdminDebugRunError is a raw failed-task record surfaced in the admin debug
+// snapshot. In environments where admins have no database access (e.g. Cloud
+// Run), this is the only window into why runs fail.
+type AdminDebugRunError struct {
+	RunID        string    `json:"run_id"`
+	RunStatus    string    `json:"run_status,omitempty"`
+	WorkspaceID  string    `json:"workspace_id,omitempty"`
+	AgentID      string    `json:"agent_id"`
+	AgentName    string    `json:"agent_name,omitempty"`
+	ProviderType string    `json:"provider_type,omitempty"`
+	QuestionID   string    `json:"question_id"`
+	Error        string    `json:"error"`
+	DurationMs   int       `json:"duration_ms"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 type AdminCreateUserPayload struct {
