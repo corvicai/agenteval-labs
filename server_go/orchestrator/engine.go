@@ -873,6 +873,11 @@ func (e *Engine) persistEvaluatorScore(task *Task, evaluatorAnswer string) error
 
 	score10, ok := extractEvaluatorScore(evaluatorAnswer)
 	if !ok {
+		// Not an error (the evaluator did answer), but leave a trace: the task
+		// shows "success" while no Evaluation row is recorded, which otherwise
+		// looks like the evaluator silently did nothing.
+		logger.Warn("[EVAL] Evaluator answer for run %s, question %s has no parsable 0-10 score; no evaluation recorded (answer prefix: %q)",
+			task.RunID, task.QuestionID, truncate(strings.TrimSpace(evaluatorAnswer), 120))
 		return nil
 	}
 
