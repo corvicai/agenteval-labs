@@ -89,6 +89,24 @@ describe('WebSocketService', () => {
         await expect(requestPromise).rejects.toThrow('Something went wrong')
     })
 
+    it('asks for running runs when the recovery probe requests them', async () => {
+        await wsService.connectAnonymous()
+
+        const requestPromise = wsService.getLatestRunByQuestionSet('qs-1', 1000, true)
+        const sent = JSON.parse(wsService.ws.lastSent)
+        expect(sent.payload.include_running).toBe(true)
+        expect(sent.payload.question_set_id).toBe('qs-1')
+
+        wsService.ws.onmessage({
+            data: JSON.stringify({
+                type: 'DATA_RESPONSE',
+                correlation_id: 'test-uuid',
+                payload: { run: null }
+            })
+        })
+        await requestPromise
+    })
+
     it('should emit events to listeners', async () => {
         await wsService.connectAnonymous()
         const callback = vi.fn()

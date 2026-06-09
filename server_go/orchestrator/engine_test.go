@@ -1022,3 +1022,358 @@ func TestEngine_StartRun_UsesGlobalCredentialsWhenOverrideConfigIsEmpty(t *testi
 	assert.Equal(t, int64(0), errorCount)
 
 }
+
+// A config that failed decryption (EncryptedJSON.Scan poison marker) must
+// produce an actionable "re-enter credentials" error, not the misleading
+// "not configured / set api_key" message — the user DID configure the agent;
+// the encryption key changed underneath it.
+func TestValidateEvaluatorConfig_DecryptionFailedMarker(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	engine := NewEngine(db, 0, 0)
+
+	evaluator := models.Agent{
+		ID:           uuid.New(),
+		Name:         "Plasma Evaluator",
+		ProviderType: "evaluator",
+		Config:       models.EncryptedJSON(`{"_error":"decryption_failed"}`),
+	}
+
+	err := engine.validateEvaluatorConfig(evaluator)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not be decrypted")
+	assert.Contains(t, err.Error(), "Plasma Evaluator")
+	assert.NotContains(t, err.Error(), "is not configured")
+}
+
+// In production a MOCK/DRYRUN evaluator credential must be rejected up front:
+// the runner refuses to execute it, so allowing it past validation just queues
+// tasks that all fail with "Mock execution is disabled in production".
+func TestValidateEvaluatorConfig_RejectsMockCredentialInProduction(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	engine := NewEngine(db, 0, 0)
+
+	evaluator := models.Agent{
+		ID:           uuid.New(),
+		Name:         "Prod Judge",
+		ProviderType: "evaluator",
+		Config:       models.EncryptedJSON(`{"openai_api_key":"MOCK"}`),
+	}
+
+	t.Run("production rejects a mock credential", func(t *testing.T) {
+		t.Setenv("APP_ENV", "production")
+		err := engine.validateEvaluatorConfig(evaluator)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Prod Judge")
+		assert.Contains(t, err.Error(), "MOCK/DRYRUN")
+	})
+
+	t.Run("APP_ENV is normalized before the comparison", func(t *testing.T) {
+		t.Setenv("APP_ENV", " Production ")
+		err := engine.validateEvaluatorConfig(evaluator)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "MOCK/DRYRUN")
+	})
+
+	t.Run("development keeps allowing mock", func(t *testing.T) {
+		t.Setenv("APP_ENV", "development")
+		require.NoError(t, engine.validateEvaluatorConfig(evaluator))
+	})
+
+	t.Run("production still allows a real credential", func(t *testing.T) {
+		t.Setenv("APP_ENV", "production")
+		real := evaluator
+		real.Config = models.EncryptedJSON(`{"openai_api_key":"sk-real-key"}`)
+		require.NoError(t, engine.validateEvaluatorConfig(real))
+	})
+}
+
+// Two workers finishing the last primary tasks call checkRunCompletion
+// concurrently; both used to see "no evaluator results yet" and queue the
+// automatic evaluator pass twice (every answer evaluated twice, total_tasks
+// doubled). The auto pass must be claimed by exactly one completion check.
+func TestEngine_CheckRunCompletion_AutoEvalQueuesOnlyOnce(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, qsID := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	primary := createTestAgent(t, db, workspaceID, "Primary", "openai", mockOpenAIConfig())
+	evaluator := createTestAgent(t, db, workspaceID, "Judge", "evaluator", map[string]any{
+		"openai_api_key": "MOCK",
+	})
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qsID, AgentID: primary.ID, Enabled: true, Position: 0,
+	}).Error)
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qsID, AgentID: evaluator.ID, Enabled: true, Position: 1,
+	}).Error)
+	require.NoError(t, db.Create(&models.RunResult{
+		ID: uuid.New(), RunID: runID, AgentID: primary.ID, QuestionID: "q-1",
+		Status: "success", Answer: "4",
+	}).Error)
+
+	engine := NewEngine(db, 0, 0)
+
+	// Simulate a concurrent completion pass that already owns the auto-eval claim.
+	require.True(t, engine.claimAutoEvaluatorRun(runID))
+	require.False(t, engine.claimAutoEvaluatorRun(runID), "second claim must lose")
+
+	engine.checkRunCompletion(runID)
+
+	var run models.Run
+	require.NoError(t, db.First(&run, "id = ?", runID).Error)
+	assert.Equal(t, 1, run.TotalTasks, "losing pass must not queue another evaluator round")
+	assert.Equal(t, "running", run.Status, "losing pass must not complete the run under the winner")
+
+	// The winner finished (claim released) — the auto pass may then run once.
+	engine.releaseAutoEvaluatorClaim(runID)
+	engine.checkRunCompletion(runID)
+	require.NoError(t, db.First(&run, "id = ?", runID).Error)
+	assert.Equal(t, 2, run.TotalTasks, "auto evaluator pass should queue exactly once")
+}
+
+// A question-set override is merged over the base evaluator config at queue
+// time; a mock credential hiding in the override must be rejected in
+// production even when the base credential is real.
+func TestEngine_RunEvaluators_RejectsMockOverrideInProduction(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, qsID := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	primary := createTestAgent(t, db, workspaceID, "Primary", "openai", map[string]any{
+		"api_key": "sk-real-primary", "model": "gpt-4o-mini",
+	})
+	evaluator := createTestAgent(t, db, workspaceID, "Judge", "evaluator", map[string]any{
+		"openai_api_key": "sk-real-evaluator",
+	})
+
+	overrideCfg, err := json.Marshal(map[string]any{"openai_api_key": "sk-MOCK-from-override"})
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qsID, AgentID: evaluator.ID, Enabled: true, Position: 1,
+		Config: models.EncryptedJSON(overrideCfg),
+	}).Error)
+
+	require.NoError(t, db.Create(&models.RunResult{
+		ID: uuid.New(), RunID: runID, AgentID: primary.ID, QuestionID: "q-1",
+		Status: "success", Answer: "4",
+	}).Error)
+
+	engine := NewEngine(db, 0, 0)
+
+	err = engine.RunEvaluators(runID, []uuid.UUID{evaluator.ID})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Judge")
+	assert.Contains(t, err.Error(), "MOCK/DRYRUN")
+}
+
+// When the post-run automatic evaluator pass fails (e.g. the evaluator agent is
+// misconfigured), the failure must be surfaced to the client via an event, not
+// just logged server-side. Otherwise the user sees "the run finished" with no
+// evaluations and no explanation of why.
+func TestEngine_CheckRunCompletion_EmitsRunErrorWhenAutoEvaluatorFails(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, qsID := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	// Primary agent (non-evaluator) attached to the question set.
+	primary := createTestAgent(t, db, workspaceID, "Primary", "anthropic", mockOpenAIConfig())
+	// Evaluator agent with an empty config -> validateEvaluatorConfig fails.
+	evaluator := createTestAgent(t, db, workspaceID, "Bad Evaluator", "evaluator", map[string]any{})
+
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qsID, AgentID: primary.ID, Enabled: true, Position: 0,
+	}).Error)
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qsID, AgentID: evaluator.ID, Enabled: true, Position: 1,
+	}).Error)
+
+	// One completed primary result so the run counts as complete (TotalTasks=1).
+	require.NoError(t, db.Create(&models.RunResult{
+		ID: uuid.New(), RunID: runID, AgentID: primary.ID, QuestionID: "q-1",
+		Status: "success", Answer: "4",
+	}).Error)
+
+	engine := NewEngine(db, 0, 0)
+
+	errCh := make(chan map[string]any, 1)
+	engine.SetEventCallback(func(wsID uuid.UUID, eventType string, corrID string, payload any) {
+		if eventType != "EVT_RUN_ERROR" {
+			return
+		}
+		if data, ok := payload.(map[string]any); ok {
+			select {
+			case errCh <- data:
+			default:
+			}
+		}
+	})
+
+	engine.checkRunCompletion(runID)
+
+	select {
+	case payload := <-errCh:
+		assert.Equal(t, runID.String(), payload["run_id"])
+		msg, _ := payload["error"].(string)
+		assert.Contains(t, msg, "Bad Evaluator", "error event should carry the real failure reason")
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected EVT_RUN_ERROR when the automatic evaluator pass fails")
+	}
+}
+
+// Manual "Run Evaluators" with nothing evaluable must return an informative
+// error instead of nil — the WS handler reports nil as "evaluators queued",
+// which the user reads as success while nothing will ever happen.
+func TestEngine_RunEvaluators_ErrorsWhenNoSuccessfulResults(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, _ := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	primary := createTestAgent(t, db, workspaceID, "Primary", "openai", mockOpenAIConfig())
+	evaluator := createTestAgent(t, db, workspaceID, "Judge", "evaluator", map[string]any{
+		"openai_api_key": "MOCK",
+	})
+
+	require.NoError(t, db.Create(&models.RunResult{
+		ID: uuid.New(), RunID: runID, AgentID: primary.ID, QuestionID: "q-1",
+		Status: "error", Error: "boom",
+	}).Error)
+
+	engine := NewEngine(db, 0, 0)
+
+	err := engine.RunEvaluators(runID, []uuid.UUID{evaluator.ID})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no successful answers")
+}
+
+func TestEngine_RunEvaluators_ErrorsWhenTargetAgentNotInRun(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, _ := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	primary := createTestAgent(t, db, workspaceID, "Primary", "openai", mockOpenAIConfig())
+	ghostTarget := uuid.New() // agent that is NOT part of this run
+	evaluator := createTestAgent(t, db, workspaceID, "Judge", "evaluator", map[string]any{
+		"openai_api_key":  "MOCK",
+		"target_agent_id": ghostTarget.String(),
+	})
+
+	require.NoError(t, db.Create(&models.RunResult{
+		ID: uuid.New(), RunID: runID, AgentID: primary.ID, QuestionID: "q-1",
+		Status: "success", Answer: "4",
+	}).Error)
+
+	engine := NewEngine(db, 0, 0)
+
+	err := engine.RunEvaluators(runID, []uuid.UUID{evaluator.ID})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Judge")
+	assert.Contains(t, err.Error(), "not part of this run")
+}
+
+// The automatic post-run evaluator pass must stay quiet when there is simply
+// nothing to evaluate (every primary answer failed): the user already sees
+// the failed cells; an extra "evaluator failed" toast would be noise.
+func TestEngine_CheckRunCompletion_NoRunErrorWhenNothingToEvaluate(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, qsID := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	primary := createTestAgent(t, db, workspaceID, "Primary", "openai", mockOpenAIConfig())
+	evaluator := createTestAgent(t, db, workspaceID, "Judge", "evaluator", map[string]any{
+		"openai_api_key": "MOCK",
+	})
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qsID, AgentID: primary.ID, Enabled: true, Position: 0,
+	}).Error)
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qsID, AgentID: evaluator.ID, Enabled: true, Position: 1,
+	}).Error)
+
+	require.NoError(t, db.Create(&models.RunResult{
+		ID: uuid.New(), RunID: runID, AgentID: primary.ID, QuestionID: "q-1",
+		Status: "error", Error: "boom",
+	}).Error)
+
+	engine := NewEngine(db, 0, 0)
+
+	errCh := make(chan map[string]any, 1)
+	engine.SetEventCallback(func(wsID uuid.UUID, eventType string, corrID string, payload any) {
+		if eventType != "EVT_RUN_ERROR" {
+			return
+		}
+		if data, ok := payload.(map[string]any); ok {
+			select {
+			case errCh <- data:
+			default:
+			}
+		}
+	})
+
+	engine.checkRunCompletion(runID)
+
+	select {
+	case payload := <-errCh:
+		t.Fatalf("unexpected EVT_RUN_ERROR for a run with nothing to evaluate: %v", payload)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	var run models.Run
+	require.NoError(t, db.First(&run, "id = ?", runID).Error)
+	assert.Equal(t, "completed_with_errors", run.Status)
+}
+
+// The evaluator auto-run that follows a successful single-answer RETRY has the
+// same swallow as the post-run pass had: failures were only logged. The run is
+// no longer "running" here, so checkRunCompletion's emission cannot cover it —
+// the retry path must emit EVT_RUN_ERROR itself.
+func TestEngine_ExecuteTask_RetryEmitsRunErrorWhenEvaluatorAutoRunFails(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, qsID := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	primary := createTestAgent(t, db, workspaceID, "Primary", "openai", mockOpenAIConfig())
+	evaluator := createTestAgent(t, db, workspaceID, "Bad Evaluator", "evaluator", map[string]any{})
+
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qsID, AgentID: primary.ID, Enabled: true, Position: 0,
+	}).Error)
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qsID, AgentID: evaluator.ID, Enabled: true, Position: 1,
+	}).Error)
+
+	// Run already finished; the user retries one answer afterwards.
+	require.NoError(t, db.Model(&models.Run{}).Where("id = ?", runID).
+		Update("status", "completed_with_errors").Error)
+
+	engine := NewEngine(db, 1, 0)
+
+	errCh := make(chan map[string]any, 1)
+	engine.SetEventCallback(func(wsID uuid.UUID, eventType string, corrID string, payload any) {
+		if eventType != "EVT_RUN_ERROR" {
+			return
+		}
+		if data, ok := payload.(map[string]any); ok {
+			select {
+			case errCh <- data:
+			default:
+			}
+		}
+	})
+
+	engine.Start()
+
+	engine.QueueTask(&Task{
+		RunID:        runID,
+		WorkspaceID:  workspaceID,
+		AgentID:      primary.ID,
+		QuestionID:   "q-1",
+		QuestionText: "What is 2+2?",
+		AgentConfig:  mockOpenAIConfig(),
+		ProviderType: "openai",
+		RetryID:      "retry-1",
+	})
+
+	select {
+	case payload := <-errCh:
+		assert.Equal(t, runID.String(), payload["run_id"])
+		msg, _ := payload["error"].(string)
+		assert.Contains(t, msg, "Bad Evaluator")
+	case <-time.After(3 * time.Second):
+		t.Fatal("expected EVT_RUN_ERROR when the post-retry evaluator pass fails")
+	}
+}

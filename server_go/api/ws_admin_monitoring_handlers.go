@@ -21,6 +21,8 @@ import (
 
 const adminDebugFailureSampleLimit = 8
 const adminDebugRecentRecordLimit = 12
+const adminDebugRunErrorLimit = 25
+const adminDebugRunErrorMaxLen = 4000
 
 type adminDebugAgentRow struct {
 	ID          uuid.UUID `gorm:"column:id"`
@@ -35,6 +37,42 @@ type adminDebugQuestionSetAgentRow struct {
 	AgentID       uuid.UUID `gorm:"column:agent_id"`
 	Config        string    `gorm:"column:config"`
 	CreatedAt     time.Time `gorm:"column:created_at"`
+}
+
+type adminDebugRunErrorRow struct {
+	RunID        uuid.UUID `gorm:"column:run_id"`
+	RunStatus    string    `gorm:"column:run_status"`
+	WorkspaceID  uuid.UUID `gorm:"column:workspace_id"`
+	AgentID      uuid.UUID `gorm:"column:agent_id"`
+	AgentName    string    `gorm:"column:agent_name"`
+	ProviderType string    `gorm:"column:provider_type"`
+	QuestionID   string    `gorm:"column:question_id"`
+	Error        string    `gorm:"column:error"`
+	DurationMs   int       `gorm:"column:duration_ms"`
+	CreatedAt    time.Time `gorm:"column:created_at"`
+}
+
+func buildAdminDebugRunErrors(rows []adminDebugRunErrorRow) []models.AdminDebugRunError {
+	out := make([]models.AdminDebugRunError, 0, len(rows))
+	for _, row := range rows {
+		errText := row.Error
+		if len(errText) > adminDebugRunErrorMaxLen {
+			errText = errText[:adminDebugRunErrorMaxLen] + "…(truncated)"
+		}
+		out = append(out, models.AdminDebugRunError{
+			RunID:        row.RunID.String(),
+			RunStatus:    row.RunStatus,
+			WorkspaceID:  row.WorkspaceID.String(),
+			AgentID:      row.AgentID.String(),
+			AgentName:    row.AgentName,
+			ProviderType: row.ProviderType,
+			QuestionID:   row.QuestionID,
+			Error:        errText,
+			DurationMs:   row.DurationMs,
+			CreatedAt:    row.CreatedAt,
+		})
+	}
+	return out
 }
 
 func (h *Hub) handleAdminGetRuns(c *Connection, env models.Envelope) {
@@ -244,6 +282,25 @@ func (h *Hub) handleAdminGetDebugInfo(c *Connection, env models.Envelope) {
 		return
 	}
 
+	var runErrorRows []adminDebugRunErrorRow
+	if err := h.db.Raw(`
+		SELECT rr.run_id AS run_id, r.status AS run_status, r.workspace_id AS workspace_id,
+		       rr.agent_id AS agent_id, COALESCE(a.name, '') AS agent_name,
+		       COALESCE(a.provider_type, '') AS provider_type,
+		       rr.question_id AS question_id, COALESCE(rr.error, '') AS error,
+		       rr.duration_ms AS duration_ms, rr.created_at AS created_at
+		FROM run_results rr
+		LEFT JOIN runs r ON r.id = rr.run_id
+		LEFT JOIN agents a ON a.id = rr.agent_id
+		WHERE rr.status = 'error'
+		ORDER BY rr.created_at DESC
+		LIMIT ?
+	`, adminDebugRunErrorLimit).Scan(&runErrorRows).Error; err != nil {
+		logger.Error("[ADMIN] failed to inspect recent run errors: %v", err)
+		c.SendError(env.CorrelationID, "failed to inspect recent run errors: "+err.Error())
+		return
+	}
+
 	encryptionKeyHealth, err := service.NewEncryptionKeyService(h.db).InspectCurrentKeyHealth()
 	if err != nil {
 		logger.Warn("[ADMIN] failed to inspect persisted encryption key state: %v", err)
@@ -258,6 +315,7 @@ func (h *Hub) handleAdminGetDebugInfo(c *Connection, env models.Envelope) {
 		Key:               buildAdminDebugKeyStatus(encryptionKeyHealth),
 		Agents:            analyzeAdminDebugAgents(agentRows),
 		QuestionSetAgents: analyzeAdminDebugQuestionSetAgents(questionSetAgentRows),
+		RecentRunErrors:   buildAdminDebugRunErrors(runErrorRows),
 		GeneratedAt:       time.Now().UTC(),
 	}
 

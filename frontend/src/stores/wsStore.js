@@ -53,6 +53,16 @@ const shouldReplaceList = (current, incoming) => {
     return listSignature(current) !== listSignature(incoming)
 }
 
+// A "created" broadcast can be delivered more than once for the same row
+// (own workspace broadcast on top of the create response/refetch, or the
+// reconnect replay re-delivering buffered events). Inserting blindly renders
+// the row twice. Returns true when the item was actually inserted.
+const unshiftUnique = (list, item) => {
+    if (item?.id != null && list.some(entry => entry?.id === item.id)) return false
+    list.unshift(item)
+    return true
+}
+
 // Action: Initialize WebSocket and listeners
 export function useWSStore() {
     const connect = async (workspaceId, token) => {
@@ -140,7 +150,7 @@ export function useWSStore() {
 
         switch (resource) {
             case 'agents':
-                if (action === 'created') state.agents.unshift(data)
+                if (action === 'created') unshiftUnique(state.agents, data)
                 else if (action === 'updated') {
                     const idx = state.agents.findIndex(a => a.id === data.id)
                     if (idx !== -1) state.agents[idx] = data
@@ -164,7 +174,7 @@ export function useWSStore() {
                 break
 
             case 'question_sets':
-                if (action === 'created') state.questionSets.unshift(data)
+                if (action === 'created') unshiftUnique(state.questionSets, data)
                 else if (action === 'updated') {
                     const idx = state.questionSets.findIndex(q => q.id === data.id)
                     if (idx !== -1) state.questionSets[idx] = data
@@ -179,8 +189,9 @@ export function useWSStore() {
 
             case 'runs':
                 if (action === 'created') {
-                    state.recentRuns.unshift(data)
-                    if (state.recentRuns.length > 20) state.recentRuns.pop()
+                    if (unshiftUnique(state.recentRuns, data) && state.recentRuns.length > 20) {
+                        state.recentRuns.pop()
+                    }
                 } else if (action === 'deleted') {
                     state.recentRuns = state.recentRuns.filter(run => run.id !== data.id)
                 }

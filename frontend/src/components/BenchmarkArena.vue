@@ -2249,7 +2249,8 @@ onMounted(async () => {
     clearRetryTrackingForRun,
     clearAllLoadingStates,
     maybeStopRunningWhenIdle,
-    fetchLatestResultsForQS
+    fetchLatestResultsForQS,
+    setRunError
   })
 })
 

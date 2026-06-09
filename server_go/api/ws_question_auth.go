@@ -119,6 +119,42 @@ func redactAgentConfig(agent models.Agent) models.Agent {
 	return agent
 }
 
+func isSensitiveConfigKey(k string) bool {
+	lower := strings.ToLower(k)
+	for _, sk := range sensitiveConfigKeys {
+		if strings.Contains(lower, sk) {
+			return true
+		}
+	}
+	return false
+}
+
+// preserveMaskedSecrets returns incoming with any masked ("****") or blank
+// sensitive value replaced by the existing stored value. The UI shows redacted
+// secrets (e.g. "sk****yz"); a save must never persist that mask over a real
+// credential — the mask is non-empty, so it passes "missing key" checks and
+// then fails at run time as a 401.
+func preserveMaskedSecrets(incoming, existing map[string]any) map[string]any {
+	if incoming == nil {
+		return incoming
+	}
+	for k, v := range incoming {
+		if !isSensitiveConfigKey(k) {
+			continue
+		}
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		if strings.Contains(s, "****") || strings.TrimSpace(s) == "" {
+			if ex, ok := existing[k]; ok {
+				incoming[k] = ex
+			}
+		}
+	}
+	return incoming
+}
+
 // enrichQuestionSetSharing populates the transient sharing metadata on qs
 // when the target user is an accepted collaborator (not the owner). For
 // owners (or users with no access) it is a no-op — the QS is serialized

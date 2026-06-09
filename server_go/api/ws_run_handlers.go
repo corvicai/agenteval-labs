@@ -138,6 +138,7 @@ func ensureAgentSyncConfigs(agents []models.Agent) (hadDecryptionErrors bool) {
 	return
 }
 
+
 func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 	if !c.IsAuthenticated || c.UserID == uuid.Nil {
 		c.SendError(env.CorrelationID, "authentication required")
@@ -208,10 +209,26 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 		}
 
 		for _, agent := range agents {
+			// A poisoned config means the stored ciphertext no longer decrypts
+			// (encryption key changed). Surface the real cause for ANY provider
+			// instead of falling through to a misleading "missing credentials".
+			if models.ConfigDecryptionFailed(agent.Config) {
+				c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' credentials could not be decrypted (the encryption key changed). Please re-enter its credentials in Agent Settings.", agent.Name))
+				return
+			}
+
 			// Skip disabled agents? UI sends selected agents. We validate all selected.
 			var config map[string]interface{}
 			if err := json.Unmarshal(agent.Config, &config); err != nil {
 				continue
+			}
+
+			// Mock/dry-run credentials are simulated in dev but refused at
+			// execution in production. Reject at start with a clear message
+			// instead of queueing tasks that will all fail.
+			if orchestrator.IsProductionAppEnv() && orchestrator.ConfigUsesMockCredential(config) {
+				c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' uses a MOCK/DRYRUN credential, which does not run in production. Set a real API key in Agent Settings.", agent.Name))
+				return
 			}
 
 			switch agent.ProviderType {
@@ -1042,7 +1059,11 @@ func (h *Hub) handleGetLatestRunByQuestionSet(c *Connection, env models.Envelope
 	runWorkspaceID := ownerWs.ID
 
 	var run models.Run
-	runQuery := h.db.Where("workspace_id = ? AND question_set_id = ? AND status != ?", runWorkspaceID, qsID, "running").
+	scope := h.db.Where("workspace_id = ? AND question_set_id = ?", runWorkspaceID, qsID)
+	if !payload.IncludeRunning {
+		scope = scope.Where("status != ?", "running")
+	}
+	runQuery := scope.
 		Order("created_at desc").
 		Limit(1).
 		Find(&run)

@@ -30,6 +30,7 @@ type Engine struct {
 	runCancels      map[uuid.UUID]context.CancelFunc
 	agentSemaphores map[uuid.UUID]chan struct{} // Per-agent concurrency control
 	retryStates     map[string]retryState
+	evalAutoClaims  map[uuid.UUID]bool // Runs whose automatic evaluator pass is owned by a completion check
 	mu              sync.RWMutex
 	eventCallback   func(workspaceID uuid.UUID, eventType string, correlationID string, payload any)
 }
@@ -108,7 +109,28 @@ func NewEngine(db *gorm.DB, workers int, queueSize int) *Engine {
 		runCancels:      make(map[uuid.UUID]context.CancelFunc),
 		agentSemaphores: make(map[uuid.UUID]chan struct{}),
 		retryStates:     make(map[string]retryState),
+		evalAutoClaims:  make(map[uuid.UUID]bool),
 	}
+}
+
+// claimAutoEvaluatorRun marks the automatic post-run evaluator pass as owned
+// by the calling completion check. Workers finishing the last primary tasks
+// concurrently would otherwise both see "no evaluator results yet" and queue
+// every evaluator task twice. Returns false when another pass already owns it.
+func (e *Engine) claimAutoEvaluatorRun(runID uuid.UUID) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.evalAutoClaims[runID] {
+		return false
+	}
+	e.evalAutoClaims[runID] = true
+	return true
+}
+
+func (e *Engine) releaseAutoEvaluatorClaim(runID uuid.UUID) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.evalAutoClaims, runID)
 }
 
 func (e *Engine) PingRunner() error {
@@ -461,6 +483,12 @@ func (e *Engine) executeTask(task *Task) {
 					// Keep retry flow resilient; evaluator automation must not fail the primary retry.
 					if !strings.Contains(strings.ToLower(err.Error()), "no evaluator agents available") {
 						logger.Warn("[EVAL] Auto-run after retry failed for run %s, question %s: %v", task.RunID, task.QuestionID, err)
+						if e.eventCallback != nil {
+							e.eventCallback(workspaceID, "EVT_RUN_ERROR", task.RunID.String(), map[string]any{
+								"run_id": task.RunID.String(),
+								"error":  "Evaluator auto-run failed: " + err.Error(),
+							})
+						}
 					}
 				}
 			}
@@ -546,10 +574,30 @@ func (e *Engine) checkRunCompletion(runID uuid.UUID) {
 					logger.Warn("[EVAL] Failed to resolve selected evaluators for run %s: %v", runID, selectErr)
 				}
 				if len(selectedEvaluatorIDs) > 0 {
+					if !e.claimAutoEvaluatorRun(runID) {
+						// Another completion pass is queueing the evaluators right
+						// now; completing the run here would race its total_tasks
+						// update and double-queue the evaluator tasks.
+						return
+					}
 					previousTotalTasks := run.TotalTasks
 					if err := e.RunEvaluators(runID, selectedEvaluatorIDs); err != nil {
-						if !strings.Contains(strings.ToLower(err.Error()), "no evaluator agents available") {
+						// Allow a later completion pass (e.g. after a task rerun)
+						// to retry the auto pass, as before.
+						e.releaseAutoEvaluatorClaim(runID)
+						lowerErr := strings.ToLower(err.Error())
+						// Benign outcomes for the AUTO pass: nothing to evaluate is
+						// already visible to the user as failed cells.
+						benign := strings.Contains(lowerErr, "no evaluator agents available") ||
+							strings.Contains(lowerErr, "no successful answers to evaluate")
+						if !benign {
 							logger.Warn("[EVAL] Auto-run failed for run %s: %v", runID, err)
+							if e.eventCallback != nil {
+								e.eventCallback(run.WorkspaceID, "EVT_RUN_ERROR", runID.String(), map[string]any{
+									"run_id": runID.String(),
+									"error":  "Evaluator auto-run failed: " + err.Error(),
+								})
+							}
 						}
 					} else {
 						var refreshed models.Run
@@ -588,6 +636,7 @@ func (e *Engine) checkRunCompletion(runID uuid.UUID) {
 			})
 		}
 
+		e.releaseAutoEvaluatorClaim(runID)
 		e.cancelRunContext(runID)
 	}
 }
@@ -851,11 +900,20 @@ func (e *Engine) persistEvaluatorScore(task *Task, evaluatorAnswer string) error
 
 	targetResultID := e.resolveEvaluatorTargetRunResultID(task)
 	if targetResultID == uuid.Nil {
+		// Same silent-failure class as an unparsable score: the evaluator task
+		// looks successful but no Evaluation row will exist.
+		logger.Warn("[EVAL] Could not resolve the target answer for evaluator task (run %s, question %s); no evaluation recorded",
+			task.RunID, task.QuestionID)
 		return nil
 	}
 
 	score10, ok := extractEvaluatorScore(evaluatorAnswer)
 	if !ok {
+		// Not an error (the evaluator did answer), but leave a trace: the task
+		// shows "success" while no Evaluation row is recorded, which otherwise
+		// looks like the evaluator silently did nothing.
+		logger.Warn("[EVAL] Evaluator answer for run %s, question %s has no parsable 0-10 score; no evaluation recorded (answer prefix: %q)",
+			task.RunID, task.QuestionID, truncate(strings.TrimSpace(evaluatorAnswer), 120))
 		return nil
 	}
 
@@ -1145,6 +1203,22 @@ func (e *Engine) queueEvaluatorTasksForResults(run models.Run, results []models.
 
 	logger.Info("[EVAL] Running evaluators for run %s. Results to evaluate: %d", run.ID, len(results))
 
+	// Count results that are evaluable at all (successful, non-empty, and not
+	// produced by an evaluator), so a zero-task outcome can explain itself.
+	eligibleCount := 0
+	for _, r := range results {
+		if r.Status != "success" || strings.TrimSpace(r.Answer) == "" {
+			continue
+		}
+		if _, isEvaluator := evaluatorIDs[r.AgentID]; isEvaluator {
+			continue
+		}
+		eligibleCount++
+	}
+
+	var skipReasons []string
+	notFoundCount := 0
+
 	tasksToQueue := make([]*Task, 0)
 
 	// For each evaluator, create tasks to evaluate each result
@@ -1156,12 +1230,19 @@ func (e *Engine) queueEvaluatorTasksForResults(run models.Run, results []models.
 		var override models.QuestionSetAgent
 		if err := e.db.Where("question_set_id = ? AND agent_id = ?", run.QuestionSetID, evaluator.ID).First(&override).Error; err == nil {
 			if !override.Enabled {
-				continue // Skip if explicitly disabled for this question set
+				skipReasons = append(skipReasons, fmt.Sprintf("evaluator '%s' is disabled for this question set", evaluator.Name))
+				continue
 			}
 			if len(override.Config) > 0 {
 				overrideCfg := decodeConfigJSON(override.Config)
 				evalConfig = mergeConfig(baseEvalConfig, overrideCfg)
 			}
+		}
+
+		// The merged config is what actually executes; a mock credential coming
+		// from a question-set override must be rejected in production too.
+		if IsProductionAppEnv() && ConfigUsesMockCredential(evalConfig) {
+			return fmt.Errorf("Evaluator Agent '%s' uses a MOCK/DRYRUN credential (via question set override), which does not run in production. Set a real API key in Agent Settings.", evaluator.Name)
 		}
 
 		// Keep track of unique agents in this run for debugging
@@ -1189,6 +1270,7 @@ func (e *Engine) queueEvaluatorTasksForResults(run models.Run, results []models.
 
 		if targetAgentID != uuid.Nil && !runAgents[targetAgentID] {
 			logger.Warn("[EVAL] Target agent %s is NOT in this run. Skipping evaluator %s.", targetAgentID, evaluator.Name)
+			skipReasons = append(skipReasons, fmt.Sprintf("evaluator '%s' targets agent %s, which is not part of this run", evaluator.Name, targetAgentID))
 			continue
 		}
 
@@ -1227,6 +1309,7 @@ func (e *Engine) queueEvaluatorTasksForResults(run models.Run, results []models.
 					break
 				}
 				logger.Warn("[EVAL] QuestionID '%s' NOT FOUND in originalQuestions map (size=%d, sample_key='%s')", result.QuestionID, len(originalQuestions), sampleKey)
+				notFoundCount++
 				continue
 			}
 
@@ -1253,7 +1336,16 @@ func (e *Engine) queueEvaluatorTasksForResults(run models.Run, results []models.
 
 	if len(tasksToQueue) == 0 {
 		logger.Info("[EVAL] No evaluator tasks to queue for run %s", run.ID)
-		return nil
+		if eligibleCount == 0 {
+			return fmt.Errorf("no evaluator tasks queued: this run has no successful answers to evaluate")
+		}
+		if notFoundCount > 0 {
+			skipReasons = append(skipReasons, fmt.Sprintf("%d answer(s) skipped because their question no longer exists in the question set", notFoundCount))
+		}
+		if len(skipReasons) > 0 {
+			return fmt.Errorf("no evaluator tasks queued: %s", strings.Join(skipReasons, "; "))
+		}
+		return fmt.Errorf("no evaluator tasks queued")
 	}
 
 	if err := e.db.Model(&models.Run{}).Where("id = ?", run.ID).Updates(map[string]any{
@@ -1758,6 +1850,10 @@ func isEvaluatorAgent(agent models.Agent) bool {
 }
 
 func (e *Engine) validateEvaluatorConfig(evaluator models.Agent) error {
+	if models.ConfigDecryptionFailed(evaluator.Config) {
+		return fmt.Errorf("Evaluator Agent '%s' credentials could not be decrypted (the encryption key changed). Please re-enter its credentials in Agent Settings.", evaluator.Name)
+	}
+
 	configStr := string(evaluator.Config)
 	var config map[string]any
 	if err := json.Unmarshal(evaluator.Config, &config); err != nil {
@@ -1767,10 +1863,19 @@ func (e *Engine) validateEvaluatorConfig(evaluator models.Agent) error {
 	preferredProvider := PreferredEvaluatorProvider(config)
 	resolvedProvider := ResolveEvaluatorProvider(config)
 
-	// If "MOCK" or "DRYRUN" is explicitly present anywhere in the config (case insensitive), we allow it
-	upperConfig := strings.ToUpper(configStr)
-	if strings.Contains(upperConfig, "MOCK") || strings.Contains(upperConfig, "DRYRUN") {
-		return nil
+	// A MOCK/DRYRUN credential substitutes for real configuration in dev/test
+	// only. In production the runner refuses to execute it, so reject it here
+	// instead of queueing evaluator tasks that will all fail.
+	if IsProductionAppEnv() {
+		if ConfigUsesMockCredential(config) {
+			return fmt.Errorf("Evaluator Agent '%s' uses a MOCK/DRYRUN credential, which does not run in production. Set a real API key in Agent Settings.", evaluator.Name)
+		}
+	} else {
+		// If "MOCK" or "DRYRUN" is explicitly present anywhere in the config (case insensitive), we allow it
+		upperConfig := strings.ToUpper(configStr)
+		if strings.Contains(upperConfig, "MOCK") || strings.Contains(upperConfig, "DRYRUN") {
+			return nil
+		}
 	}
 
 	// Otherwise, it must be a real configuration for the selected provider.

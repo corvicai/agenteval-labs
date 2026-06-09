@@ -23,7 +23,8 @@ export function registerArenaWsEvents(options = {}) {
     clearRetryTrackingForRun,
     clearAllLoadingStates,
     maybeStopRunningWhenIdle,
-    fetchLatestResultsForQS
+    fetchLatestResultsForQS,
+    setRunError
   } = options
 
   const handlers = {
@@ -214,6 +215,15 @@ export function registerArenaWsEvents(options = {}) {
       if (currentQuestionSet.value?.id) {
         fetchLatestResultsForQS(currentQuestionSet.value.id, { force: true })
       }
+    },
+
+    EVT_RUN_ERROR: (data) => {
+      const runId = data?.run_id ? String(data.run_id) : ''
+      const currentRunId = String(currentRun.value?.id || '')
+      if (currentRunId && runId && runId !== currentRunId) return
+      if (data?.error && typeof setRunError === 'function') {
+        setRunError(data.error)
+      }
     }
   }
 
@@ -223,6 +233,7 @@ export function registerArenaWsEvents(options = {}) {
   wsService.on('EVT_TASK_COMPLETED', handlers.EVT_TASK_COMPLETED)
   wsService.on('DATA_RESULT_DETAILS', handlers.DATA_RESULT_DETAILS)
   wsService.on('EVT_RUN_FINISHED', handlers.EVT_RUN_FINISHED)
+  wsService.on('EVT_RUN_ERROR', handlers.EVT_RUN_ERROR)
 
   return () => {
     wsService.off('EVT_TASK_QUEUED', handlers.EVT_TASK_QUEUED)
@@ -231,5 +242,6 @@ export function registerArenaWsEvents(options = {}) {
     wsService.off('EVT_TASK_COMPLETED', handlers.EVT_TASK_COMPLETED)
     wsService.off('DATA_RESULT_DETAILS', handlers.DATA_RESULT_DETAILS)
     wsService.off('EVT_RUN_FINISHED', handlers.EVT_RUN_FINISHED)
+    wsService.off('EVT_RUN_ERROR', handlers.EVT_RUN_ERROR)
   }
 }

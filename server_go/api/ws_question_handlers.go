@@ -484,6 +484,17 @@ func (h *Hub) handleUpdateQuestionSetAgents(c *Connection, env models.Envelope) 
 		agentByID[agent.ID] = agent
 	}
 
+	// Never persist a masked/blank secret in a per-question-set override; it
+	// would shadow the base agent's real credential at run time (mergeConfig).
+	for i := range selectedEntries {
+		if base, ok := agentByID[selectedEntries[i].AgentID]; ok {
+			var baseCfg map[string]any
+			if err := json.Unmarshal(base.Config, &baseCfg); err == nil {
+				selectedEntries[i].Config = preserveMaskedSecrets(selectedEntries[i].Config, baseCfg)
+			}
+		}
+	}
+
 	selectedAgentsForValidation := make([]models.Agent, 0, len(selectedEntries))
 	for _, entry := range selectedEntries {
 		agent, ok := agentByID[entry.AgentID]
