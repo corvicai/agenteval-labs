@@ -461,6 +461,12 @@ func (e *Engine) executeTask(task *Task) {
 					// Keep retry flow resilient; evaluator automation must not fail the primary retry.
 					if !strings.Contains(strings.ToLower(err.Error()), "no evaluator agents available") {
 						logger.Warn("[EVAL] Auto-run after retry failed for run %s, question %s: %v", task.RunID, task.QuestionID, err)
+						if e.eventCallback != nil {
+							e.eventCallback(workspaceID, "EVT_RUN_ERROR", task.RunID.String(), map[string]any{
+								"run_id": task.RunID.String(),
+								"error":  "Evaluator auto-run failed: " + err.Error(),
+							})
+						}
 					}
 				}
 			}

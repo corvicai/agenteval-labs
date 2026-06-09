@@ -1196,3 +1196,63 @@ func TestEngine_CheckRunCompletion_NoRunErrorWhenNothingToEvaluate(t *testing.T)
 	require.NoError(t, db.First(&run, "id = ?", runID).Error)
 	assert.Equal(t, "completed_with_errors", run.Status)
 }
+
+// The evaluator auto-run that follows a successful single-answer RETRY has the
+// same swallow as the post-run pass had: failures were only logged. The run is
+// no longer "running" here, so checkRunCompletion's emission cannot cover it —
+// the retry path must emit EVT_RUN_ERROR itself.
+func TestEngine_ExecuteTask_RetryEmitsRunErrorWhenEvaluatorAutoRunFails(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	runID, workspaceID, qsID := createTestRunWithQuestion(db, "q-1", "What is 2+2?", "4")
+
+	primary := createTestAgent(t, db, workspaceID, "Primary", "openai", mockOpenAIConfig())
+	evaluator := createTestAgent(t, db, workspaceID, "Bad Evaluator", "evaluator", map[string]any{})
+
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qsID, AgentID: primary.ID, Enabled: true, Position: 0,
+	}).Error)
+	require.NoError(t, db.Create(&models.QuestionSetAgent{
+		QuestionSetID: qsID, AgentID: evaluator.ID, Enabled: true, Position: 1,
+	}).Error)
+
+	// Run already finished; the user retries one answer afterwards.
+	require.NoError(t, db.Model(&models.Run{}).Where("id = ?", runID).
+		Update("status", "completed_with_errors").Error)
+
+	engine := NewEngine(db, 1, 0)
+
+	errCh := make(chan map[string]any, 1)
+	engine.SetEventCallback(func(wsID uuid.UUID, eventType string, corrID string, payload any) {
+		if eventType != "EVT_RUN_ERROR" {
+			return
+		}
+		if data, ok := payload.(map[string]any); ok {
+			select {
+			case errCh <- data:
+			default:
+			}
+		}
+	})
+
+	engine.Start()
+
+	engine.QueueTask(&Task{
+		RunID:        runID,
+		WorkspaceID:  workspaceID,
+		AgentID:      primary.ID,
+		QuestionID:   "q-1",
+		QuestionText: "What is 2+2?",
+		AgentConfig:  mockOpenAIConfig(),
+		ProviderType: "openai",
+		RetryID:      "retry-1",
+	})
+
+	select {
+	case payload := <-errCh:
+		assert.Equal(t, runID.String(), payload["run_id"])
+		msg, _ := payload["error"].(string)
+		assert.Contains(t, msg, "Bad Evaluator")
+	case <-time.After(3 * time.Second):
+		t.Fatal("expected EVT_RUN_ERROR when the post-retry evaluator pass fails")
+	}
+}
