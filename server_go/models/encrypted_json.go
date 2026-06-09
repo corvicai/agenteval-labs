@@ -60,6 +60,22 @@ func (j *EncryptedJSON) Scan(value interface{}) error {
 	return nil
 }
 
+// ConfigDecryptionFailed reports whether raw is the poison marker written by
+// EncryptedJSON.Scan when a stored config could not be decrypted (see above).
+// Callers should treat such configs as "credentials must be re-entered", not
+// as "credentials missing".
+func ConfigDecryptionFailed(raw []byte) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return false
+	}
+	_, bad := m["_error"]
+	return bad
+}
+
 // Value return json value, implements driver.Valuer interface
 func (j EncryptedJSON) Value() (driver.Value, error) {
 	if len(j) == 0 {

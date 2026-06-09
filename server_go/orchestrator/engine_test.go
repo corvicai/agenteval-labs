@@ -1023,6 +1023,28 @@ func TestEngine_StartRun_UsesGlobalCredentialsWhenOverrideConfigIsEmpty(t *testi
 
 }
 
+// A config that failed decryption (EncryptedJSON.Scan poison marker) must
+// produce an actionable "re-enter credentials" error, not the misleading
+// "not configured / set api_key" message — the user DID configure the agent;
+// the encryption key changed underneath it.
+func TestValidateEvaluatorConfig_DecryptionFailedMarker(t *testing.T) {
+	db := setupOrchestratorTestDB(t)
+	engine := NewEngine(db, 0, 0)
+
+	evaluator := models.Agent{
+		ID:           uuid.New(),
+		Name:         "Plasma Evaluator",
+		ProviderType: "evaluator",
+		Config:       models.EncryptedJSON(`{"_error":"decryption_failed"}`),
+	}
+
+	err := engine.validateEvaluatorConfig(evaluator)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not be decrypted")
+	assert.Contains(t, err.Error(), "Plasma Evaluator")
+	assert.NotContains(t, err.Error(), "is not configured")
+}
+
 // When the post-run automatic evaluator pass fails (e.g. the evaluator agent is
 // misconfigured), the failure must be surfaced to the client via an event, not
 // just logged server-side. Otherwise the user sees "the run finished" with no

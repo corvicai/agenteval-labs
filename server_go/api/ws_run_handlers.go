@@ -208,6 +208,14 @@ func (h *Hub) handleStartRun(c *Connection, env models.Envelope) {
 		}
 
 		for _, agent := range agents {
+			// A poisoned config means the stored ciphertext no longer decrypts
+			// (encryption key changed). Surface the real cause for ANY provider
+			// instead of falling through to a misleading "missing credentials".
+			if models.ConfigDecryptionFailed(agent.Config) {
+				c.SendError(env.CorrelationID, fmt.Sprintf("Agent '%s' credentials could not be decrypted (the encryption key changed). Please re-enter its credentials in Agent Settings.", agent.Name))
+				return
+			}
+
 			// Skip disabled agents? UI sends selected agents. We validate all selected.
 			var config map[string]interface{}
 			if err := json.Unmarshal(agent.Config, &config); err != nil {

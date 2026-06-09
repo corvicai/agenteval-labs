@@ -1764,6 +1764,10 @@ func isEvaluatorAgent(agent models.Agent) bool {
 }
 
 func (e *Engine) validateEvaluatorConfig(evaluator models.Agent) error {
+	if models.ConfigDecryptionFailed(evaluator.Config) {
+		return fmt.Errorf("Evaluator Agent '%s' credentials could not be decrypted (the encryption key changed). Please re-enter its credentials in Agent Settings.", evaluator.Name)
+	}
+
 	configStr := string(evaluator.Config)
 	var config map[string]any
 	if err := json.Unmarshal(evaluator.Config, &config); err != nil {
