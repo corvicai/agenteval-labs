@@ -1231,16 +1231,28 @@ func callOpenAIWithBaseURLAndHeaders(ctx context.Context, apiKey, projectID, bas
 	}
 	defer resp.Body.Close()
 
-	var decoded map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		return "", nil, err
+	bodyBytes, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return "", nil, fmt.Errorf("openai request failed with status %d: could not read response body: %v", resp.StatusCode, readErr)
 	}
 
+	var decoded map[string]any
+	jsonErr := json.Unmarshal(bodyBytes, &decoded)
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if errMsg := parseOpenAIError(decoded); errMsg != "" {
-			return "", decoded, errors.New(errMsg)
+		if jsonErr == nil {
+			if errMsg := parseOpenAIError(decoded); errMsg != "" {
+				return "", decoded, errors.New(errMsg)
+			}
 		}
-		return "", decoded, fmt.Errorf("openai request failed with status %d", resp.StatusCode)
+		// Non-JSON or unparseable error body (e.g. a proxy / gateway HTML page,
+		// the typical shape when Cloud Run egress is misconfigured): preserve the
+		// raw body so the real cause is visible instead of a bare status code.
+		return "", decoded, fmt.Errorf("openai request failed with status %d: %s", resp.StatusCode, truncate(strings.TrimSpace(string(bodyBytes)), 1500))
+	}
+
+	if jsonErr != nil {
+		return "", nil, fmt.Errorf("openai returned status %d with a non-JSON body: %s", resp.StatusCode, truncate(strings.TrimSpace(string(bodyBytes)), 1500))
 	}
 
 	text, err := parser(decoded)
