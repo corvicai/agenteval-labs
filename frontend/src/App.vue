@@ -114,6 +114,12 @@
             @click="viewMode = 'stats'"
           >📊 Stats</button>
           <button
+            class="nav-btn"
+            :disabled="!currentWorkspace"
+            :title="currentWorkspace ? 'Compare Multiple Runs' : 'Select a workspace first'"
+            @click="openCompareRunsModal"
+          >📊 Compare Runs</button>
+          <button
             v-if="isAdmin"
             class="nav-btn"
             :class="{ active: viewMode === 'admin' || viewMode === 'admin-profile' }"
@@ -211,6 +217,22 @@
 
       </div>
 
+
+      <!-- Compare Runs Modal (Global access from nav) -->
+      <CompareRunsModal
+        v-if="showCompareModal"
+        :workspace-id="currentWorkspace?.id"
+        :current-question-set-id="currentQuestionSet?.id || ''"
+        :current-question-set-name="currentQuestionSet?.name || ''"
+        @close="showCompareModal = false"
+        @report-generated="handleComparisonReportGenerated"
+      />
+      <ComparisonReportView
+        v-if="showComparisonReport"
+        :report="comparisonReportData"
+        :selection="comparisonSelection"
+        @close="showComparisonReport = false"
+      />
 
       <!-- Question Editor Modal (Global access) -->
       <QuestionEditorModal 
@@ -333,6 +355,8 @@ import ImportQuestionsModal from './components/ImportQuestionsModal.vue';
 import MaintenanceOverlay from './components/MaintenanceOverlay.vue'
 import AfkReconnectOverlay from './components/AfkReconnectOverlay.vue'
 import AgentManagerModal from './components/AgentManagerModal.vue'
+import CompareRunsModal from './components/CompareRunsModal.vue'
+import ComparisonReportView from './components/ComparisonReportView.vue'
 import DocsView from './components/DocsView.vue'
 import PrintReport from './components/PrintReport.vue'
 import QuestionSetShareAcceptModal from './components/QuestionSetShareAcceptModal.vue'
@@ -396,6 +420,22 @@ watch(isAdmin, (adminEnabled) => {
 const showWorkspaceModal = ref(false)
 const showActionsModal = ref(false)
 const showImportModal = ref(false)
+const showCompareModal = ref(false)
+const showComparisonReport = ref(false)
+const comparisonReportData = ref(null)
+const comparisonSelection = ref(null)
+
+function openCompareRunsModal() {
+  if (!currentWorkspace.value) return
+  showCompareModal.value = true
+}
+
+function handleComparisonReportGenerated(data) {
+  showCompareModal.value = false
+  comparisonReportData.value = data.report
+  comparisonSelection.value = data.selection
+  showComparisonReport.value = true
+}
 const showConfig = ref(false)
 const configInitialAgentId = ref(null)
 const showSummary = ref(false)

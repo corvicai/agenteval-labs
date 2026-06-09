@@ -87,6 +87,13 @@ export function useArenaRunRestoration(options = {}) {
         const fallbackTotal = runAgentIds.length * (questionIds.length || flatQuestions.length || 0)
         totalTasks.value = data.run.total_tasks || storedProgress?.total || fallbackTotal
 
+        // Skeleton cells are placeholders: they reserve a slot for every
+        // (agent, question) pair so late results can be merged in, but we do
+        // NOT mark them as loading. The server hydration only carries
+        // completed results; tasks not yet started must not be counted as
+        // "running" by the question filter, status indicator, or spinner.
+        // EVT_TASK_QUEUED/STARTED clear `placeholder` when a task actually
+        // begins.
         const baseResults = {}
         if (questionIds.length > 0 && runAgentIds.length > 0) {
           runAgentIds.forEach((agentId) => {
@@ -94,7 +101,8 @@ export function useArenaRunRestoration(options = {}) {
             questionIds.forEach((questionId) => {
               baseResults[agentId][questionId] = {
                 id: null,
-                loading: true,
+                loading: false,
+                placeholder: true,
                 success: null,
                 answer: '',
                 error: null,

@@ -34,6 +34,7 @@ export function hasQuestionBeenRun(runResults, questionId) {
     const agentResults = runResults[agentId]
     if (agentResults && agentResults[qIdStr]) {
       const result = agentResults[qIdStr]
+      if (result.placeholder) continue
       if (result.answer || result.error || result.timestamp) {
         return true
       }
@@ -57,6 +58,10 @@ export function getQuestionStatus(runResults, questionId, isQuestionRetrying = (
     const agentResults = runResults[agentId]
     if (agentResults && agentResults[qIdStr]) {
       const result = agentResults[qIdStr]
+      // Placeholders reserve the slot during active-run restoration; treat
+      // them as "not run yet" so the per-card status doesn't falsely show
+      // every pending question as "⏳ Running".
+      if (result.placeholder) continue
       if (result.loading) isLoading = true
       if (result.error) hasError = true
       if (result.answer) hasAnswer = true
@@ -78,7 +83,8 @@ export function isQuestionLoading(runResults, questionId, isQuestionRetrying = (
 
   for (const agentId in runResults) {
     const agentResults = runResults[agentId]
-    if (agentResults && agentResults[qIdStr]?.loading) {
+    const cell = agentResults && agentResults[qIdStr]
+    if (cell && cell.loading && !cell.placeholder) {
       return true
     }
   }

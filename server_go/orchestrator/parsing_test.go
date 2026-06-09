@@ -252,6 +252,117 @@ func TestExtractEvaluatorScore(t *testing.T) {
 	}
 }
 
+func TestParseOpenAIResponses(t *testing.T) {
+	t.Run("reasoning item before message is handled", func(t *testing.T) {
+		decoded := map[string]any{
+			"output": []any{
+				map[string]any{
+					"type":    "reasoning",
+					"id":      "rs_123",
+					"summary": []any{},
+				},
+				map[string]any{
+					"type": "message",
+					"role": "assistant",
+					"content": []any{
+						map[string]any{"type": "output_text", "text": "final answer"},
+					},
+				},
+			},
+		}
+
+		got, err := parseOpenAIResponses(decoded)
+		assert.NoError(t, err)
+		assert.Equal(t, "final answer", got)
+	})
+
+	t.Run("top level output_text is honored first", func(t *testing.T) {
+		decoded := map[string]any{
+			"output_text": "shortcut answer",
+			"output": []any{
+				map[string]any{
+					"type":    "message",
+					"content": []any{map[string]any{"type": "output_text", "text": "ignored"}},
+				},
+			},
+		}
+
+		got, err := parseOpenAIResponses(decoded)
+		assert.NoError(t, err)
+		assert.Equal(t, "shortcut answer", got)
+	})
+
+	t.Run("multiple text blocks are concatenated", func(t *testing.T) {
+		decoded := map[string]any{
+			"output": []any{
+				map[string]any{
+					"type": "message",
+					"content": []any{
+						map[string]any{"type": "output_text", "text": "part one"},
+						map[string]any{"type": "output_text", "text": "part two"},
+					},
+				},
+			},
+		}
+
+		got, err := parseOpenAIResponses(decoded)
+		assert.NoError(t, err)
+		assert.Equal(t, "part one\npart two", got)
+	})
+
+	t.Run("legacy untyped content with text field is accepted", func(t *testing.T) {
+		decoded := map[string]any{
+			"output": []any{
+				map[string]any{
+					"content": []any{
+						map[string]any{"text": "legacy shape"},
+					},
+				},
+			},
+		}
+
+		got, err := parseOpenAIResponses(decoded)
+		assert.NoError(t, err)
+		assert.Equal(t, "legacy shape", got)
+	})
+
+	t.Run("only reasoning item returns diagnostic error", func(t *testing.T) {
+		decoded := map[string]any{
+			"output": []any{
+				map[string]any{"type": "reasoning", "id": "rs_1"},
+				map[string]any{"type": "tool_use", "id": "t_1"},
+			},
+		}
+
+		_, err := parseOpenAIResponses(decoded)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "reasoning")
+		assert.Contains(t, err.Error(), "tool_use")
+	})
+
+	t.Run("empty output array yields diagnostic", func(t *testing.T) {
+		_, err := parseOpenAIResponses(map[string]any{"output": []any{}})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no output array")
+	})
+
+	t.Run("empty output_text falls through to output parsing", func(t *testing.T) {
+		decoded := map[string]any{
+			"output_text": "   ",
+			"output": []any{
+				map[string]any{
+					"type":    "message",
+					"content": []any{map[string]any{"type": "output_text", "text": "real answer"}},
+				},
+			},
+		}
+
+		got, err := parseOpenAIResponses(decoded)
+		assert.NoError(t, err)
+		assert.Equal(t, "real answer", got)
+	})
+}
+
 func TestMapEvaluatorScore(t *testing.T) {
 	tests := []struct {
 		score10        int

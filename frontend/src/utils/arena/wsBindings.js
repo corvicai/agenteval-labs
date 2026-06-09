@@ -77,6 +77,7 @@ export function registerArenaWsEvents(options = {}) {
         runResults.value[agentId][qIdStr].queued = true
         runResults.value[agentId][qIdStr].loading = true
         runResults.value[agentId][qIdStr].error = null
+        runResults.value[agentId][qIdStr].placeholder = false
       }
     },
 
@@ -108,6 +109,7 @@ export function registerArenaWsEvents(options = {}) {
         runResults.value[agentId][qIdStr].queued = false
         runResults.value[agentId][qIdStr].loading = true
         runResults.value[agentId][qIdStr].error = null
+        runResults.value[agentId][qIdStr].placeholder = false
       }
     },
 

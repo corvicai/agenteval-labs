@@ -35,13 +35,15 @@ const targetKey = (t) => `${t.agentId}::${t.resultKey}::${t.targetAgentId || ''}
 
 describe('retry target selectors — primary agents', () => {
   const agents = [primaryAgent(UUID_A, 'Agent A')]
-  const questions = [{ id: 'q-missing' }, { id: 'q-error' }, { id: 'q-ok' }, { id: 'q-loading' }]
+  const questions = [{ id: 'q-missing' }, { id: 'q-error' }, { id: 'q-ok' }, { id: 'q-loading' }, { id: 'q-placeholder' }]
   const runResults = {
     [UUID_A]: {
       // q-missing: no result object at all
       'q-error': { error: 'boom' },
       'q-ok': { answer: 'hello' },
-      'q-loading': { loading: true }
+      'q-loading': { loading: true },
+      // skeleton cell from active-run restoration: reserved slot, never ran
+      'q-placeholder': { id: null, loading: false, placeholder: true, answer: '', error: null }
     }
   }
 
@@ -50,9 +52,9 @@ describe('retry target selectors — primary agents', () => {
     expect(getFailedRetryTargets('primary').map((t) => t.questionId)).toEqual(['q-error'])
   })
 
-  it('Retry Missing selects only the never-run result (excludes the errored one)', () => {
+  it('Retry Missing selects the never-run results (no result object or placeholder), excluding the errored one', () => {
     const { getIncompleteRetryTargets } = setup({ agents, questions, runResults })
-    expect(getIncompleteRetryTargets('primary').map((t) => t.questionId)).toEqual(['q-missing'])
+    expect(getIncompleteRetryTargets('primary').map((t) => t.questionId)).toEqual(['q-missing', 'q-placeholder'])
   })
 
   it('Failed and Missing primary sets are disjoint', () => {

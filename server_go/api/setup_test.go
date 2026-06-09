@@ -63,6 +63,8 @@ func setup() {
 		&models.Run{},
 		&models.RunResult{},
 		&models.Evaluation{},
+		&models.RunComparisonTemplate{},
+		&models.RunComparison{},
 	)
 }
 

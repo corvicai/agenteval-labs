@@ -1015,6 +1015,12 @@ function questionHasRunningState(questionId) {
       const parsed = parseEvaluatorTaskQuestionID(String(resultKey))
       const candidateQuestionId = String(parsed?.questionId || resultKey)
       if (candidateQuestionId !== qIdStr) continue
+      // Skeleton placeholders (from active-run restoration) reserve a slot
+      // for every (agent, question) pair but don't represent in-flight tasks.
+      // Without this guard the "Running" filter would count every pending
+      // question — e.g. Running=135 on a 135-question set while only a
+      // handful were actually executing.
+      if (result?.placeholder) continue
       if (result?.loading || result?.queued) return true
     }
   }
@@ -1035,9 +1041,19 @@ function questionHasErrorState(questionId) {
   return false
 }
 
-function questionHasEvaluationBelowThreshold(questionId, threshold) {
+// Severity buckets are mutually exclusive: a score=0 question is ONLY in
+// "Score = 0", a 0<score<1 question is ONLY in "Below 1/10", and a
+// 1<=score<5 question is ONLY in "Below 5/10". This prevents the same
+// question from inflating multiple counters (e.g., a perfect-match/zero
+// case showing up in all three score filters at once).
+function questionMatchesLowScoreBucket(questionId) {
   const score = getQuestionEvaluationScoreValue(questionId)
-  return score != null && score < threshold
+  return score != null && score >= 1 && score < 5
+}
+
+function questionMatchesCriticalScoreBucket(questionId) {
+  const score = getQuestionEvaluationScoreValue(questionId)
+  return score != null && score > 0 && score < 1
 }
 
 function questionHasEvalError(questionId) {
@@ -1066,9 +1082,9 @@ function matchesQuestionFilter(questionId, filter = questionFilter.value) {
     case 'running':
       return questionHasRunningState(questionId)
     case 'low_score':
-      return questionHasEvaluationBelowThreshold(questionId, 5)
+      return questionMatchesLowScoreBucket(questionId)
     case 'critical_score':
-      return questionHasEvaluationBelowThreshold(questionId, 1)
+      return questionMatchesCriticalScoreBucket(questionId)
     case 'eval_error':
       return questionHasEvalError(questionId)
     case 'zero_score':
@@ -1089,8 +1105,8 @@ const questionFilterCounts = computed(() => {
   flatQuestions.value.forEach((question) => {
     if (questionHasErrorState(question.id)) error++
     if (questionHasRunningState(question.id)) running++
-    if (questionHasEvaluationBelowThreshold(question.id, 5)) lowScore++
-    if (questionHasEvaluationBelowThreshold(question.id, 1)) criticalScore++
+    if (questionMatchesLowScoreBucket(question.id)) lowScore++
+    if (questionMatchesCriticalScoreBucket(question.id)) criticalScore++
     if (questionHasEvalError(question.id)) evalError++
     if (questionHasZeroScore(question.id)) zeroScore++
   })

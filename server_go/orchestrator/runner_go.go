@@ -1414,23 +1414,79 @@ func extractStringMap(config map[string]any, key string) map[string]string {
 	return result
 }
 
+// parseOpenAIResponses extracts assistant text from an OpenAI Responses API payload.
+//
+// The Responses API returns output as a heterogeneous array that can include
+// reasoning items (for o-series / gpt-5-thinking models) before the assistant
+// message. A naive output[0] read therefore fails for reasoning models. We:
+//  1. Honor the convenience output_text field when present and non-empty.
+//  2. Walk every output item, collect text from items of type "message" (or
+//     untyped items for forward/backward compatibility), and accept both the
+//     new "output_text" content type and the legacy "text" type.
+//  3. On failure, surface the list of encountered item types so the user can
+//     diagnose mismatched provider payloads without re-running with logs.
 func parseOpenAIResponses(decoded map[string]any) (string, error) {
-	if outputText, ok := decoded["output_text"].(string); ok && outputText != "" {
+	if outputText, ok := decoded["output_text"].(string); ok && strings.TrimSpace(outputText) != "" {
 		return outputText, nil
 	}
 
-	if output, ok := decoded["output"].([]any); ok && len(output) > 0 {
-		if first, ok := output[0].(map[string]any); ok {
-			if content, ok := first["content"].([]any); ok && len(content) > 0 {
-				if firstContent, ok := content[0].(map[string]any); ok {
-					if text, ok := firstContent["text"].(string); ok && text != "" {
-						return text, nil
-					}
-				}
+	output, ok := decoded["output"].([]any)
+	if !ok || len(output) == 0 {
+		return "", errors.New("unable to extract response text: response has no output array")
+	}
+
+	var b strings.Builder
+	seenTypes := make([]string, 0, len(output))
+
+	for _, item := range output {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		itemType, _ := obj["type"].(string)
+		if itemType == "" {
+			seenTypes = append(seenTypes, "(untyped)")
+		} else {
+			seenTypes = append(seenTypes, itemType)
+		}
+
+		// Only message items carry assistant text. Skip reasoning, tool_use,
+		// refusal, file_search_call, web_search_call, etc. Untyped items are
+		// treated as messages for backward compatibility with older payloads.
+		if itemType != "" && itemType != "message" {
+			continue
+		}
+
+		content, ok := obj["content"].([]any)
+		if !ok {
+			continue
+		}
+
+		for _, c := range content {
+			cObj, ok := c.(map[string]any)
+			if !ok {
+				continue
 			}
+			cType, _ := cObj["type"].(string)
+			if cType != "" && cType != "output_text" && cType != "text" {
+				continue
+			}
+			text, _ := cObj["text"].(string)
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(text)
 		}
 	}
-	return "", errors.New("unable to extract response text")
+
+	if b.Len() == 0 {
+		return "", fmt.Errorf("unable to extract response text: no message content found (output item types: %v)", seenTypes)
+	}
+	return b.String(), nil
 }
 
 func parseOpenAIChat(decoded map[string]any) (string, error) {
