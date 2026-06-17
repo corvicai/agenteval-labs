@@ -13,7 +13,7 @@
     },
     "dependencies": {
         "@github/webauthn-json": "^2.1.1",
-        "dompurify": "^3.4.1",
+        "dompurify": "^3.4.10",
         "firebase": "^12.8.0",
         "marked": "^18.0.4",
         "posthog-js": "^1.364.6",
