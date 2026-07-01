@@ -18,8 +18,8 @@
         "marked": "^18.0.4",
         "posthog-js": "^1.364.6",
         "vue": "^3.4.0",
-        "echarts": "^5.5.1",
-        "vue-echarts": "^7.0.3"
+        "echarts": "^6.1.0",
+        "vue-echarts": "^8.0.1"
     },
     "devDependencies": {
         "@vitejs/plugin-vue": "^6.0.7",
