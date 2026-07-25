@@ -1,9 +1,12 @@
-# Pilot: hands-free Dependabot on this repo.
-# For dependabot[bot] PRs, (1) post `/gcbrun` to kick the comment-gated Cloud
-# Build triggers (this repo is public, so the triggers stay
-# COMMENTS_ENABLED_FOR_EXTERNAL_CONTRIBUTORS_ONLY and real fork PRs still need a
-# human /gcbrun), and (2) arm GitHub auto-merge so the PR merges once branch
-# protection is satisfied (i.e. once a human approves + required checks pass).
+# Hands-free Dependabot: arm GitHub auto-merge on dependabot[bot] PRs so they
+# merge once branch protection is satisfied (a human approval + any required
+# checks). No `@dependabot merge` comment needed.
+#
+# NOTE: this repo is PUBLIC and its Cloud Build triggers are comment-gated
+# (COMMENTS_ENABLED_FOR_EXTERNAL_CONTRIBUTORS_ONLY) to protect against untrusted
+# fork PRs. Cloud Build only honors `/gcbrun` from a human member -- a bot's
+# comment is ignored -- so a reviewer still types `/gcbrun` on Dependabot PRs
+# here to run the build. Private repos (the vast majority) have no such gate.
 name: Dependabot auto
 on: pull_request
 permissions:
@@ -14,12 +17,6 @@ jobs:
     if: ${{ github.actor == 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Cloud Build (comment-gated)
-        if: ${{ github.event.action == 'opened' || github.event.action == 'reopened' || github.event.action == 'synchronize' }}
-        run: gh pr comment "$PR_URL" --body "/gcbrun"
-        env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Arm auto-merge
         run: gh pr merge "$PR_URL" --auto --squash
         env:
